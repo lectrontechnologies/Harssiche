@@ -152,7 +152,7 @@ jobs:
 
           // ---------- cena + animacao ----------
           struct Key{float t;T x;};
-          struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0;};
+          struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;};
           std::vector<Obj> objs;
           int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
           bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
@@ -203,6 +203,14 @@ jobs:
           int rigOf(int o){for(size_t i=0;i<rigs.size();i++){Rig&g=rigs[i];if(g.a==o||g.b==o||g.c==o||g.tgt==o||g.pole==o)return(int)i;}return -1;}
           static float vlen(V v){return sqrtf(dot(v,v));}
           static V rotV(V v,V ax,float c,float s){return v*c+cross(ax,v)*s+ax*(dot(ax,v)*(1-c));}
+          static bool nmHas(const char*n,const char*k){std::string s=n;for(auto&ch:s)ch=(char)tolower((unsigned char)ch);return s.find(k)!=std::string::npos;}
+          V rigPoleDir(int a,int b,int c){V A=wp(a),B=wp(b),C=wp(c);float L=vlen(B-A)+vlen(C-B);V u=C-A;float lu=vlen(u);u=lu>1e-6f?u*(1/lu):V{0,1,0};
+           V pv=(B-A)-u*dot(B-A,u);float lp=vlen(pv);if(lp>.08f*L)return pv*(1/lp); // membro ja dobrado: usa a dobra real
+           const char*na=objs[a].nm,*nb=objs[b].nm,*nc=objs[c].nm;
+           bool leg=nmHas(na,"leg")||nmHas(na,"thigh")||nmHas(nb,"knee")||nmHas(nb,"calf")||nmHas(nb,"shin")||nmHas(nc,"foot")||nmHas(nc,"leg")||nmHas(nc,"ankle")||nmHas(nc,"toe");
+           V dir=leg?V{0,0,1}:V{0,0,-1}; // frente do personagem = +Z (glTF): joelho vai para frente, cotovelo para tras
+           V d2=dir-u*dot(dir,u);float l2=vlen(d2);if(l2>1e-5f)return d2*(1/l2);
+           return norm(cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0}));}
           void setKeyAt(Obj&o,float t,const T&x){bool f=false;for(auto&k:o.k)if(fabsf(k.t-t)<.02f){k.x=x;f=true;}
            if(!f){o.k.push_back({t,x});std::sort(o.k.begin(),o.k.end(),[](const Key&a,const Key&b){return a.t<b.t;});}}
           void rigKeyW(Rig&g,float v){bool f=false;for(auto&k:g.wk)if(fabsf(k.first-tm)<.02f){k.second=v;f=true;}
@@ -475,9 +483,8 @@ jobs:
           // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
           void rigSnapIK(Rig&g){ // controles IK vao para onde a pose FK esta (evita salto ao trocar FK->IK)
            M Wc=worldM(g.c);Obj&t=objs[g.tgt];t.cur.p=V{Wc.m[12],Wc.m[13],Wc.m[14]};t.cur.r=decomp(Wc).r;
-           if(g.pole>=0&&g.pole<(int)objs.size()){V A=wp(g.a),B=wp(g.b),C=wp(g.c);V u=norm(C-A);V pv=(B-A)-u*dot(B-A,u);float lp=vlen(pv);
-            if(lp<1e-5f){pv=norm(cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0}));}else pv=pv*(1/lp);
-            objs[g.pole].cur.p=B+pv*((vlen(B-A)+vlen(C-B))*.6f);}}
+           if(g.pole>=0&&g.pole<(int)objs.size()){V A=wp(g.a),B=wp(g.b),C=wp(g.c);V u=norm(C-A);V pv=rigPoleDir(g.a,g.b,g.c);
+            objs[g.pole].cur.p=B+pv*((vlen(B-A)+vlen(C-B))*.7f);}}
           void rigCreate(){
            if(sel<0){toast("Selecione o osso final (mao ou pe)");return;}
            int c=sel;if(rigOf(c)>=0){toast("Esse osso ja faz parte de um IK");return;}
@@ -486,9 +493,7 @@ jobs:
            V A=wp(a),B=wp(b),C=wp(c);float l2=vlen(C-B),l1=vlen(B-A);float r=std::max(.04f,l2*.28f);
            Obj t;t.mesh=1;t.kind=1;t.col={.25f,.6f,1.f};snprintf(t.nm,24,"IK.%.18s",objs[c].nm);t.cur.p=C;t.cur.r=decomp(worldM(c)).r;t.cur.s={2*r,2*r,2*r};
            Obj p;p.mesh=1;p.kind=2;p.col={.3f,.9f,.4f};snprintf(p.nm,24,"Pole.%.16s",objs[c].nm);p.cur.s={1.4f*r,1.4f*r,1.4f*r};
-           V u=C-A;float lu=vlen(u);u=lu>1e-6f?u*(1/lu):V{0,1,0};V pv=(B-A)-u*dot(B-A,u);float lp=vlen(pv);
-           if(lp<1e-5f)pv=norm(cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0}));else pv=pv*(1/lp);
-           p.cur.p=B+pv*((l1+l2)*.6f);
+           V pv=rigPoleDir(a,b,c);p.cur.p=B+pv*((l1+l2)*.7f);p.shape=3;
            objs.push_back(t);int ti=(int)objs.size()-1;objs.push_back(p);int pi=(int)objs.size()-1;
            Rig g;g.a=a;g.b=b;g.c=c;g.tgt=ti;g.pole=pi;rigs.push_back(g);sel=ti;toast("IK criado: mova o controle azul");}
           void rigRemove(int ri){int t=rigs[ri].tgt,p=rigs[ri].pole;rigs.erase(rigs.begin()+ri);
@@ -520,7 +525,7 @@ jobs:
            for(auto&o:objs){U_((uint32_t)o.mesh);U_((uint32_t)o.parent);U_((uint32_t)o.skin);fwrite(o.nm,1,24,f);Fl(o.len);Fl(o.met);Fl(o.rou);Fl(o.col.x);Fl(o.col.y);Fl(o.col.z);
             const float*c=&o.cur.p.x;for(int i=0;i<9;i++)Fl(c[i]);U_((uint32_t)o.k.size());for(auto&k:o.k){Fl(k.t);const float*q=&k.x.p.x;for(int i=0;i<9;i++)Fl(q[i]);}}
            Fl(yaw);Fl(pitch);Fl(cd);Fl(tgt.x);Fl(tgt.y);Fl(tgt.z);Fl(tm);
-           fwrite("RIG1",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);U_((uint32_t)rigs.size());
+           fwrite("RIG2",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);for(auto&o:objs)U_((uint32_t)o.shape);U_((uint32_t)rigs.size());
            for(auto&g:rigs){U_((uint32_t)g.a);U_((uint32_t)g.b);U_((uint32_t)g.c);U_((uint32_t)g.tgt);U_((uint32_t)g.pole);Fl(g.w);U_(g.rotc?1u:0u);U_((uint32_t)g.wk.size());for(auto&k:g.wk){Fl(k.first);Fl(k.second);}}}
           FILE*openOutName(const std::string&nm,const char*ext,std::string&path,bool&fb){fb=false;
            path=fm("/storage/emulated/0/Download/%s.%s",nm.c_str(),ext);FILE*f=fopen(path.c_str(),"wb");
@@ -1189,13 +1194,14 @@ jobs:
             float c[9];r.b(c,36);memcpy(&o.cur.p.x,c,36);uint32_t nk=r.u();if(nk>100000||(size_t)nk*40>r.n-r.i){r.ok=false;break;}
             for(uint32_t k=0;k<nk;k++){Key kk;kk.t=r.f();float q[9];r.b(q,36);memcpy(&kk.x.p.x,q,36);o.k.push_back(kk);}os.push_back(o);}
            float cam[7];r.b(cam,28);
-           std::vector<int> kinds;std::vector<Rig> rgs;
-           {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);if(memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());
+           std::vector<int> kinds,shapes;std::vector<Rig> rgs;
+           {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);bool v2=memcmp(m2,"RIG2",4)==0;if(v2||memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());if(v2)for(uint32_t i=0;i<nk&&q.ok;i++)shapes.push_back(q.s());
              uint32_t nr=q.u();if(nr>4096)q.ok=false;
              for(uint32_t i=0;i<nr&&q.ok;i++){Rig g;g.a=q.s();g.b=q.s();g.c=q.s();g.tgt=q.s();g.pole=q.s();g.w=q.f();g.rotc=q.u()!=0;uint32_t nw=q.u();if(nw>100000||(size_t)nw*8>q.n-q.i){q.ok=false;break;}
               for(uint32_t k=0;k<nw;k++){float t_=q.f(),v_=q.f();g.wk.push_back({t_,v_});}rgs.push_back(g);}
-             if(!q.ok){kinds.clear();rgs.clear();}}}}}
+             if(!q.ok){kinds.clear();shapes.clear();rgs.clear();}}}}}
            for(size_t i=0;i<os.size()&&i<kinds.size();i++)os[i].kind=kinds[i];
+           for(size_t i=0;i<os.size()&&i<shapes.size();i++)os[i].shape=std::clamp(shapes[i],0,5);
            if(!r.ok){toast("Arquivo .mad corrompido");return false;}
            if(replace)clearScene();
            int mb=(int)meshes.size(),sb2=(int)skins.size(),ob=(int)objs.size();
@@ -1216,17 +1222,31 @@ jobs:
           bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
            for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
            glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
-          // ---------- controles do rig (aneis voltados para a camera) ----------
+          // ---------- controles do rig: formas personalizadas (custom shapes) ----------
+          const char*gShapeN[6]={"Cubo","Circulo","Esfera","Diamante","Cruz","Quadrado"};
           static void ctrlSeg(V a,V b,float tk,float r,float g,float bl,float al){V d=b-a;float sl=vlen(d);if(sl<1e-7f)return;V e1=d*(1/sl),r0=fabsf(e1.y)<.9f?V{0,1,0}:V{1,0,0},e2=norm(cross(e1,r0)),e3=cross(e1,e2),mid=(a+b)*.5f;
            M m={};float*q=m.m;q[0]=e1.x*sl*1.15f;q[1]=e1.y*sl*1.15f;q[2]=e1.z*sl*1.15f;q[4]=e2.x*tk;q[5]=e2.y*tk;q[6]=e2.z*tk;q[8]=e3.x*tk;q[9]=e3.y*tk;q[10]=e3.z*tk;q[12]=mid.x;q[13]=mid.y;q[14]=mid.z;q[15]=1;
            gMR[0]=0;gMR[1]=.5f;gSk=0;draw(meshes[0],mul(gVP,m),m,r,g,bl,al,0);}
+          static void ctrlShape(int shape,V c,V ex,V ey,V ez,float R,float tk,float cr,float cg,float cb){
+           auto P=[&](float x,float y,float z){return c+ex*(x*R)+ey*(y*R)+ez*(z*R);};
+           auto L=[&](V a,V b){ctrlSeg(a,b,tk,cr,cg,cb,1);};
+           auto ring=[&](int ax){const int NS=32;V prev;for(int k=0;k<=NS;k++){float an=k*2*PI/NS,ca=cosf(an),sa=sinf(an);V q=ax==0?P(0,ca,sa):ax==1?P(ca,0,sa):P(ca,sa,0);if(k)L(prev,q);prev=q;}};
+           if(shape==0){for(int i=0;i<8;i++)for(int b=0;b<3;b++){int j=i^(1<<b);if(j>i)L(P(i&1?1:-1,i&2?1:-1,i&4?1:-1),P(j&1?1:-1,j&2?1:-1,j&4?1:-1));}}
+           else if(shape==1)ring(1);
+           else if(shape==2){ring(0);ring(1);ring(2);}
+           else if(shape==3){V p6[6]={P(1,0,0),P(-1,0,0),P(0,1,0),P(0,-1,0),P(0,0,1),P(0,0,-1)};for(int i=0;i<6;i++)for(int j=i+1;j<6;j++)if((i^j)!=1)L(p6[i],p6[j]);}
+           else if(shape==4){L(P(-1,0,0),P(1,0,0));L(P(0,-1,0),P(0,1,0));L(P(0,0,-1),P(0,0,1));}
+           else{L(P(-1,0,-1),P(1,0,-1));L(P(1,0,-1),P(1,0,1));L(P(1,0,1),P(-1,0,1));L(P(-1,0,1),P(-1,0,-1));}}
           void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!any)return;
-           V e=camEye(),f=norm(tgt-e),rt=norm(cross(f,V{0,1,0})),up=cross(rt,f);
-           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;V c=wp(i);float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.5f;bool s=(i==sel);
-            float cr=o.kind==1?.25f:.3f,cg=o.kind==1?.6f:.9f,cb=o.kind==1?1.f:.4f;if(s){cr=1;cg=.85f;cb=.2f;}
-            for(int pass=0;pass<2;pass++){float RR=pass?R*.28f:R,tk=RR*(pass?.12f:.07f);const int NS=36;V pt[NS+1];
-             for(int k=0;k<=NS;k++){float an=k*2*PI/NS;pt[k]=c+rt*(cosf(an)*RR)+up*(sinf(an)*RR);}
-             for(int k=0;k<NS;k++)ctrlSeg(pt[k],pt[k+1],tk,cr,cg,cb,1);}
+           V e=camEye();float th=tanf(FOV/2);
+           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
+            V ex=V{w.m[0],w.m[1],w.m[2]},ey=V{w.m[4],w.m[5],w.m[6]},ez=V{w.m[8],w.m[9],w.m[10]};
+            if(vlen(ex)<1e-8f||vlen(ey)<1e-8f||vlen(ez)<1e-8f)continue;ex=norm(ex);ey=norm(ey);ez=norm(ez);
+            float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.5f;
+            float dc=std::max(vlen(c-e),1e-3f),pxr=R/(dc*th)*H*.5f; // tamanho na tela: entre 16 e 90 px
+            if(pxr>90)R*=90/pxr;else if(pxr<16)R*=16/pxr;
+            bool s=(i==sel);float cr=o.kind==1?.25f:.3f,cg=o.kind==1?.6f:.9f,cb=o.kind==1?1.f:.4f;if(s){cr=1;cg=.85f;cb=.2f;}
+            ctrlShape(o.shape,c,ex,ey,ez,R,R*.05f,cr,cg,cb);
             if(o.kind==2){int ri=rigOf(i);if(ri>=0&&rigs[ri].b>=0&&rigs[ri].b<(int)objs.size())ctrlSeg(c,wp(rigs[ri].b),R*.03f,cr,cg,cb,.8f);}}}
           void drawBones(){for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;M mod=worldM(i);float wd=o.len*.35f;
             for(int k=0;k<4;k++){mod.m[k]*=wd;mod.m[4+k]*=o.len;mod.m[8+k]*=wd;}
@@ -1330,21 +1350,24 @@ jobs:
              pill(px+1.2f*u,y2+8*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
              char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+9*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
-           if(gRigOpen){ // painel Rig (IK de 2 ossos + IK/FK)
-            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;
-            int ri=sel>=0?rigOf(sel):-1;int nr=ri>=0?10:2;panel(px,py,pw2,rh*nr+1.6f*u,1*u);
+           if(gRigOpen){ // painel Rig (IK de 2 ossos + IK/FK + formas)
+            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u,hw=(bw_-.6f*u)/2,x2=px+1.2f*u+hw+.6f*u;
+            int ri=sel>=0?rigOf(sel):-1;int nr=ri>=0?13:2;panel(px,py,pw2,rh*nr+1.6f*u,1*u);
             char tl[64];if(ri>=0)snprintf(tl,64,"IK: %.20s",objs[rigs[ri].c].nm);else snprintf(tl,64,"%s",sel>=0?"Criar IK neste osso":"Selecione mao ou pe");
             text(tl,px+1.2f*u,y1+rh/2-2.5f*tp2,tp2*.9f,.8f,.8f,.85f);
             pill(px+1.2f*u,y1+rh,bw_,bh_,70,"Criar IK (2 ossos)",false,.2f,.38f,.55f);
-            if(ri>=0){Rig&g=rigs[ri];float w=rigW(g);
+            if(ri>=0){Rig&g=rigs[ri];float w=rigW(g);int co=(sel>=0&&objs[sel].kind)?sel:g.tgt;
              pill(px+1.2f*u,y1+2*rh,bw_,bh_,71,fm("Modo: %s  (%d%%)",w>=.5f?"IK":"FK",(int)(w*100+.5f)).c_str(),w>=.5f,.3f,.3f,.33f);
              sld(3,px,pw2,y1+3*rh,rh,tp2,"Mistura",w);
              pill(px+1.2f*u,y1+4*rh,bw_,bh_,72,g.wk.empty()?"Chave IK/FK":fm("Chave IK/FK (%d)",(int)g.wk.size()).c_str(),!g.wk.empty(),.3f,.3f,.33f);
              pill(px+1.2f*u,y1+5*rh,bw_,bh_,77,"Limpar chaves IK/FK",false,.3f,.3f,.33f);
-             pill(px+1.2f*u,y1+6*rh,bw_,bh_,73,"Selecionar controle",false,.3f,.3f,.33f);
-             pill(px+1.2f*u,y1+7*rh,bw_,bh_,74,"Selecionar pole",false,.3f,.3f,.33f);
-             pill(px+1.2f*u,y1+8*rh,bw_,bh_,75,"Converter em FK (bake)",false,.5f,.34f,.12f);
-             pill(px+1.2f*u,y1+9*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
+             pill(px+1.2f*u,y1+6*rh,hw,bh_,73,"Controle",false,.3f,.3f,.33f);pill(x2,y1+6*rh,hw,bh_,74,"Pole",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+7*rh,bw_,bh_,78,fm("Forma: %s",gShapeN[std::clamp(objs[co].shape,0,5)]).c_str(),false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+8*rh,hw,bh_,80,"Tamanho -",false,.3f,.3f,.33f);pill(x2,y1+8*rh,hw,bh_,81,"Tamanho +",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+9*rh,bw_,bh_,79,"Pole: inverter lado",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+10*rh,bw_,bh_,17,gBones?"Ossos: on":"Ossos: off",gBones,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+11*rh,bw_,bh_,75,"Converter em FK (bake)",false,.5f,.34f,.12f);
+             pill(px+1.2f*u,y1+12*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            // outliner + transform (direita)
            float pw=30*u,rx=W-ML_-pw,ry=navY()+navR()+1.5f*u,rh=4.4f*u,tpx=.38f*u;
@@ -1438,14 +1461,17 @@ jobs:
            else if(i==37){gVidQ=(gVidQ+1)%3;}
            else if(i==38){gMcLeak=!gMcLeak;gMcHaveCam=false;gSigS=-1;mcReset();}
            else if(i==70)rigCreate();
-           else if(i>=71&&i<=77){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){
+           else if(i>=71&&i<=81){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){
             if(i==71)rigToggle(ri);
             else if(i==72){rigKeyW(rigs[ri],rigW(rigs[ri]));toast("Chave IK/FK criada");}
             else if(i==73)sel=rigs[ri].tgt;
             else if(i==74){if(rigs[ri].pole>=0)sel=rigs[ri].pole;}
             else if(i==75)rigBake(ri);
             else if(i==76)rigRemove(ri);
-            else if(i==77){float w=rigW(rigs[ri]);rigs[ri].wk.clear();rigs[ri].w=w;}}}
+            else if(i==77){float w=rigW(rigs[ri]);rigs[ri].wk.clear();rigs[ri].w=w;}
+            else if(i==78||i==80||i==81){int co=(sel>=0&&objs[sel].kind)?sel:rigs[ri].tgt;
+             if(i==78)objs[co].shape=(objs[co].shape+1)%6;else objs[co].cur.s=objs[co].cur.s*(i==80?.8f:1.25f);}
+            else if(i==79){int po=rigs[ri].pole;if(po>=0&&po<(int)objs.size()){V Bp=wp(rigs[ri].b),Pp=wp(po);objs[po].cur.p=Bp+(Bp-Pp);toast("Pole do outro lado");}}}}
            else if(i==16)gSSAO=!gSSAO;
            else if(i==17)gBones=!gBones;
            else if(i==30){gMcPrev=!gMcPrev;if(gMcPrev)gMcFinal=false;gMcHaveCam=false;gSigS=-1;mcReset();}
