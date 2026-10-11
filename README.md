@@ -4,7 +4,7 @@ Android 3D Animation Software
 # Nomad Animator Future Updates/Features
 
 - Basic Rigging (Added)
-- IK & FK Rigging
+- IK & FK Rigging (Added)
 - Modeling & Sculpting
 - Advanced Rigging
 - OBJ, FBX, GLTF & GLB model & rig import (Only GLFT, FBX will be added soon)
@@ -16,3 +16,4 @@ Android 3D Animation Software
 - Path Tracing (Added)
 - Image Rendering (Added)
 - Video Rendering 
+- Control Rigging (Added)
