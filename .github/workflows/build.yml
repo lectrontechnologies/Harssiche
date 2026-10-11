@@ -152,7 +152,7 @@ jobs:
 
           // ---------- cena + animacao ----------
           struct Key{float t;T x;};
-          struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;};
+          struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0;};
           std::vector<Obj> objs;
           int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
           bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
@@ -195,6 +195,46 @@ jobs:
            M R=id();float c_=cosf(ang),s_=sinf(ang);
            if(a==0){R.m[5]=c_;R.m[6]=s_;R.m[9]=-s_;R.m[10]=c_;}else if(a==1){R.m[0]=c_;R.m[2]=-s_;R.m[8]=s_;R.m[10]=c_;}else{R.m[0]=c_;R.m[1]=s_;R.m[4]=-s_;R.m[5]=c_;}
            M Ln=mul(Pi,mul(R,mul(Pr,Lr)));ob.cur.r=decomp(Ln).r;}
+          // ---------- control rig: IK de 2 ossos + mistura IK/FK ----------
+          struct Rig{int a=-1,b=-1,c=-1,tgt=-1,pole=-1;float w=1;bool rotc=true;std::vector<std::pair<float,float>> wk;V base[3];bool hasBase=false;};
+          std::vector<Rig> rigs;
+          float rigW(const Rig&g){auto&k=g.wk;if(k.empty())return g.w;if(tm<=k.front().first)return k.front().second;if(tm>=k.back().first)return k.back().second;
+           size_t i=0;while(k[i+1].first<tm)i++;float u=(tm-k[i].first)/(k[i+1].first-k[i].first);return k[i].second+(k[i+1].second-k[i].second)*u;}
+          int rigOf(int o){for(size_t i=0;i<rigs.size();i++){Rig&g=rigs[i];if(g.a==o||g.b==o||g.c==o||g.tgt==o||g.pole==o)return(int)i;}return -1;}
+          static float vlen(V v){return sqrtf(dot(v,v));}
+          static V rotV(V v,V ax,float c,float s){return v*c+cross(ax,v)*s+ax*(dot(ax,v)*(1-c));}
+          void setKeyAt(Obj&o,float t,const T&x){bool f=false;for(auto&k:o.k)if(fabsf(k.t-t)<.02f){k.x=x;f=true;}
+           if(!f){o.k.push_back({t,x});std::sort(o.k.begin(),o.k.end(),[](const Key&a,const Key&b){return a.t<b.t;});}}
+          void rigKeyW(Rig&g,float v){bool f=false;for(auto&k:g.wk)if(fabsf(k.first-tm)<.02f){k.second=v;f=true;}
+           if(!f){g.wk.push_back({tm,v});std::sort(g.wk.begin(),g.wk.end());}}
+          void aimBone(int i,int ch,V want){ // gira o osso i (menor rotacao) para que a direcao i->ch aponte para 'want'
+           V p=wp(i),cur=wp(ch)-p,des=want-p;float lc=vlen(cur),ld=vlen(des);if(lc<1e-6f||ld<1e-6f)return;cur=cur*(1/lc);des=des*(1/ld);
+           V ax=cross(cur,des);float s=vlen(ax),c=dot(cur,des);
+           if(s<1e-6f){if(c>0)return;ax=norm(cross(cur,fabsf(cur.y)<.9f?V{0,1,0}:V{1,0,0}));s=0;c=-1;}else ax=ax*(1/s);
+           M W=worldM(i);for(int col=0;col<3;col++){V v{W.m[col*4],W.m[col*4+1],W.m[col*4+2]};v=rotV(v,ax,c,s);W.m[col*4]=v.x;W.m[col*4+1]=v.y;W.m[col*4+2]=v.z;}
+           M P=objs[i].parent>=0?worldM(objs[i].parent):id();objs[i].cur.r=decomp(mul(invAff(P),W)).r;}
+          void setWorldRot(int i,const M&Rt){ // o objeto i passa a ter a rotacao mundial de Rt (mantem escala e posicao)
+           M W=worldM(i);for(int col=0;col<3;col++){V w{W.m[col*4],W.m[col*4+1],W.m[col*4+2]},t{Rt.m[col*4],Rt.m[col*4+1],Rt.m[col*4+2]};float lt=vlen(t),lw=vlen(w);if(lt<1e-8f)return;t=t*(lw/lt);W.m[col*4]=t.x;W.m[col*4+1]=t.y;W.m[col*4+2]=t.z;}
+           M P=objs[i].parent>=0?worldM(objs[i].parent):id();objs[i].cur.r=decomp(mul(invAff(P),W)).r;}
+          void solveRigs(){
+           int n=(int)objs.size();
+           for(Rig&g:rigs){if(g.a<0||g.b<0||g.c<0||g.tgt<0||g.a>=n||g.b>=n||g.c>=n||g.tgt>=n)continue;
+            int ids[3]={g.a,g.b,g.c};float w=rigW(g);
+            for(int k=0;k<3;k++){Obj&o=objs[ids[k]];if(!o.k.empty())g.base[k]=eval(o,tm).r;else if(w<=.001f||!g.hasBase)g.base[k]=o.cur.r;}
+            g.hasBase=true;
+            for(int k=0;k<3;k++)objs[ids[k]].cur.r=g.base[k];
+            if(w<=.001f)continue;
+            V A=wp(g.a),B=wp(g.b),C=wp(g.c),Tp=wp(g.tgt);
+            float l1=vlen(B-A),l2=vlen(C-B);if(l1<1e-5f||l2<1e-5f)continue;
+            V dT=Tp-A;float d=vlen(dT);if(d<1e-6f)continue;V u=dT*(1/d);
+            float dmax=(l1+l2)*(1-1e-4f),dmin=fabsf(l1-l2)+(l1+l2)*1e-4f;float dc=std::clamp(d,dmin,dmax);
+            V hint=(g.pole>=0&&g.pole<n)?wp(g.pole)-A:B-A;V pv=hint-u*dot(hint,u);float lp=vlen(pv);
+            if(lp<1e-5f){pv=cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0});lp=vlen(pv);}pv=pv*(1/lp);
+            float x=(l1*l1-l2*l2+dc*dc)/(2*dc),h=sqrtf(std::max(l1*l1-x*x,0.f));
+            V E=A+u*x+pv*h,Te=A+u*dc;
+            aimBone(g.a,g.b,E);aimBone(g.b,g.c,Te);
+            if(g.rotc)setWorldRot(g.c,worldM(g.tgt));
+            if(w<.999f)for(int k=0;k<3;k++){V rs=objs[ids[k]].cur.r;objs[ids[k]].cur.r=slerpE(g.base[k],rs,w);}}}
           void addObj(int mesh){
            static const V pal[]={{.9f,.35f,.3f},{.3f,.7f,.9f},{.5f,.85f,.4f},{.95f,.8f,.3f},{.7f,.45f,.9f}};
            Obj o;o.mesh=mesh;o.col=pal[objs.size()%5];static int cnt[6]={0,0,0,0,0,0};static const char*NM[6]={"Cube","Sphere","Plane","","","Bone"};snprintf(o.nm,24,"%s.%03d",NM[mesh],++cnt[mesh]);
@@ -203,10 +243,12 @@ jobs:
            objs.push_back(o);sel=(int)objs.size()-1;}
           void clearParent(int c){M w=worldM(c);objs[c].parent=-1;objs[c].cur=decomp(w);}
           void delObj(int i){
+           for(int ri=(int)rigs.size()-1;ri>=0;ri--){Rig&g=rigs[ri];if(g.a==i||g.b==i||g.c==i||g.tgt==i||g.pole==i)rigs.erase(rigs.begin()+ri);}
            for(auto&sk:skins){if(sk.fz.size()<sk.j.size())sk.fz.assign(sk.j.size(),id());for(size_t k=0;k<sk.j.size();k++)if(sk.j[k]==i){sk.fz[k]=worldM(i);sk.j[k]=-1;}}
            int gp=objs[i].parent;
            for(int j=0;j<(int)objs.size();j++)if(objs[j].parent==i){M w=worldM(j);objs[j].parent=gp;objs[j].cur=decomp(gp>=0?mul(invAff(worldM(gp)),w):w);}
            objs.erase(objs.begin()+i);for(auto&o:objs)if(o.parent>i)o.parent--;sel=-1;
+           for(Rig&g:rigs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>i)(*pp)--;}
            for(auto&sk:skins)for(auto&jj:sk.j)if(jj>i)jj--;}
 
           // ---------- GL ----------
@@ -430,6 +472,35 @@ jobs:
           bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";
           void toast(const std::string&t){gToast=t;gToastT=4;}
           std::string fm(const char*f,...){char b[1024];va_list a;va_start(a,f);vsnprintf(b,1024,f,a);va_end(a);return b;}
+          // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
+          void rigSnapIK(Rig&g){ // controles IK vao para onde a pose FK esta (evita salto ao trocar FK->IK)
+           M Wc=worldM(g.c);Obj&t=objs[g.tgt];t.cur.p=V{Wc.m[12],Wc.m[13],Wc.m[14]};t.cur.r=decomp(Wc).r;
+           if(g.pole>=0&&g.pole<(int)objs.size()){V A=wp(g.a),B=wp(g.b),C=wp(g.c);V u=norm(C-A);V pv=(B-A)-u*dot(B-A,u);float lp=vlen(pv);
+            if(lp<1e-5f){pv=norm(cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0}));}else pv=pv*(1/lp);
+            objs[g.pole].cur.p=B+pv*((vlen(B-A)+vlen(C-B))*.6f);}}
+          void rigCreate(){
+           if(sel<0){toast("Selecione o osso final (mao ou pe)");return;}
+           int c=sel;if(rigOf(c)>=0){toast("Esse osso ja faz parte de um IK");return;}
+           int b=objs[c].parent,a=b>=0?objs[b].parent:-1;
+           if(b<0||a<0){toast("Precisa de 2 ossos acima (ex.: braco > antebraco > mao)");return;}
+           V A=wp(a),B=wp(b),C=wp(c);float l2=vlen(C-B),l1=vlen(B-A);float r=std::max(.04f,l2*.28f);
+           Obj t;t.mesh=1;t.kind=1;t.col={.25f,.6f,1.f};snprintf(t.nm,24,"IK.%.18s",objs[c].nm);t.cur.p=C;t.cur.r=decomp(worldM(c)).r;t.cur.s={2*r,2*r,2*r};
+           Obj p;p.mesh=1;p.kind=2;p.col={.3f,.9f,.4f};snprintf(p.nm,24,"Pole.%.16s",objs[c].nm);p.cur.s={1.4f*r,1.4f*r,1.4f*r};
+           V u=C-A;float lu=vlen(u);u=lu>1e-6f?u*(1/lu):V{0,1,0};V pv=(B-A)-u*dot(B-A,u);float lp=vlen(pv);
+           if(lp<1e-5f)pv=norm(cross(u,fabsf(u.y)<.9f?V{0,1,0}:V{1,0,0}));else pv=pv*(1/lp);
+           p.cur.p=B+pv*((l1+l2)*.6f);
+           objs.push_back(t);int ti=(int)objs.size()-1;objs.push_back(p);int pi=(int)objs.size()-1;
+           Rig g;g.a=a;g.b=b;g.c=c;g.tgt=ti;g.pole=pi;rigs.push_back(g);sel=ti;toast("IK criado: mova o controle azul");}
+          void rigRemove(int ri){int t=rigs[ri].tgt,p=rigs[ri].pole;rigs.erase(rigs.begin()+ri);
+           int hi=std::max(t,p),lo=std::min(t,p);if(hi>=0&&hi<(int)objs.size())delObj(hi);if(lo>=0&&lo<(int)objs.size()&&lo!=hi)delObj(lo);sel=-1;toast("IK removido");}
+          void rigToggle(int ri){Rig&g=rigs[ri];int ids[3]={g.a,g.b,g.c};float w=rigW(g);
+           if(w>=.5f){for(int k=0;k<3;k++){Obj&o=objs[ids[k]];g.base[k]=o.cur.r;if(!o.k.empty())setKeyAt(o,tm,o.cur);}g.w=0;if(!g.wk.empty())rigKeyW(g,0);toast("Modo FK");}
+           else{rigSnapIK(g);g.w=1;if(!g.wk.empty())rigKeyW(g,1);toast("Modo IK");}}
+          void rigBake(int ri){Rig&g=rigs[ri];int ids[3]={g.a,g.b,g.c};int f0=std::min(gFS,gFE),f1=std::max(gFS,gFE);float t0=tm;
+           std::vector<float> ts;std::vector<T> ps;
+           for(int f=f0;f<=f1;f++){tm=f/24.f;applyAnim();solveRigs();ts.push_back(tm);for(int k=0;k<3;k++)ps.push_back(objs[ids[k]].cur);}
+           for(size_t i=0;i<ts.size();i++)for(int k=0;k<3;k++)setKeyAt(objs[ids[k]],ts[i],ps[i*3+k]);
+           g.w=0;g.wk.clear();tm=t0;applyAnim();toast(fm("IK convertido em chaves FK (%d frames)",(int)ts.size()));}
           void insertKey(){if(sel<0)return;Obj&o=objs[sel];bool f=false;for(auto&k:o.k)if(fabsf(k.t-tm)<.02f){k.x=o.cur;f=true;}
            if(!f){o.k.push_back({tm,o.cur});std::sort(o.k.begin(),o.k.end(),[](const Key&a,const Key&b){return a.t<b.t;});}}
           void setParent(int c,int p){for(int a=p;a>=0;a=objs[a].parent)if(a==c){toast("Nao pode: ciclo");return;}
@@ -448,7 +519,9 @@ jobs:
            U_((uint32_t)objs.size());
            for(auto&o:objs){U_((uint32_t)o.mesh);U_((uint32_t)o.parent);U_((uint32_t)o.skin);fwrite(o.nm,1,24,f);Fl(o.len);Fl(o.met);Fl(o.rou);Fl(o.col.x);Fl(o.col.y);Fl(o.col.z);
             const float*c=&o.cur.p.x;for(int i=0;i<9;i++)Fl(c[i]);U_((uint32_t)o.k.size());for(auto&k:o.k){Fl(k.t);const float*q=&k.x.p.x;for(int i=0;i<9;i++)Fl(q[i]);}}
-           Fl(yaw);Fl(pitch);Fl(cd);Fl(tgt.x);Fl(tgt.y);Fl(tgt.z);Fl(tm);}
+           Fl(yaw);Fl(pitch);Fl(cd);Fl(tgt.x);Fl(tgt.y);Fl(tgt.z);Fl(tm);
+           fwrite("RIG1",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);U_((uint32_t)rigs.size());
+           for(auto&g:rigs){U_((uint32_t)g.a);U_((uint32_t)g.b);U_((uint32_t)g.c);U_((uint32_t)g.tgt);U_((uint32_t)g.pole);Fl(g.w);U_(g.rotc?1u:0u);U_((uint32_t)g.wk.size());for(auto&k:g.wk){Fl(k.first);Fl(k.second);}}}
           FILE*openOutName(const std::string&nm,const char*ext,std::string&path,bool&fb){fb=false;
            path=fm("/storage/emulated/0/Download/%s.%s",nm.c_str(),ext);FILE*f=fopen(path.c_str(),"wb");
            if(!f){path=fm("%s/%s.%s",gDir,nm.c_str(),ext);f=fopen(path.c_str(),"wb");fb=true;}return f;}
@@ -473,7 +546,7 @@ jobs:
             accs+=fm("%s{\"bufferView\":%d,\"componentType\":5126,\"count\":%d,\"type\":\"%s\"%s}",na?",":"",vi,(int)v.size()/comps,ty,mm.c_str());return na++;};
            std::vector<int> pa(meshes.size(),-1),pn(meshes.size(),-1),pj(meshes.size(),-1),pw(meshes.size(),-1);
            for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];int mj=-1;bool bone=o.mesh==5;
-            if(o.mesh<3||o.mesh>=6){int m=o.mesh;
+            if((o.mesh<3||o.mesh>=6)&&!o.kind){int m=o.mesh;
              if(pa[m]<0){std::vector<float> P,N;auto&c=meshes[m].cpu;for(size_t j=0;j+5<c.size();j+=6){P.insert(P.end(),{c[j],c[j+1],c[j+2]});N.insert(N.end(),{c[j+3],c[j+4],c[j+5]});}
               pa[m]=acc(P,3,"VEC3",mm3(P));pn[m]=acc(N,3,"VEC3","");
               if(meshes[m].skinned){std::vector<unsigned short> Jv;std::vector<float> Wv;auto&sk=meshes[m].skin;
@@ -507,7 +580,7 @@ jobs:
            fwrite(js.data(),1,js.size(),f);fclose(f);saved(path,fb);}
           // ---------- icones, importacao glTF ----------
           Rc gListR={0,0,0,0};float gScrollPx=0,gSY0=0,gSS0=0,gRowH=1;
-          float gFlash[64]={};bool gFileMenu=false,gRenderOpen=false,gTlOpen=true;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
+          float gFlash[64]={};bool gFileMenu=false,gRenderOpen=false,gRigOpen=false,gTlOpen=true;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
           void icon2(int id,float cx,float cy,float s,bool on){
            if(id>=3&&id<=6){icon(id,cx,cy,s,on);return;}
            const float c=.93f;
@@ -696,8 +769,8 @@ jobs:
           bool gSSAO=false,gPostOK=false,gMsOK=false,gBones=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
           GLuint gMsFbo=0,gMsC=0,gMsD=0,gFbo=0,gCT=0,gDT=0,gAoFbo=0,gAoT=0,gAoP=0,gCoP=0;
           GLint uAD,uATH,uANF,uAR,uASZ,uCC,uCA,uCT,uCS;
-          float gSlX[3]={0,0,1},gSlW[3]={1,1,1};
-          void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
+          float gSlX[4]={0,0,1,0},gSlW[4]={1,1,1,1};
+          void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
           GLuint mkProg(const char*vs,const char*fs){GLuint p=glCreateProgram();glAttachShader(p,sh(GL_VERTEX_SHADER,vs));glAttachShader(p,sh(GL_FRAGMENT_SHADER,fs));glLinkProgram(p);return p;}
           void initPost(){
            gHW=std::max(W/2,1);gHH=std::max(H/2,1);
@@ -892,7 +965,7 @@ jobs:
           void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
            for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
             for(size_t k=0;k<sk.j.size();k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<sk.fz.size()?sk.fz[k]:id());JS[s2][k]=mul(jw,sk.ibm[k]);}}
-           for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
+           for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5||o.kind)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
             M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
             for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;
              for(int k=0;k<3;k++){const float*c=&m.cpu[v+6*k];V pp{c[0],c[1],c[2]},nn{c[3],c[4],c[5]};
@@ -1097,7 +1170,7 @@ jobs:
            float f(){uint32_t v=u();float x;memcpy(&x,&v,4);return x;}int s(){return (int)u();}
            void b(void*d,size_t k){if(i+k>n){ok=false;memset(d,0,k);return;}memcpy(d,p+i,k);i+=k;}};
           void clearScene(){for(size_t i=6;i<meshes.size();i++){glDeleteBuffers(1,&meshes[i].vbo);if(meshes[i].svbo)glDeleteBuffers(1,&meshes[i].svbo);glDeleteVertexArrays(1,&meshes[i].vao);}
-           meshes.resize(6);objs.clear();skins.clear();sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
+           meshes.resize(6);objs.clear();rigs.clear();skins.clear();sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
           bool loadMAD(const std::string&path,bool replace){
            FILE*f=fopen(path.c_str(),"rb");if(!f){toast("Nao consegui abrir o arquivo");return false;}
            fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);if(sz<16){fclose(f);toast("Arquivo invalido");return false;}
@@ -1116,6 +1189,13 @@ jobs:
             float c[9];r.b(c,36);memcpy(&o.cur.p.x,c,36);uint32_t nk=r.u();if(nk>100000||(size_t)nk*40>r.n-r.i){r.ok=false;break;}
             for(uint32_t k=0;k<nk;k++){Key kk;kk.t=r.f();float q[9];r.b(q,36);memcpy(&kk.x.p.x,q,36);o.k.push_back(kk);}os.push_back(o);}
            float cam[7];r.b(cam,28);
+           std::vector<int> kinds;std::vector<Rig> rgs;
+           {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);if(memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());
+             uint32_t nr=q.u();if(nr>4096)q.ok=false;
+             for(uint32_t i=0;i<nr&&q.ok;i++){Rig g;g.a=q.s();g.b=q.s();g.c=q.s();g.tgt=q.s();g.pole=q.s();g.w=q.f();g.rotc=q.u()!=0;uint32_t nw=q.u();if(nw>100000||(size_t)nw*8>q.n-q.i){q.ok=false;break;}
+              for(uint32_t k=0;k<nw;k++){float t_=q.f(),v_=q.f();g.wk.push_back({t_,v_});}rgs.push_back(g);}
+             if(!q.ok){kinds.clear();rgs.clear();}}}}}
+           for(size_t i=0;i<os.size()&&i<kinds.size();i++)os[i].kind=kinds[i];
            if(!r.ok){toast("Arquivo .mad corrompido");return false;}
            if(replace)clearScene();
            int mb=(int)meshes.size(),sb2=(int)skins.size(),ob=(int)objs.size();
@@ -1123,6 +1203,7 @@ jobs:
            for(auto&sk:sks){for(auto&jj:sk.j)if(jj>=0)jj+=ob;skins.push_back(sk);}
            for(auto&o:os){if(o.mesh>=6)o.mesh=mb+(o.mesh-6);if(o.mesh<0||o.mesh>=(int)meshes.size())o.mesh=0;if(o.parent>=0)o.parent+=ob;
             if(o.skin>=0){o.skin+=sb2;if(o.skin>=(int)skins.size())o.skin=-1;}objs.push_back(o);}
+           for(Rig g:rgs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>=0)*pp+=ob;rigs.push_back(g);}
            if(replace){yaw=cam[0];pitch=cam[1];cd=cam[2];tgt=V{cam[3],cam[4],cam[5]};tm=cam[6];}
            sel=os.empty()?-1:ob;toast(fm("Carregado: %d objetos",(int)os.size()));return true;}
           double gNewT=-10;
@@ -1135,6 +1216,18 @@ jobs:
           bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
            for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
            glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
+          // ---------- controles do rig (aneis voltados para a camera) ----------
+          static void ctrlSeg(V a,V b,float tk,float r,float g,float bl,float al){V d=b-a;float sl=vlen(d);if(sl<1e-7f)return;V e1=d*(1/sl),r0=fabsf(e1.y)<.9f?V{0,1,0}:V{1,0,0},e2=norm(cross(e1,r0)),e3=cross(e1,e2),mid=(a+b)*.5f;
+           M m={};float*q=m.m;q[0]=e1.x*sl*1.15f;q[1]=e1.y*sl*1.15f;q[2]=e1.z*sl*1.15f;q[4]=e2.x*tk;q[5]=e2.y*tk;q[6]=e2.z*tk;q[8]=e3.x*tk;q[9]=e3.y*tk;q[10]=e3.z*tk;q[12]=mid.x;q[13]=mid.y;q[14]=mid.z;q[15]=1;
+           gMR[0]=0;gMR[1]=.5f;gSk=0;draw(meshes[0],mul(gVP,m),m,r,g,bl,al,0);}
+          void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!any)return;
+           V e=camEye(),f=norm(tgt-e),rt=norm(cross(f,V{0,1,0})),up=cross(rt,f);
+           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;V c=wp(i);float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.5f;bool s=(i==sel);
+            float cr=o.kind==1?.25f:.3f,cg=o.kind==1?.6f:.9f,cb=o.kind==1?1.f:.4f;if(s){cr=1;cg=.85f;cb=.2f;}
+            for(int pass=0;pass<2;pass++){float RR=pass?R*.28f:R,tk=RR*(pass?.12f:.07f);const int NS=36;V pt[NS+1];
+             for(int k=0;k<=NS;k++){float an=k*2*PI/NS;pt[k]=c+rt*(cosf(an)*RR)+up*(sinf(an)*RR);}
+             for(int k=0;k<NS;k++)ctrlSeg(pt[k],pt[k+1],tk,cr,cg,cb,1);}
+            if(o.kind==2){int ri=rigOf(i);if(ri>=0&&rigs[ri].b>=0&&rigs[ri].b<(int)objs.size())ctrlSeg(c,wp(rigs[ri].b),R*.03f,cr,cg,cb,.8f);}}}
           void drawBones(){for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;M mod=worldM(i);float wd=o.len*.35f;
             for(int k=0;k<4;k++){mod.m[k]*=wd;mod.m[4+k]*=o.len;mod.m[8+k]*=wd;}
             float h=(i==sel)?.55f:0;gMR[0]=0;gMR[1]=.5f;gSk=0;
@@ -1176,7 +1269,7 @@ jobs:
            else if(mode==27){int f=std::clamp(gDV0+df,gFS,gFE);tm=f/24.f;applyAnim();}
            if(mode>=23&&mode<=26){float a=gFS/24.f,b=gFE/24.f;if(tm<a)tm=a;if(tm>b)tm=b;applyAnim();}}
           void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(int)roundf(tm*24);if(rel<.33f)f--;else if(rel>.66f)f++;tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
-          void frame(){
+          void frame(){solveRigs();
            bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
            glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
            glEnable(GL_DEPTH_TEST);
@@ -1185,11 +1278,12 @@ jobs:
            auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
            ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
            glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glActiveTexture(GL_TEXTURE0);
-           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
+           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
             draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
            gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
            glDisable(GL_DEPTH_TEST);
            if(gBones)drawBones();
+           if(!gMcFinal)drawCtrls();
            if(sel>=0&&tool<3)drawGizmo();
            gBtn.clear();gBlock.clear();float u=U(),ML_=ML(),hH=8.6f*u;
            // cabecalho: projeto (esquerda) e menus (direita)
@@ -1202,8 +1296,8 @@ jobs:
              rect(x,by,bs,bs,on?.28f:.33f,on?.45f:.33f,on?.7f:.35f,1,.9f*u);icon2(id,x+bs/2,by+bs/2,bs*.27f,on);gBtn.push_back({{x,by,bs,bs},id});x+=bs+gp;}
             float tp=.4f*u;char hb[64];snprintf(hb,64,"%.16s  v17  %d FPS",gProj.c_str(),(int)(gFps+.5f));text(hb,x+1.5f*u,hH/2-2.5f*tp,tp,.6f,.6f,.66f);}
            {float ph=6.4f*u,py=(hH-ph)/2,ps=ph*.072f,xr=W-ML_;
-            const char*ml[3]={"Arquivo","Render","Timeline"};const int mid[3]={60,61,62};bool mon[3]={gFileMenu,gRenderOpen,gTlOpen};
-            for(int k=0;k<3;k++){float w=tw(ml[k],ps)+4*u,x=xr-w;pill(x,py,w,ph,mid[k],ml[k],mon[k],.33f,.33f,.35f);xr=x-.8f*u;}}
+            const char*ml[4]={"Arquivo","Render","Rig","Timeline"};const int mid[4]={60,61,63,62};bool mon[4]={gFileMenu,gRenderOpen,gRigOpen,gTlOpen};
+            for(int k=0;k<4;k++){float w=tw(ml[k],ps)+4*u,x=xr-w;pill(x,py,w,ph,mid[k],ml[k],mon[k],.33f,.33f,.35f);xr=x-.8f*u;}}
            if(gFileMenu){ // menu Arquivo (import/export)
             const char*rl[4]={"Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[4]={15,43,14,13};
             float mw=26*u,ph=6.2f*u,mx=navX()-navR()-1.5f*u-mw,my=hH+1*u,mh=4*(ph+.5f*u)+1.5f*u;panel(mx,my,mw,mh,1*u);
@@ -1235,6 +1329,22 @@ jobs:
             pill(px+1.2f*u,y2+7*rh,bw_,bh_,36,gVid.on?fm("Parar video %d/%d",gVid.done,gVid.total).c_str():fm("Render video %d-%d",std::min(gFS,gFE),std::max(gFS,gFE)).c_str(),gVid.on,.5f,.34f,.12f);
              pill(px+1.2f*u,y2+8*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
              char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+9*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
+            gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
+           if(gRigOpen){ // painel Rig (IK de 2 ossos + IK/FK)
+            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;
+            int ri=sel>=0?rigOf(sel):-1;int nr=ri>=0?10:2;panel(px,py,pw2,rh*nr+1.6f*u,1*u);
+            char tl[64];if(ri>=0)snprintf(tl,64,"IK: %.20s",objs[rigs[ri].c].nm);else snprintf(tl,64,"%s",sel>=0?"Criar IK neste osso":"Selecione mao ou pe");
+            text(tl,px+1.2f*u,y1+rh/2-2.5f*tp2,tp2*.9f,.8f,.8f,.85f);
+            pill(px+1.2f*u,y1+rh,bw_,bh_,70,"Criar IK (2 ossos)",false,.2f,.38f,.55f);
+            if(ri>=0){Rig&g=rigs[ri];float w=rigW(g);
+             pill(px+1.2f*u,y1+2*rh,bw_,bh_,71,fm("Modo: %s  (%d%%)",w>=.5f?"IK":"FK",(int)(w*100+.5f)).c_str(),w>=.5f,.3f,.3f,.33f);
+             sld(3,px,pw2,y1+3*rh,rh,tp2,"Mistura",w);
+             pill(px+1.2f*u,y1+4*rh,bw_,bh_,72,g.wk.empty()?"Chave IK/FK":fm("Chave IK/FK (%d)",(int)g.wk.size()).c_str(),!g.wk.empty(),.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+5*rh,bw_,bh_,77,"Limpar chaves IK/FK",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+6*rh,bw_,bh_,73,"Selecionar controle",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+7*rh,bw_,bh_,74,"Selecionar pole",false,.3f,.3f,.33f);
+             pill(px+1.2f*u,y1+8*rh,bw_,bh_,75,"Converter em FK (bake)",false,.5f,.34f,.12f);
+             pill(px+1.2f*u,y1+9*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            // outliner + transform (direita)
            float pw=30*u,rx=W-ML_-pw,ry=navY()+navR()+1.5f*u,rh=4.4f*u,tpx=.38f*u;
@@ -1311,7 +1421,7 @@ jobs:
           void press(int i){
            if(gVid.on&&i!=36)return;
            if(i>=0&&i<64)gFlash[i]=.35f;
-           if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gRenderOpen=!gRenderOpen;return;}if(i==62){gTlOpen=!gTlOpen;return;}
+           if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gRenderOpen=!gRenderOpen;if(gRenderOpen)gRigOpen=false;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
            if(i>=200){int k=i-200;if(i!=299){gImportOpen=false;if(k<(int)gFiles.size())pickPath(gFiles[k]);}return;}
            if(i<3)addObj(i);else if(i<7)tool=i-3;
            else if(i==7)insertKey();else if(i==8){playing=!playing;if(playing)gPlayDir=1;}
@@ -1327,6 +1437,15 @@ jobs:
            else if(i==36){if(gVid.on)vidFinish(true);else vidStart();}
            else if(i==37){gVidQ=(gVidQ+1)%3;}
            else if(i==38){gMcLeak=!gMcLeak;gMcHaveCam=false;gSigS=-1;mcReset();}
+           else if(i==70)rigCreate();
+           else if(i>=71&&i<=77){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){
+            if(i==71)rigToggle(ri);
+            else if(i==72){rigKeyW(rigs[ri],rigW(rigs[ri]));toast("Chave IK/FK criada");}
+            else if(i==73)sel=rigs[ri].tgt;
+            else if(i==74){if(rigs[ri].pole>=0)sel=rigs[ri].pole;}
+            else if(i==75)rigBake(ri);
+            else if(i==76)rigRemove(ri);
+            else if(i==77){float w=rigW(rigs[ri]);rigs[ri].wk.clear();rigs[ri].w=w;}}}
            else if(i==16)gSSAO=!gSSAO;
            else if(i==17)gBones=!gBones;
            else if(i==30){gMcPrev=!gMcPrev;if(gMcPrev)gMcFinal=false;gMcHaveCam=false;gSigS=-1;mcReset();}
@@ -1339,6 +1458,8 @@ jobs:
            else if(i>=20&&i<=23){if(i==20)tm=0;else if(i==21)tm=std::max(0.f,tm-1/24.f);else if(i==22)tm=std::min(DUR,tm+1/24.f);else tm=DUR;applyAnim();}}
           void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
           void pick(float x,float y){
+           {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
+            if(cb>=0){if(parentMode)finishParent(cb);else sel=cb;return;}}
            if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5)continue;M w=worldM(i);
              V hd{w.m[12],w.m[13],w.m[14]},tl=hd+V{w.m[4],w.m[5],w.m[6]}*objs[i].len;float hx,hy,qx,qy;if(!prj(hd,hx,hy)||!prj(tl,qx,qy))continue;
              float vx=qx-hx,vy=qy-hy,tt=std::clamp(((x-hx)*vx+(y-hy)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);float dd=hypotf(x-hx-vx*tt,y-hy-vy*tt);if(dd<bd){bd=dd;bb=i;}}
@@ -1374,7 +1495,7 @@ jobs:
            if(act==AMOTION_EVENT_ACTION_DOWN){
             moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
             if(gImportOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)){if(b.id>=300&&b.id<=302){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
             if(gVid.on&&mode<0)mode=2;
             if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
             if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
