@@ -353,7 +353,7 @@ jobs:
             if(p){const char*gl=GG[p-GN];for(int k=0;k<15;k++)if(gl[k]=='1')rect(x+(k%3)*ps,y+(k/3)*ps,ps,ps,r,g,b);}
             x+=4*ps;}}
           // ---- fonte TTF do sistema (stb_truetype) ----
-          std::vector<unsigned char> gAtlas;stbtt_bakedchar gBC[96];GLuint gTex=0,gTP=0,gTVao=0,gTVbo=0,uTS,uTC;
+          std::vector<unsigned char> gAtlas;stbtt_bakedchar gBC[224];bool gHi=false;GLuint gTex=0,gTP=0,gTVao=0,gTVbo=0,uTS,uTC;
           const float FPX=44;
           bool loadFont(){
            FILE*f=nullptr;
@@ -368,7 +368,8 @@ jobs:
            fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);std::vector<unsigned char> d(sz>0?sz:1);
            size_t rd=fread(d.data(),1,sz,f);fclose(f);if(sz<=0||(long)rd!=sz)return false;
            gAtlas.assign(512*512,0);
-           if(stbtt_BakeFontBitmap(d.data(),0,FPX,gAtlas.data(),512,512,32,96,gBC)<=0){gAtlas.clear();return false;}
+           if(stbtt_BakeFontBitmap(d.data(),0,FPX,gAtlas.data(),512,512,32,224,gBC)>0)gHi=true;
+           else{std::fill(gAtlas.begin(),gAtlas.end(),0);if(stbtt_BakeFontBitmap(d.data(),0,FPX,gAtlas.data(),512,512,32,96,gBC)<=0){gAtlas.clear();return false;}}
            return true;}
           void initText(){
            static bool tried=false;if(!tried){tried=true;loadFont();}
@@ -383,11 +384,15 @@ jobs:
            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
            glGenVertexArrays(1,&gTVao);glGenBuffers(1,&gTVbo);glBindVertexArray(gTVao);glBindBuffer(GL_ARRAY_BUFFER,gTVbo);
            glEnableVertexAttribArray(0);glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,16,(void*)0);}
-          float tw(const char*s,float ps){if(!gTex)return strlen(s)*4*ps-ps;float w=0;for(;*s;s++){int c=(unsigned char)*s;if(c>=32&&c<128)w+=gBC[c-32].xadvance;}return w*ps*7/FPX;}
+          static int u8next(const char*&s){int c=(unsigned char)*s++;if(c<0x80)return c;if(c>=0xC0&&c<0xE0&&(((unsigned char)*s)&0xC0)==0x80){int c2=(unsigned char)*s++;return((c&0x1F)<<6)|(c2&0x3F);}return 0;}
+          static int u8fold(int c){if(c<128||gHi)return c; // sem glifos acentuados: usa a letra base
+           static const int F[36]={0xE1,0xE0,0xE2,0xE3,0xE4,0xC1,0xC0,0xC2,0xC3,0xC4,0xE9,0xE8,0xEA,0xEB,0xC9,0xC8,0xCA,0xED,0xEC,0xEE,0xCD,0xF3,0xF2,0xF4,0xF5,0xF6,0xD3,0xD4,0xD5,0xFA,0xF9,0xFB,0xFC,0xDA,0xE7,0xC7};
+           static const char*T="aaaaaAAAAAeeeeEEEiiiIooooOOOuuuuUcC";for(int i=0;i<36;i++)if(F[i]==c)return T[i];return 0;}
+          float tw(const char*s,float ps){if(!gTex)return strlen(s)*4*ps-ps;float w=0;while(*s){int c=u8fold(u8next(s));if(c>=32&&c<(gHi?256:128))w+=gBC[c-32].xadvance;}return w*ps*7/FPX;}
           void text(const char*s,float x,float y,float ps,float r,float g,float b){
            if(!gTex){btext(s,x,y,ps,r,g,b);return;}
            float sc=ps*7/FPX,by=y+5*ps;std::vector<float> v;
-           for(;*s;s++){int c=(unsigned char)*s;if(c<32||c>=128)continue;stbtt_aligned_quad q;float xp=0,yp=0;stbtt_GetBakedQuad(gBC,512,512,c-32,&xp,&yp,&q,1);
+           while(*s){int c=u8fold(u8next(s));if(c<32||c>=(gHi?256:128))continue;stbtt_aligned_quad q;float xp=0,yp=0;stbtt_GetBakedQuad(gBC,512,512,c-32,&xp,&yp,&q,1);
             float x0=x+q.x0*sc,x1=x+q.x1*sc,y0=by+q.y0*sc,y1=by+q.y1*sc;
             v.insert(v.end(),{x0,y0,q.s0,q.t0,x1,y0,q.s1,q.t0,x1,y1,q.s1,q.t1,x0,y0,q.s0,q.t0,x1,y1,q.s1,q.t1,x0,y1,q.s0,q.t1});x+=xp*sc;}
            if(v.empty())return;
@@ -477,7 +482,7 @@ jobs:
             rect(e.x-r,e.y-r,2*r,2*r,c[0]*k,c[1]*k,c[2]*k,1,r);
             if(e.pos){float ps=H*.0055f;text(LB[e.a],e.x-tw(LB[e.a],ps)/2,e.y-2.5f*ps,ps,1,1,1);}}}
           // ---------- exportacao (MAD / glTF) + rigging ----------
-          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";
+          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;
           void toast(const std::string&t){gToast=t;gToastT=4;}
           std::string fm(const char*f,...){char b[1024];va_list a;va_start(a,f);vsnprintf(b,1024,f,a);va_end(a);return b;}
           // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
@@ -1213,8 +1218,34 @@ jobs:
            if(replace){yaw=cam[0];pitch=cam[1];cd=cam[2];tgt=V{cam[3],cam[4],cam[5]};tm=cam[6];}
            sel=os.empty()?-1:ob;toast(fm("Carregado: %d objetos",(int)os.size()));return true;}
           double gNewT=-10;
-          void newProject(){double n=nowSec();if(n-gNewT>3){gNewT=n;toast("Toque em Novo de novo para limpar o projeto");return;}
-           gNewT=-10;clearScene();gProj=fm("projeto_%ld",(long)(time(nullptr)%100000));toast("Novo projeto");}
+          static const char*kUntitled="Projeto sem título";
+          static bool projExists(const std::string&n){std::string a=fm("/storage/emulated/0/Download/%s.mad",n.c_str()),b=fm("%s/%s.mad",gDir,n.c_str());return access(a.c_str(),F_OK)==0||access(b.c_str(),F_OK)==0;}
+          std::string uniqueProjName(const std::string&base){if(!projExists(base))return base;for(int k=1;k<10000;k++){std::string n=fm("%s %d",base.c_str(),k);if(!projExists(n))return n;}return base;}
+          void showKb(){if(gApp&&gApp->activity)ANativeActivity_showSoftInput(gApp->activity,ANATIVEACTIVITY_SHOW_SOFT_INPUT_FORCED);} // teclado do Android
+          void hideKb(){if(gApp&&gApp->activity)ANativeActivity_hideSoftInput(gApp->activity,0);}
+          void newProject(){gNameMode=0;gNameBuf.clear();gNameOpen=true;gImportOpen=false;showKb();}
+          void nameConfirm(){std::string n=gNameBuf;while(!n.empty()&&n.front()==' ')n.erase(n.begin());while(!n.empty()&&n.back()==' ')n.pop_back();
+           if(n.empty())n=kUntitled;
+           if(gNameMode==0){gNewT=-10;clearScene();gProj=uniqueProjName(n);toast("Novo projeto: "+gProj);}
+           else if(n!=gProj){gProj=uniqueProjName(n);toast("Projeto renomeado: "+gProj);}
+           gNameOpen=false;hideKb();}
+          void nameBack(){while(!gNameBuf.empty()&&(((unsigned char)gNameBuf.back())&0xC0)==0x80)gNameBuf.pop_back();if(!gNameBuf.empty())gNameBuf.pop_back();}
+          void nameAddCp(int cp){ // aceita letras, numeros e acentos; recusa caracteres proibidos em nomes de arquivo
+           if(cp<32||cp==127||cp>0x7FF)return;if(cp=='/'||cp=='\\'||cp==':'||cp=='*'||cp=='?'||cp=='"'||cp=='<'||cp=='>'||cp=='|')return;
+           if(gNameBuf.size()>=44)return;
+           if(cp<0x80)gNameBuf.push_back((char)cp);else{gNameBuf.push_back((char)(0xC0|(cp>>6)));gNameBuf.push_back((char)(0x80|(cp&0x3F)));}}
+          void kbKey(int c){if(c==3)nameConfirm();else if(c==4){gNameOpen=false;hideKb();}else if(c==5)showKb();}
+          int jniUnicode(int keyCode,int meta){ // caractere digitado: KeyEvent.getUnicodeChar() via JNI
+           if(!gApp||!gApp->activity||!gApp->activity->vm)return 0;
+           JavaVM*vm=gApp->activity->vm;JNIEnv*env=nullptr;bool att=false;
+           if(vm->GetEnv((void**)&env,JNI_VERSION_1_6)!=JNI_OK){if(vm->AttachCurrentThread(&env,nullptr)!=JNI_OK)return 0;att=true;}
+           int uc=0;jclass kc=env->FindClass("android/view/KeyEvent");
+           if(kc){jmethodID ctor=env->GetMethodID(kc,"<init>","(II)V"),gu=env->GetMethodID(kc,"getUnicodeChar","(I)I");
+            if(ctor&&gu){jobject ke=env->NewObject(kc,ctor,0,keyCode);if(ke){uc=env->CallIntMethod(ke,gu,meta);env->DeleteLocalRef(ke);}}
+            env->DeleteLocalRef(kc);}
+           if(env->ExceptionCheck())env->ExceptionClear();
+           if(att)vm->DetachCurrentThread();
+           return uc;}
           void pickPath(const std::string&p){
            if(gPick==0){importPath(p);return;}
            if(gPick==1){if(loadMAD(p,true)){size_t sl=p.rfind('/');std::string n=sl==std::string::npos?p:p.substr(sl+1);size_t dt=n.rfind('.');if(dt!=std::string::npos)n=n.substr(0,dt);gProj=n;}}
@@ -1311,18 +1342,20 @@ jobs:
            auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
             rect(sx,yy+rh_/2-.45f*u,sw,.9f*u,.1f,.1f,.11f,1,.45f*u);rect(sx,yy+rh_/2-.45f*u,sw*v,.9f*u,.28f,.45f,.7f,1,.45f*u);
             rect(sx+sw*v-.7f*u,yy+rh_/2-1.1f*u,1.4f*u,2.2f*u,.95f,.95f,.95f,1,.7f*u);gBtn.push_back({{sx-.8f*u,yy,sw+1.6f*u,rh_},300+i});gSlX[i]=sx;gSlW[i]=sw;};
-           {static const int PJ[3]={40,41,42};float bs=7*u,gp=.6f*u,x=ML_,by=(hH-bs)/2;
-            for(int k=0;k<3;k++){int id=PJ[k];bool on=gFlash[id]>0||(id==41&&gImportOpen&&gPick==1);
-             rect(x,by,bs,bs,on?.28f:.33f,on?.45f:.33f,on?.7f:.35f,1,.9f*u);icon2(id,x+bs/2,by+bs/2,bs*.27f,on);gBtn.push_back({{x,by,bs,bs},id});x+=bs+gp;}
-            float tp=.4f*u;char hb[64];snprintf(hb,64,"%.16s  v17  %d FPS",gProj.c_str(),(int)(gFps+.5f));text(hb,x+1.5f*u,hH/2-2.5f*tp,tp,.6f,.6f,.66f);}
+           {float bs=6.4f*u,x=ML_,by=(hH-bs)/2,tp=.42f*u,ps=bs*.072f; // nome do projeto (toque para renomear) + abas de modo
+            char hb[64];snprintf(hb,64,"%.22s",gProj.c_str());float nw=std::max(tw(hb,tp)+3.4f*u,16*u);
+            rect(x,by,nw,bs,.2f,.2f,.22f,1,.9f*u);text(hb,x+1.6f*u,by+bs/2-2.5f*tp,tp,.92f,.92f,.94f);gBtn.push_back({{x,by,nw,bs},90});x+=nw+1*u;
+            char fb[24];snprintf(fb,24,"%d FPS",(int)(gFps+.5f));float tf=.34f*u;text(fb,x,by+bs/2-2.5f*tf,tf,.55f,.55f,.6f);x+=tw(fb,tf)+2.5f*u;
+            const char*mn[3]={"Animação","Modelagem","Escultura"};const int mi[3]={84,85,86};
+            for(int k=0;k<3;k++){float w=tw(mn[k],ps)+4*u;pill(x,by,w,bs,mi[k],mn[k],gMode==k,.33f,.33f,.35f);x+=w+.6f*u;}}
            {float ph=6.4f*u,py=(hH-ph)/2,ps=ph*.072f,xr=W-ML_;
             const char*ml[4]={"Arquivo","Render","Rig","Timeline"};const int mid[4]={60,61,63,62};bool mon[4]={gFileMenu,gRenderOpen,gRigOpen,gTlOpen};
             for(int k=0;k<4;k++){float w=tw(ml[k],ps)+4*u,x=xr-w;pill(x,py,w,ph,mid[k],ml[k],mon[k],.33f,.33f,.35f);xr=x-.8f*u;}}
            if(gFileMenu){ // menu Arquivo (import/export)
-            const char*rl[4]={"Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[4]={15,43,14,13};
-            float mw=26*u,ph=6.2f*u,mx=navX()-navR()-1.5f*u-mw,my=hH+1*u,mh=4*(ph+.5f*u)+1.5f*u;panel(mx,my,mw,mh,1*u);
-            for(int i=0;i<4;i++){bool on=gFlash[rid[i]]>0||(rid[i]==15&&gImportOpen&&gPick==0)||(rid[i]==43&&gImportOpen&&gPick==2);
-             pill(mx+1*u,my+.75f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,i<2?.2f:.33f,i<2?.38f:.33f,i<2?.55f:.35f);}
+            const char*rl[7]={"Novo projeto","Abrir projeto","Salvar projeto","Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[7]={40,41,42,15,43,14,13};
+            float mw=26*u,ph=6.2f*u,mx=navX()-navR()-1.5f*u-mw,my=hH+1*u,mh=7*(ph+.5f*u)+1.5f*u;panel(mx,my,mw,mh,1*u);
+            for(int i=0;i<7;i++){bool on=gFlash[rid[i]]>0||(rid[i]==15&&gImportOpen&&gPick==0)||(rid[i]==43&&gImportOpen&&gPick==2)||(rid[i]==41&&gImportOpen&&gPick==1);
+             pill(mx+1*u,my+.75f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,(i==3||i==4)?.2f:.33f,(i==3||i==4)?.38f:.33f,(i==3||i==4)?.55f:.35f);}
             gBtn.push_back({{mx,my,mw,mh},299});}
            float tbX=ML_,tbY=hH+1.5f*u,tbW=0; // barra de ferramentas (2 colunas)
            {static const int C1[6]={0,1,2,10,11,12},C2[6]={3,4,5,6,8,9};
@@ -1436,6 +1469,18 @@ jobs:
                         glDisable(GL_SCISSOR_TEST);
                         if(maxs>0){float bh_=lh*lh/tot,by_=gListR.y+(lh-bh_)*(gScrollPx/maxs);rect(px2+pw2-1.8f*u,by_,.6f*u,bh_,.6f,.6f,.65f,1,.3f*u);}}
                        gBtn.push_back({{px2,py2,pw2,ph2},299});}
+          if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
+           rect(0,0,(float)W,(float)H,0,0,0,.55f);gBlock.push_back({0,0,(float)W,(float)H});
+           float pad=2.2f*u,pw2=std::min(92*u,W-2*ML_),fh=7.2f*u,bh=6.4f*u,ph2=pad+6.2f*u+fh+1.8f*u+bh+1.2f*u+3.6f*u+pad,px=(W-pw2)/2,py=hH+3*u;
+           panel(px,py,pw2,ph2,1.4f*u);
+           float tT=.62f*u;text(gNameMode==0?"Nomeie o projeto":"Renomear o projeto",px+pad,py+pad,tT,.95f,.95f,.97f);
+           float fy=py+pad+6.2f*u,tF=.6f*u;rect(px+pad,fy,pw2-2*pad,fh,.07f,.07f,.08f,1,.9f*u);gBtn.push_back({{px+pad,fy,pw2-2*pad,fh},2005});
+           bool emp=gNameBuf.empty();const char*shown=emp?"Projeto sem título":gNameBuf.c_str();
+           text(shown,px+pad+1.6f*u,fy+fh/2-2.5f*tF,tF,emp?.45f:.95f,emp?.45f:.95f,emp?.5f:.97f);
+           {float cx=px+pad+1.6f*u+(emp?0:tw(shown,tF));rect(cx+.2f*u,fy+1.2f*u,.3f*u,fh-2.4f*u,.9f,.9f,.95f,1);}
+           {float y5=fy+fh+1.8f*u,bw=(pw2-2*pad-.8f*u)/2;pill(px+pad,y5,bw,bh,2004,"Cancelar",false,.3f,.3f,.33f);pill(px+pad+bw+.8f*u,y5,bw,bh,2003,"OK",true,.2f,.38f,.55f);
+            text("Toque no campo para abrir o teclado",px+pad,y5+bh+1.2f*u,.32f*u,.55f,.55f,.6f);}
+           gBtn.push_back({{0,0,(float)W,(float)H},299});}
            if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:100*u-3.6f*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
            drawNav();
            eglSwapBuffers(dpy,surf);}
@@ -1445,6 +1490,7 @@ jobs:
            if(gVid.on&&i!=36)return;
            if(i>=0&&i<64)gFlash[i]=.35f;
            if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gRenderOpen=!gRenderOpen;if(gRenderOpen)gRigOpen=false;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
+           if(i>=2000&&i<2200){kbKey(i-2000);return;}
            if(i>=200){int k=i-200;if(i!=299){gImportOpen=false;if(k<(int)gFiles.size())pickPath(gFiles[k]);}return;}
            if(i<3)addObj(i);else if(i<7)tool=i-3;
            else if(i==7)insertKey();else if(i==8){playing=!playing;if(playing)gPlayDir=1;}
@@ -1454,13 +1500,16 @@ jobs:
            else if(i==12){if(sel>=0)clearParent(sel);}
            else if(i==13||i==14){gFileMenu=false;if(!filesGranted())needFiles();else if(i==13)exportMAD();else exportGLTF();}
            else if(i==15||i==41||i==43){gFileMenu=false;if(!filesGranted())needFiles();else{gPick=i==15?0:i==41?1:2;scanFiles();gScrollPx=0;gImportOpen=true;}}
-           else if(i==40)newProject();
-           else if(i==42){if(!filesGranted())needFiles();else saveProject();}
+           else if(i==40){gFileMenu=false;newProject();}
+           else if(i==42){gFileMenu=false;if(!filesGranted())needFiles();else saveProject();}
            else if(i==35){gMcDn=!gMcDn;gDnDirty=true;}
            else if(i==36){if(gVid.on)vidFinish(true);else vidStart();}
            else if(i==37){gVidQ=(gVidQ+1)%3;}
            else if(i==38){gMcLeak=!gMcLeak;gMcHaveCam=false;gSigS=-1;mcReset();}
            else if(i==70)rigCreate();
+           else if(i==84)gMode=0;
+           else if(i==85||i==86)toast(i==85?"Modo Modelagem: em desenvolvimento":"Modo Escultura: em desenvolvimento");
+           else if(i==90){gNameMode=1;gNameBuf=gProj;gNameOpen=true;gImportOpen=false;showKb();}
            else if(i>=71&&i<=81){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){
             if(i==71)rigToggle(ri);
             else if(i==72){rigKeyW(rigs[ri],rigW(rigs[ri]));toast("Chave IK/FK criada");}
@@ -1515,14 +1564,21 @@ jobs:
             if(e.a==0){yaw=e.pos?PI/2:-PI/2;pitch=0;}else if(e.a==1)pitch=e.pos?1.45f:-1.45f;else{yaw=e.pos?0.f:PI;pitch=0;}return;}}
           int32_t onInput(android_app*,AInputEvent*e){
            static int mode=0;static float lx,ly,sx,sy,pinch,lmx,lmy;static bool moved,rl;
+           if(AInputEvent_getType(e)==AINPUT_EVENT_TYPE_KEY&&gNameOpen){
+            int ac=AKeyEvent_getAction(e),kc=AKeyEvent_getKeyCode(e);bool used=false;
+            if(kc==AKEYCODE_DEL){used=true;if(ac==AKEY_EVENT_ACTION_DOWN)nameBack();}
+            else if(kc==AKEYCODE_ENTER||kc==AKEYCODE_NUMPAD_ENTER){used=true;if(ac==AKEY_EVENT_ACTION_DOWN)nameConfirm();}
+            else if(kc==AKEYCODE_BACK){used=true;if(ac==AKEY_EVENT_ACTION_DOWN){gNameOpen=false;hideKb();}}
+            else if(ac==AKEY_EVENT_ACTION_DOWN){int cp=jniUnicode(kc,AKeyEvent_getMetaState(e));if(cp>0){used=true;nameAddCp(cp);}}
+            return used?1:0;}
            if(AInputEvent_getType(e)!=AINPUT_EVENT_TYPE_MOTION)return 0;
            int act=AMotionEvent_getAction(e)&AMOTION_EVENT_ACTION_MASK,n=(int)AMotionEvent_getPointerCount(e);
            float x=AMotionEvent_getX(e,0),y=AMotionEvent_getY(e,0);
            if(act==AMOTION_EVENT_ACTION_DOWN){
             moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
-            if(gImportOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
-            if(gVid.on&&mode<0)mode=2;
+            if(gImportOpen&&!gNameOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
+            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!gNameOpen||b.id>=2000)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+            if((gVid.on||gNameOpen)&&mode<0)mode=2;
             if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
             if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
             if(mode<0){
@@ -1554,7 +1610,7 @@ jobs:
 
           void android_main(android_app*app){
            app->onAppCmd=onCmd;app->onInputEvent=onInput;
-           gProj=fm("projeto_%ld",(long)(time(nullptr)%100000));gApp=app;if(app->activity)gDir=app->activity->externalDataPath?app->activity->externalDataPath:app->activity->internalDataPath;
+           gApp=app;if(app->activity)gDir=app->activity->externalDataPath?app->activity->externalDataPath:app->activity->internalDataPath;gProj=uniqueProjName(kUntitled);
            auto now=[](){timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;};
            double last=now();
            while(true){
