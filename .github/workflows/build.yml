@@ -482,7 +482,7 @@ jobs:
             rect(e.x-r,e.y-r,2*r,2*r,c[0]*k,c[1]*k,c[2]*k,1,r);
             if(e.pos){float ps=H*.0055f;text(LB[e.a],e.x-tw(LB[e.a],ps)/2,e.y-2.5f*ps,ps,1,1,1);}}}
           // ---------- exportacao (MAD / glTF) + rigging ----------
-          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;
+          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;bool gCanUndo=false,gCanRedo=false,gSizeOpen=false;int gSizeField=0,gMcCW=0,gMcCH=0;std::string gSizeBuf[2];
           void toast(const std::string&t){gToast=t;gToastT=4;}
           std::string fm(const char*f,...){char b[1024];va_list a;va_start(a,f);vsnprintf(b,1024,f,a);va_end(a);return b;}
           // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
@@ -605,7 +605,11 @@ jobs:
            else if(id==40){rect(cx-s*.7f,cy-s,s*1.4f,s*2.f,c,c,c,1,s*.15f);rect(cx-s*.45f,cy-s*.1f,s*.9f,s*.2f,.3f,.3f,.33f);rect(cx-s*.1f,cy-s*.45f,s*.2f,s*.9f,.3f,.3f,.33f);}
            else if(id==41){rect(cx-s,cy-s*.75f,s*.8f,s*.4f,c,c,c,1,s*.1f);rect(cx-s,cy-s*.4f,s*2.f,s*1.3f,c,c,c,1,s*.12f);}
            else if(id==42){rect(cx-s*.9f,cy-s*.9f,s*1.8f,s*1.8f,c,c,c,1,s*.15f);rect(cx-s*.55f,cy-s*.9f,s*1.1f,s*.6f,.3f,.3f,.33f,1,s*.06f);rect(cx-s*.5f,cy+s*.2f,s,s*.7f,.3f,.3f,.33f,1,s*.06f);}
-           else if(id==9){rect(cx-s*.8f,cy-s,s*1.6f,s*.25f,c,c,c);rect(cx-s*.3f,cy-s*1.2f,s*.6f,s*.25f,c,c,c);rect(cx-s*.65f,cy-s*.65f,s*1.3f,s*1.7f,c,c,c,1,s*.15f);}}
+           else if(id==9){rect(cx-s*.8f,cy-s,s*1.6f,s*.25f,c,c,c);rect(cx-s*.3f,cy-s*1.2f,s*.6f,s*.25f,c,c,c);rect(cx-s*.65f,cy-s*.65f,s*1.3f,s*1.7f,c,c,c,1,s*.15f);}
+           else if(id==91||id==92){bool en=id==91?gCanUndo:gCanRedo;float cc=en?c:.42f,sg=id==92?-1.f:1.f;const float R=s*.78f,rd=s*.17f;
+            for(int k=0;k<=10;k++){float a=(20-k*22)*PI/180.f;float qx=cx+sg*R*cosf(a),qy=cy+s*.15f+R*sinf(a);rect(qx-rd,qy-rd,2*rd,2*rd,cc,cc,cc,1,rd);}
+            float hx=cx+sg*R*cosf(-200*PI/180.f),hy=cy+s*.15f+R*sinf(-200*PI/180.f);
+            for(int q=0;q<3;q++){float w=s*(1.5f-q*.5f);rect(hx-w/2,hy+s*.05f+q*s*.3f,w,s*.3f,cc,cc,cc);}}}
           // ---------- permissao "Acesso a todos os arquivos" (via JNI) ----------
           android_app*gApp=nullptr;
           bool filesGranted(){
@@ -1036,7 +1040,7 @@ jobs:
           bool mcShow(){return gMcOK&&(gMcPrev||gMcFinal)&&gMcSamples>0&&gMcTex[0];}
           void mcStep(){
            if(!gMcOK||!(gMcPrev||gMcFinal))return;
-           int tw_,th_;if(gMcFinal){float sc=std::min(1.f,(float)gMcFinW/W);tw_=(int)(W*sc);th_=(int)(H*sc);}else{tw_=std::max(W/2,64);th_=std::max(H/2,64);}
+           int tw_,th_;if(gMcFinal){if(gMcCW>0&&gMcCH>0){tw_=gMcCW;th_=gMcCH;}else{float sc=std::min(1.f,(float)gMcFinW/W);tw_=(int)(W*sc);th_=(int)(H*sc);}}else{tw_=std::max(W/2,64);th_=std::max(H/2,64);}
            if(tw_!=gMcW||th_!=gMcH){mcResize(tw_,th_);gSigS=-1;gMcHaveCam=false;}
            double now=nowSec();V e=camEye();V f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);
            if(gMcFinal){if(!gMcHaveCam){mcBuild();gCE=e;gCF=f;gCR=r;gCU=u;mcReset();gMcHaveCam=true;}e=gCE;f=gCF;r=gCR;u=gCU;}
@@ -1068,7 +1072,9 @@ jobs:
            gMcDnRes=(iters-1)&1;gMcDnOK=true;glActiveTexture(GL_TEXTURE0);glUseProgram(gProg);}
           void mcDraw(){glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(gMcTm);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,(gMcDn&&gMcDnOK)?gMcDnT[gMcDnRes]:gMcTex[gMcCur]);
            glUniform1i(tmAcc,0);glUniform2i(tmSz,gMcW,gMcH);glBindVertexArray(meshes[3].vao);glDrawArrays(GL_TRIANGLES,0,6);glEnable(GL_BLEND);glUseProgram(gProg);}
-          void mcFrame(){mcStep();if(gDnDirty){if(gMcDn&&mcShow()&&(!gVidBusy||gMcSamples>=gMcSpp))mcDenoise();gDnDirty=false;}if(!mcShow())return;glViewport(0,0,W,H);mcDraw();}
+          void mcFrame(){mcStep();if(gDnDirty){if(gMcDn&&mcShow()&&(!gVidBusy||gMcSamples>=gMcSpp))mcDenoise();gDnDirty=false;}if(!mcShow())return;{int vx=0,vy=0,vw=W,vh=H;if(gMcFinal&&gMcW>0&&gMcH>0){float ra=(float)gMcW/gMcH,sa=(float)W/H;if(ra>sa+.002f){vh=(int)(W/ra);vy=(H-vh)/2;}else if(ra<sa-.002f){vw=(int)(H*ra);vx=(W-vw)/2;}}
+            if(vw!=W||vh!=H){glClearColor(.08f,.08f,.09f,1);glClear(GL_COLOR_BUFFER_BIT);}
+            glViewport(vx,vy,vw,vh);mcDraw();glViewport(0,0,W,H);}}
           static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
           void mcSave(){if(!mcShow()){toast("Nada para salvar");return;}
            glBindFramebuffer(GL_FRAMEBUFFER,gMcOutF);glViewport(0,0,gMcW,gMcH);mcDraw();
@@ -1145,6 +1151,7 @@ jobs:
            gVid.spp0=gMcSpp;gVid.fw0=gMcFinW;gVid.bn0=gMcBn;gMcFinW=PW[gVidQ];gMcBn=PB[gVidQ];if(PS[gVidQ])gMcSpp=PS[gVidQ];gVidBusy=true;
            float sc=std::min(1.f,(float)gMcFinW/W);int sw=(int)(W*sc),sh=(int)(H*sc);
            gVid.vw=gMcFinW;gVid.vh=std::max(16,(int)(gVid.vw*(double)sh/std::max(sw,1)+8)/16*16);
+           if(gMcCW>0&&gMcCH>0){gVid.vw=(gMcCW+15)/16*16;gVid.vh=(gMcCH+15)/16*16;} // tamanho personalizado
            long t=(long)time(nullptr);bool ok=false;
            for(int cf:{21,19}){if(ok)break;
             AMediaFormat*f_=AMediaFormat_new();
@@ -1179,6 +1186,25 @@ jobs:
            uint32_t u(){if(i+4>n){ok=false;return 0;}uint32_t v;memcpy(&v,p+i,4);i+=4;return v;}
            float f(){uint32_t v=u();float x;memcpy(&x,&v,4);return x;}int s(){return (int)u();}
            void b(void*d,size_t k){if(i+k>n){ok=false;memset(d,0,k);return;}memcpy(d,p+i,k);i+=k;}};
+          // ---------- desfazer / refazer (snapshots do estado persistente da cena) ----------
+          struct Snap{std::vector<Obj> o;std::vector<Skin> sk;std::vector<Rig> rg;int sel=-1;};
+          std::vector<Snap> gUndo,gRedo;Snap gUCur;uint64_t gUHash=0;
+          static void hmix(uint64_t&h,const void*p,size_t n){const unsigned char*b=(const unsigned char*)p;for(size_t i=0;i<n;i++){h^=b[i];h*=1099511628211ULL;}}
+          uint64_t stateHash(){uint64_t h=1469598103934665603ULL;
+           for(size_t i=0;i<objs.size();i++){const Obj&o=objs[i];
+            int meta[6]={o.mesh,o.parent,o.skin,o.kind,o.shape,(int)o.k.size()};hmix(h,meta,sizeof(meta));hmix(h,o.nm,strnlen(o.nm,24));
+            hmix(h,&o.col,sizeof(V));hmix(h,&o.met,4);hmix(h,&o.rou,4);hmix(h,&o.len,4);
+            bool derived=false;for(auto&g:rigs)if((g.a==(int)i||g.b==(int)i||g.c==(int)i)&&(g.w>.001f||!g.wk.empty()))derived=true; // osso movido pelo IK
+            if(o.k.empty()&&!derived)hmix(h,&o.cur,sizeof(T));
+            for(auto&k:o.k){hmix(h,&k.t,4);hmix(h,&k.x,sizeof(T));}}
+           for(auto&g:rigs){int m[7]={g.a,g.b,g.c,g.tgt,g.pole,(int)g.rotc,(int)g.wk.size()};hmix(h,m,sizeof(m));hmix(h,&g.w,4);for(auto&k:g.wk)hmix(h,&k,sizeof(k));}
+           return h;}
+          Snap snapNow(){Snap s;s.o=objs;s.sk=skins;s.rg=rigs;s.sel=sel;return s;}
+          void undoClear(){gUndo.clear();gRedo.clear();gUCur=snapNow();gUHash=stateHash();gCanUndo=gCanRedo=false;}
+          void undoCommit(){uint64_t h=stateHash();if(h==gUHash)return;gUndo.push_back(std::move(gUCur));if(gUndo.size()>40)gUndo.erase(gUndo.begin());gRedo.clear();gUCur=snapNow();gUHash=h;gCanUndo=true;gCanRedo=false;}
+          static void undoApply(const Snap&s){objs=s.o;skins=s.sk;rigs=s.rg;sel=s.sel<(int)objs.size()?s.sel:-1;gUCur=s;gUHash=stateHash();gMcHaveCam=false;gSigS=-1;mcReset();applyAnim();gCanUndo=!gUndo.empty();gCanRedo=!gRedo.empty();}
+          void doUndo(){undoCommit();if(gUndo.empty())return;gRedo.push_back(gUCur);Snap p=std::move(gUndo.back());gUndo.pop_back();undoApply(p);toast("Desfeito");}
+          void doRedo(){undoCommit();if(gRedo.empty())return;gUndo.push_back(gUCur);Snap n=std::move(gRedo.back());gRedo.pop_back();undoApply(n);toast("Refeito");}
           void clearScene(){for(size_t i=6;i<meshes.size();i++){glDeleteBuffers(1,&meshes[i].vbo);if(meshes[i].svbo)glDeleteBuffers(1,&meshes[i].svbo);glDeleteVertexArrays(1,&meshes[i].vao);}
            meshes.resize(6);objs.clear();rigs.clear();skins.clear();sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
           bool loadMAD(const std::string&path,bool replace){
@@ -1216,7 +1242,7 @@ jobs:
             if(o.skin>=0){o.skin+=sb2;if(o.skin>=(int)skins.size())o.skin=-1;}objs.push_back(o);}
            for(Rig g:rgs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>=0)*pp+=ob;rigs.push_back(g);}
            if(replace){yaw=cam[0];pitch=cam[1];cd=cam[2];tgt=V{cam[3],cam[4],cam[5]};tm=cam[6];}
-           sel=os.empty()?-1:ob;toast(fm("Carregado: %d objetos",(int)os.size()));return true;}
+           sel=os.empty()?-1:ob;if(replace)undoClear();toast(fm("Carregado: %d objetos",(int)os.size()));return true;}
           double gNewT=-10;
           static const char*kUntitled="Projeto sem título";
           static bool projExists(const std::string&n){std::string a=fm("/storage/emulated/0/Download/%s.mad",n.c_str()),b=fm("%s/%s.mad",gDir,n.c_str());return access(a.c_str(),F_OK)==0||access(b.c_str(),F_OK)==0;}
@@ -1255,7 +1281,20 @@ jobs:
            if(cp<32||cp==127||cp>0x7FF)return;if(cp=='/'||cp=='\\'||cp==':'||cp=='*'||cp=='?'||cp=='"'||cp=='<'||cp=='>'||cp=='|')return;
            if(gNameBuf.size()>=44)return;
            if(cp<0x80)gNameBuf.push_back((char)cp);else{gNameBuf.push_back((char)(0xC0|(cp>>6)));gNameBuf.push_back((char)(0x80|(cp&0x3F)));}}
-          void kbKey(int c){if(c==3)nameConfirm();else if(c==4){gNameOpen=false;hideKb();}else if(c==5)showKb();}
+          void sizeOpen(){gSizeOpen=true;gSizeField=0;gSizeBuf[0]=gMcCW>0?std::to_string(gMcCW):"";gSizeBuf[1]=gMcCH>0?std::to_string(gMcCH):"";showKb();}
+          void sizeApply(){int w=atoi(gSizeBuf[0].c_str()),h=atoi(gSizeBuf[1].c_str());
+           if(w<=0&&h<=0){gMcCW=gMcCH=0;toast("Tamanho da render: automatico (tela)");}
+           else{if(w<=0)w=(int)(h*(float)W/std::max(H,1));if(h<=0)h=(int)(w*(float)H/std::max(W,1));
+            w=std::clamp(w,64,4096);h=std::clamp(h,64,4096);while((long)w*h>8500000L){w=w*9/10;h=h*9/10;}
+            gMcCW=w;gMcCH=h;toast(fm("Tamanho da render: %dx%d",w,h));}
+           gMcHaveCam=false;gSigS=-1;mcReset();gSizeOpen=false;hideKb();}
+          void sizeAddDigit(int cp){if(cp<'0'||cp>'9')return;std::string&b=gSizeBuf[gSizeField];if(b.size()<4)b.push_back((char)cp);}
+          void sizeBack(){std::string&b=gSizeBuf[gSizeField];if(!b.empty())b.pop_back();}
+          void kbKey(int c){
+           if(gSizeOpen){if(c==10||c==11){gSizeField=c-10;showKb();}else if(c==12)sizeApply();else if(c==13){gSizeOpen=false;hideKb();}
+            else if(c>=20&&c<=26){static const int PW[7]={0,1920,1280,2560,3840,1080,1080},PH[7]={0,1080,720,1440,2160,1080,1920};int k=c-20;gSizeBuf[0]=PW[k]?std::to_string(PW[k]):"";gSizeBuf[1]=PH[k]?std::to_string(PH[k]):"";}
+            return;}
+           if(c==3)nameConfirm();else if(c==4){gNameOpen=false;hideKb();}else if(c==5)showKb();}
           int jniUnicode(int keyCode,int meta){ // caractere digitado: KeyEvent.getUnicodeChar() via JNI
            if(!gApp||!gApp->activity||!gApp->activity->vm)return 0;
            JavaVM*vm=gApp->activity->vm;JNIEnv*env=nullptr;bool att=false;
@@ -1363,20 +1402,17 @@ jobs:
            auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
             rect(sx,yy+rh_/2-.45f*u,sw,.9f*u,.1f,.1f,.11f,1,.45f*u);rect(sx,yy+rh_/2-.45f*u,sw*v,.9f*u,.28f,.45f,.7f,1,.45f*u);
             rect(sx+sw*v-.7f*u,yy+rh_/2-1.1f*u,1.4f*u,2.2f*u,.95f,.95f,.95f,1,.7f*u);gBtn.push_back({{sx-.8f*u,yy,sw+1.6f*u,rh_},300+i});gSlX[i]=sx;gSlW[i]=sw;};
-           {float bs=6.4f*u,x=ML_,by=(hH-bs)/2,tp=.42f*u,ps=bs*.072f; // nome do projeto (toque para renomear) + abas de modo
-            char hb[64];snprintf(hb,64,"%.22s",gProj.c_str());float nw=std::max(tw(hb,tp)+3.4f*u,16*u);
-            rect(x,by,nw,bs,.2f,.2f,.22f,1,.9f*u);text(hb,x+1.6f*u,by+bs/2-2.5f*tp,tp,.92f,.92f,.94f);gBtn.push_back({{x,by,nw,bs},90});x+=nw+1*u;
-            char fb[24];snprintf(fb,24,"%d FPS",(int)(gFps+.5f));float tf=.34f*u;text(fb,x,by+bs/2-2.5f*tf,tf,.55f,.55f,.6f);x+=tw(fb,tf)+2.5f*u;
-            const char*mn[3]={"Animação","Modelagem","Escultura"};const int mi[3]={84,85,86};
-            for(int k=0;k<3;k++){float w=tw(mn[k],ps)+4*u;pill(x,by,w,bs,mi[k],mn[k],gMode==k,.33f,.33f,.35f);x+=w+.6f*u;}}
+           {float bs=7*u,x=ML_,by=(hH-bs)/2; // desfazer / refazer
+            for(int k=0;k<2;k++){int id=91+k;rect(x,by,bs,bs,.33f,.33f,.35f,1,.9f*u);icon2(id,x+bs/2,by+bs/2,bs*.27f,false);gBtn.push_back({{x,by,bs,bs},id});x+=bs+.6f*u;}
+            char fb[24];snprintf(fb,24,"%d FPS",(int)(gFps+.5f));float tf=.34f*u;text(fb,x+1*u,by+bs/2-2.5f*tf,tf,.55f,.55f,.6f);}
            {float ph=6.4f*u,py=(hH-ph)/2,ps=ph*.072f,xr=W-ML_;
             const char*ml[4]={"Arquivo","Render","Rig","Timeline"};const int mid[4]={60,61,63,62};bool mon[4]={gFileMenu,gRenderOpen,gRigOpen,gTlOpen};
             for(int k=0;k<4;k++){float w=tw(ml[k],ps)+4*u,x=xr-w;pill(x,py,w,ph,mid[k],ml[k],mon[k],.33f,.33f,.35f);xr=x-.8f*u;}}
            if(gFileMenu){ // menu Arquivo (import/export)
-            const char*rl[7]={"Novo projeto","Abrir projeto","Salvar projeto","Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[7]={40,41,42,15,43,14,13};
-            float mw=26*u,ph=6.2f*u,mx=navX()-navR()-1.5f*u-mw,my=hH+1*u,mh=7*(ph+.5f*u)+1.5f*u;panel(mx,my,mw,mh,1*u);
-            for(int i=0;i<7;i++){bool on=gFlash[rid[i]]>0||(rid[i]==15&&gImportOpen&&gPick==0)||(rid[i]==43&&gImportOpen&&gPick==2)||(rid[i]==41&&gImportOpen&&gPick==1);
-             pill(mx+1*u,my+.75f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,(i==3||i==4)?.2f:.33f,(i==3||i==4)?.38f:.33f,(i==3||i==4)?.55f:.35f);}
+            const char*rl[8]={"Novo projeto","Abrir projeto","Salvar projeto","Renomear projeto","Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[8]={40,41,42,90,15,43,14,13};
+            float mw=26*u,ph=6.2f*u,mx=navX()-navR()-1.5f*u-mw,my=hH+1*u,mh=8*(ph+.5f*u)+1.5f*u+3.4f*u;panel(mx,my,mw,mh,1*u);{char nb[48];snprintf(nb,48,"%.26s",gProj.c_str());text(nb,mx+1.2f*u,my+.9f*u,.38f*u,.65f,.65f,.7f);}
+            for(int i=0;i<8;i++){bool on=gFlash[rid[i]]>0||(rid[i]==15&&gImportOpen&&gPick==0)||(rid[i]==43&&gImportOpen&&gPick==2)||(rid[i]==41&&gImportOpen&&gPick==1);
+             pill(mx+1*u,my+.75f*u+3.4f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,(i==4||i==5)?.2f:.33f,(i==4||i==5)?.38f:.33f,(i==4||i==5)?.55f:.35f);}
             gBtn.push_back({{mx,my,mw,mh},299});}
            float tbX=ML_,tbY=hH+1.5f*u,tbW=0; // barra de ferramentas (2 colunas)
            {static const int C1[6]={0,1,2,10,11,12},C2[6]={3,4,5,6,8,9};
@@ -1386,7 +1422,7 @@ jobs:
              rect(x,y,bs,bs,on?.28f:.33f,on?.45f:.33f,on?.7f:.35f,1,1.1f*u);icon2(id,x+bs/2,y+bs/2,bs*.27f,on);gBtn.push_back({{x,y,bs,bs},id});}
             gBtn.push_back({{tbX,tbY,tbW,th_},299});}
            if(gRenderOpen){ // painel Render (viewport + path tracing), recolhivel
-            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;int nr=gMcOK?13:4;
+            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;int nr=gMcOK?14:4;
             panel(px,py,pw2,rh*nr+1.6f*u,1*u);
             sld(2,px,pw2,y1,rh,tp2,"AO",gAOs);
             pill(px+1.2f*u,y1+rh+.3f*u,bw_,bh_,16,(gSSAO&&gPostOK)?"SSAO: on":"SSAO: off",gSSAO,.3f,.3f,.33f);
@@ -1402,7 +1438,8 @@ jobs:
             pill(px+1.2f*u,y2+6*rh,bw_,bh_,37,fm("Video: %s",gVidQN[gVidQ]).c_str(),false,.3f,.3f,.33f);
             pill(px+1.2f*u,y2+7*rh,bw_,bh_,36,gVid.on?fm("Parar video %d/%d",gVid.done,gVid.total).c_str():fm("Render video %d-%d",std::min(gFS,gFE),std::max(gFS,gFE)).c_str(),gVid.on,.5f,.34f,.12f);
              pill(px+1.2f*u,y2+8*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
-             char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+9*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
+             pill(px+1.2f*u,y2+9*rh,bw_,bh_,39,gMcCW>0?fm("Tamanho: %dx%d",gMcCW,gMcCH).c_str():"Tamanho: tela",gMcCW>0,.3f,.3f,.33f);
+             char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+10*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            if(gRigOpen){ // painel Rig (IK de 2 ossos + IK/FK + formas)
             float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u,hw=(bw_-.6f*u)/2,x2=px+1.2f*u+hw+.6f*u;
@@ -1490,6 +1527,26 @@ jobs:
                         glDisable(GL_SCISSOR_TEST);
                         if(maxs>0){float bh_=lh*lh/tot,by_=gListR.y+(lh-bh_)*(gScrollPx/maxs);rect(px2+pw2-1.8f*u,by_,.6f*u,bh_,.6f,.6f,.65f,1,.3f*u);}}
                        gBtn.push_back({{px2,py2,pw2,ph2},299});}
+          if(gSizeOpen){ // caixa "Tamanho da render" (teclado do Android)
+           rect(0,0,(float)W,(float)H,0,0,0,.55f);gBlock.push_back({0,0,(float)W,(float)H});
+           float pad=2*u,pw2=std::min(104*u,W-2*ML_),fh=6.6f*u,bh=5.8f*u,rh=5.4f*u,ph2=pad+5.6f*u+fh+1.6f*u+2*(rh+.6f*u)+1.2f*u+bh+1*u+3.2f*u+pad,px=(W-pw2)/2,py=hH+2*u;
+           panel(px,py,pw2,ph2,1.4f*u);
+           text("Tamanho da render",px+pad,py+pad,.6f*u,.95f,.95f,.97f);
+           float fy=py+pad+5.6f*u,tF=.56f*u,fw=(pw2-2*pad-3*u)/2;
+           for(int k=0;k<2;k++){float fx=px+pad+k*(fw+3*u);bool act=gSizeField==k;rect(fx,fy,fw,fh,act?.16f:.07f,act?.2f:.07f,act?.28f:.08f,1,.9f*u);gBtn.push_back({{fx,fy,fw,fh},2010+k});
+            text(k?"Altura":"Largura",fx+1.4f*u,fy+fh/2-2.5f*tF*.75f,tF*.75f,.6f,.6f,.66f);
+            bool emp=gSizeBuf[k].empty();const char*sv=emp?"auto":gSizeBuf[k].c_str();float vx=fx+10.5f*u;
+            text(sv,vx,fy+fh/2-2.5f*tF,tF,emp?.45f:.95f,emp?.45f:.95f,emp?.5f:.97f);
+            if(act){float cx=vx+(emp?0:tw(sv,tF));rect(cx+.2f*u,fy+1.1f*u,.3f*u,fh-2.2f*u,.9f,.9f,.95f,1);}}
+           text("x",px+pad+fw+1.1f*u,fy+fh/2-2.5f*tF,tF,.7f,.7f,.75f);
+           static const char*pn[7]={"Tela (auto)","FHD 1920x1080","HD 1280x720","2K 2560x1440","4K 3840x2160","1:1 1080x1080","9:16 1080x1920"};
+           static const int ppw[7]={0,1920,1280,2560,3840,1080,1080},pph[7]={0,1080,720,1440,2160,1080,1920};
+           float pbw=(pw2-2*pad-3*.6f*u)/4,py0=fy+fh+1.6f*u;
+           for(int k=0;k<7;k++){int row=k/4,col=k%4;bool on=(ppw[k]==0)?(gSizeBuf[0].empty()&&gSizeBuf[1].empty()):(gSizeBuf[0]==std::to_string(ppw[k])&&gSizeBuf[1]==std::to_string(pph[k]));
+            pill(px+pad+col*(pbw+.6f*u),py0+row*(rh+.6f*u),pbw,rh,2020+k,pn[k],on,.3f,.3f,.33f);}
+           {float y5=py0+2*(rh+.6f*u)+1.2f*u,bw=(pw2-2*pad-.8f*u)/2;pill(px+pad,y5,bw,bh,2013,"Cancelar",false,.3f,.3f,.33f);pill(px+pad+bw+.8f*u,y5,bw,bh,2012,"OK",true,.2f,.38f,.55f);
+            text("Toque num campo para digitar. Tamanhos grandes usam muita memoria.",px+pad,y5+bh+1*u,.3f*u,.55f,.55f,.6f);}
+           gBtn.push_back({{0,0,(float)W,(float)H},299});}
           if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
            rect(0,0,(float)W,(float)H,0,0,0,.55f);gBlock.push_back({0,0,(float)W,(float)H});
            float pad=2.2f*u,pw2=std::min(92*u,W-2*ML_),fh=7.2f*u,bh=6.4f*u,ph2=pad+6.2f*u+fh+1.8f*u+bh+1.2f*u+3.6f*u+pad,px=(W-pw2)/2,py=hH+3*u;
@@ -1507,7 +1564,7 @@ jobs:
            eglSwapBuffers(dpy,surf);}
 
           // ---------- input ----------
-          void press(int i){
+          void pressInner(int i){
            if(gVid.on&&i!=36)return;
            if(i>=0&&i<64)gFlash[i]=.35f;
            if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gRenderOpen=!gRenderOpen;if(gRenderOpen)gRigOpen=false;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
@@ -1528,9 +1585,12 @@ jobs:
            else if(i==37){gVidQ=(gVidQ+1)%3;}
            else if(i==38){gMcLeak=!gMcLeak;gMcHaveCam=false;gSigS=-1;mcReset();}
            else if(i==70)rigCreate();
+           else if(i==39)sizeOpen();
+           else if(i==91)doUndo();
+           else if(i==92)doRedo();
            else if(i==84)gMode=0;
            else if(i==85||i==86)toast(i==85?"Modo Modelagem: em desenvolvimento":"Modo Escultura: em desenvolvimento");
-           else if(i==90){gNameMode=1;gNameBuf=gProj;gNameOpen=true;gImportOpen=false;showKb();}
+           else if(i==90){gFileMenu=false;gNameMode=1;gNameBuf=gProj;gNameOpen=true;gImportOpen=false;showKb();}
            else if(i>=71&&i<=81){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){
             if(i==71)rigToggle(ri);
             else if(i==72){rigKeyW(rigs[ri],rigW(rigs[ri]));toast("Chave IK/FK criada");}
@@ -1552,6 +1612,7 @@ jobs:
            else if(i==50){tm=gFS/24.f;applyAnim();}else if(i==51){playing=true;gPlayDir=-1;}else if(i==52)playing=false;else if(i==53){playing=true;gPlayDir=1;}else if(i==54){tm=gFE/24.f;applyAnim();}
            else if(i==55)jumpKey(-1);else if(i==56)jumpKey(1);else if(i==57)delKey();
            else if(i>=20&&i<=23){if(i==20)tm=0;else if(i==21)tm=std::max(0.f,tm-1/24.f);else if(i==22)tm=std::min(DUR,tm+1/24.f);else tm=DUR;applyAnim();}}
+          void press(int i){pressInner(i);if(i!=91&&i!=92)undoCommit();}
           void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
           void pick(float x,float y){
            {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
@@ -1585,21 +1646,21 @@ jobs:
             if(e.a==0){yaw=e.pos?PI/2:-PI/2;pitch=0;}else if(e.a==1)pitch=e.pos?1.45f:-1.45f;else{yaw=e.pos?0.f:PI;pitch=0;}return;}}
           int32_t onInput(android_app*,AInputEvent*e){
            static int mode=0;static float lx,ly,sx,sy,pinch,lmx,lmy;static bool moved,rl;
-           if(AInputEvent_getType(e)==AINPUT_EVENT_TYPE_KEY&&gNameOpen){
+           if(AInputEvent_getType(e)==AINPUT_EVENT_TYPE_KEY&&(gNameOpen||gSizeOpen)){
             int ac=AKeyEvent_getAction(e),kc=AKeyEvent_getKeyCode(e);bool used=false;
-            if(kc==AKEYCODE_DEL){used=true;if(ac==AKEY_EVENT_ACTION_DOWN)nameBack();}
-            else if(kc==AKEYCODE_ENTER||kc==AKEYCODE_NUMPAD_ENTER){used=true;if(ac==AKEY_EVENT_ACTION_DOWN)nameConfirm();}
-            else if(kc==AKEYCODE_BACK){used=true;if(ac==AKEY_EVENT_ACTION_DOWN){gNameOpen=false;hideKb();}}
-            else if(ac==AKEY_EVENT_ACTION_DOWN){int cp=jniUnicode(kc,AKeyEvent_getMetaState(e));if(cp>0){used=true;nameAddCp(cp);}}
+            if(kc==AKEYCODE_DEL){used=true;if(ac==AKEY_EVENT_ACTION_DOWN){if(gNameOpen)nameBack();else sizeBack();}}
+            else if(kc==AKEYCODE_ENTER||kc==AKEYCODE_NUMPAD_ENTER){used=true;if(ac==AKEY_EVENT_ACTION_DOWN){if(gNameOpen)nameConfirm();else sizeApply();}}
+            else if(kc==AKEYCODE_BACK){used=true;if(ac==AKEY_EVENT_ACTION_DOWN){gNameOpen=false;gSizeOpen=false;hideKb();}}
+            else if(ac==AKEY_EVENT_ACTION_DOWN){int cp=jniUnicode(kc,AKeyEvent_getMetaState(e));if(cp>0){used=true;if(gNameOpen)nameAddCp(cp);else sizeAddDigit(cp);}}
             return used?1:0;}
            if(AInputEvent_getType(e)!=AINPUT_EVENT_TYPE_MOTION)return 0;
            int act=AMotionEvent_getAction(e)&AMOTION_EVENT_ACTION_MASK,n=(int)AMotionEvent_getPointerCount(e);
            float x=AMotionEvent_getX(e,0),y=AMotionEvent_getY(e,0);
            if(act==AMOTION_EVENT_ACTION_DOWN){
             moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
-            if(gImportOpen&&!gNameOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!gNameOpen||b.id>=2000)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
-            if((gVid.on||gNameOpen)&&mode<0)mode=2;
+            if(gImportOpen&&!gNameOpen&&!gSizeOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
+            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+            if((gVid.on||gNameOpen||gSizeOpen)&&mode<0)mode=2;
             if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
             if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
             if(mode<0){
@@ -1623,7 +1684,7 @@ jobs:
               if(mode==5)gdrag(dx,dy);else if(moved){if(tool==3&&mode==1)panCam(dx,dy);else orbit(dx,dy);}}}
            }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
             if(mode==30&&!moved&&gImportOpen){int k=(int)floorf((y-gListR.y+gScrollPx)/gRowH);if(k>=0&&k<(int)gFiles.size()){gImportOpen=false;pickPath(gFiles[k]);}}
-            if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);mode=0;gDrag=false;}
+            if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);undoCommit();mode=0;gDrag=false;}
            return 1;}
           void onCmd(android_app*a,int32_t c){
            if(c==APP_CMD_INIT_WINDOW&&a->window){if(initEGL(a->window)){initGL();ready=true;}}
@@ -1631,7 +1692,7 @@ jobs:
 
           void android_main(android_app*app){
            app->onAppCmd=onCmd;app->onInputEvent=onInput;
-           gApp=app;if(app->activity)gDir=app->activity->externalDataPath?app->activity->externalDataPath:app->activity->internalDataPath;gProj=uniqueProjName(kUntitled);
+           gApp=app;if(app->activity)gDir=app->activity->externalDataPath?app->activity->externalDataPath:app->activity->internalDataPath;gProj=uniqueProjName(kUntitled);undoClear();
            auto now=[](){timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;};
            double last=now();
            while(true){
