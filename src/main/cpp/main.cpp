@@ -63,12 +63,12 @@ M model(const T&t){
 
 // ---------- cena + animacao ----------
 struct Key{float t;T x;};
-struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;};
+struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;};
 std::vector<Obj> objs;
 int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
 bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
 void syncRange(){DUR=gFE/24.f;if(gVE>gFE)gVE=gFE;if(gVS<gFS)gVS=gFS;if(gVE-gVS<5)gVE=std::min(gFE,gVS+5);}
-float yaw=.6f,pitch=.4f,cd=8;V tgt{0,.5f,0};const float FOV=1.047f;
+float yaw=.6f,pitch=.4f,cd=8;V tgt{0,.5f,0};float FOV=1.047f;
 V camEye(){return tgt+V{cosf(pitch)*sinf(yaw),sinf(pitch),cosf(pitch)*cosf(yaw)}*cd;}
 static void qmulE(const float*a,const float*b,float*o){o[0]=a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1];o[1]=a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0];
  o[2]=a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3];o[3]=a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2];}
@@ -154,6 +154,20 @@ void solveRigs(){
   aimBone(g.a,g.b,E);aimBone(g.b,g.c,Te);
   if(g.rotc)setWorldRot(g.c,worldM(g.tgt));
   if(w<.999f)for(int k=0;k<3;k++){V rs=objs[ids[k]].cur.r;objs[ids[k]].cur.r=slerpE(g.base[k],rs,w);}}}
+// ---------- camera como objeto (kind 3): POV e camera de render ----------
+int gCamView=-1,gCamAct=-1;float gSaveYaw=0,gSavePitch=0,gSaveCd=8,gSaveFov=1.047f;V gSaveTgt;
+bool camBasis(int i,V&e,V&f,V&r,V&u){if(i<0||i>=(int)objs.size())return false;M W=worldM(i);e=V{W.m[12],W.m[13],W.m[14]};
+ V c0{W.m[0],W.m[1],W.m[2]},c1{W.m[4],W.m[5],W.m[6]},c2{W.m[8],W.m[9],W.m[10]};if(vlen(c0)<1e-8f||vlen(c1)<1e-8f||vlen(c2)<1e-8f)return false;
+ r=norm(c0);u=norm(c1);f=norm(c2)*-1.f;return true;} // a camera olha para -Z local (como no glTF/Blender)
+int activeCam(){if(gCamAct>=0&&gCamAct<(int)objs.size()&&objs[gCamAct].kind==3)return gCamAct;for(int i=0;i<(int)objs.size();i++)if(objs[i].kind==3)return i;return -1;}
+bool camRender(V&e,V&f,V&r,V&u,float&fov){int i=activeCam();if(i<0||!camBasis(i,e,f,r,u))return false;fov=objs[i].fov;return true;}
+void camViewOff(){if(gCamView<0)return;gCamView=-1;yaw=gSaveYaw;pitch=gSavePitch;cd=gSaveCd;tgt=gSaveTgt;FOV=gSaveFov;}
+void viewFromCam(){int i=gCamView;V e,f,r,u;if(i<0||i>=(int)objs.size()||objs[i].kind!=3||!camBasis(i,e,f,r,u)){camViewOff();return;}
+ V dir=f*-1.f;pitch=std::clamp(asinf(std::clamp(dir.y,-1.f,1.f)),-1.5f,1.5f);yaw=atan2f(dir.x,dir.z);cd=5;tgt=e+f*cd;FOV=objs[i].fov;}
+void camViewOn(int i){if(gCamView<0){gSaveYaw=yaw;gSavePitch=pitch;gSaveCd=cd;gSaveTgt=tgt;gSaveFov=FOV;}gCamView=i;gCamAct=i;viewFromCam();}
+void camFromView(){int i=gCamView;if(i<0||i>=(int)objs.size())return;V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);
+ M m=id();m.m[0]=r.x;m.m[1]=r.y;m.m[2]=r.z;m.m[4]=u.x;m.m[5]=u.y;m.m[6]=u.z;m.m[8]=-f.x;m.m[9]=-f.y;m.m[10]=-f.z;m.m[12]=e.x;m.m[13]=e.y;m.m[14]=e.z;
+ M P=objs[i].parent>=0?worldM(objs[i].parent):id();T t=decomp(mul(invAff(P),m));objs[i].cur.p=t.p;objs[i].cur.r=t.r;}
 void addObj(int mesh){
  static const V pal[]={{.9f,.35f,.3f},{.3f,.7f,.9f},{.5f,.85f,.4f},{.95f,.8f,.3f},{.7f,.45f,.9f}};
  Obj o;o.mesh=mesh;o.col=pal[objs.size()%5];static int cnt[6]={0,0,0,0,0,0};static const char*NM[6]={"Cube","Sphere","Plane","","","Bone"};snprintf(o.nm,24,"%s.%03d",NM[mesh],++cnt[mesh]);
@@ -162,12 +176,14 @@ void addObj(int mesh){
  objs.push_back(o);sel=(int)objs.size()-1;}
 void clearParent(int c){M w=worldM(c);objs[c].parent=-1;objs[c].cur=decomp(w);}
 void delObj(int i){
+ if(gCamView==i)camViewOff();if(gCamAct==i)gCamAct=-1;
  for(int ri=(int)rigs.size()-1;ri>=0;ri--){Rig&g=rigs[ri];if(g.a==i||g.b==i||g.c==i||g.tgt==i||g.pole==i)rigs.erase(rigs.begin()+ri);}
  for(auto&sk:skins){if(sk.fz.size()<sk.j.size())sk.fz.assign(sk.j.size(),id());for(size_t k=0;k<sk.j.size();k++)if(sk.j[k]==i){sk.fz[k]=worldM(i);sk.j[k]=-1;}}
  int gp=objs[i].parent;
  for(int j=0;j<(int)objs.size();j++)if(objs[j].parent==i){M w=worldM(j);objs[j].parent=gp;objs[j].cur=decomp(gp>=0?mul(invAff(worldM(gp)),w):w);}
  objs.erase(objs.begin()+i);for(auto&o:objs)if(o.parent>i)o.parent--;sel=-1;
  for(Rig&g:rigs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>i)(*pp)--;}
+ if(gCamView>i)gCamView--;if(gCamAct>i)gCamAct--;
  for(auto&sk:skins)for(auto&jj:sk.j)if(jj>i)jj--;}
 
 // ---------- GL ----------
@@ -422,6 +438,16 @@ void rigBake(int ri){Rig&g=rigs[ri];int ids[3]={g.a,g.b,g.c};int f0=std::min(gFS
  for(int f=f0;f<=f1;f++){tm=f/24.f;applyAnim();solveRigs();ts.push_back(tm);for(int k=0;k<3;k++)ps.push_back(objs[ids[k]].cur);}
  for(size_t i=0;i<ts.size();i++)for(int k=0;k<3;k++)setKeyAt(objs[ids[k]],ts[i],ps[i*3+k]);
  g.w=0;g.wk.clear();tm=t0;applyAnim();toast(fm("IK convertido em chaves FK (%d frames)",(int)ts.size()));}
+// ---------- camera: criar / ver pela camera ----------
+void addCamera(){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);
+ M m=id();m.m[0]=r.x;m.m[1]=r.y;m.m[2]=r.z;m.m[4]=u.x;m.m[5]=u.y;m.m[6]=u.z;m.m[8]=-f.x;m.m[9]=-f.y;m.m[10]=-f.z;m.m[12]=e.x;m.m[13]=e.y;m.m[14]=e.z;
+ T t=decomp(m);int n=0;for(auto&q:objs)if(q.kind==3)n++;
+ Obj o;o.mesh=1;o.kind=3;o.col={.85f,.85f,.9f};if(n)snprintf(o.nm,24,"Camera.%03d",n);else snprintf(o.nm,24,"Camera");
+ o.cur.p=t.p;o.cur.r=t.r;o.cur.s={.5f,.5f,.5f};o.fov=FOV;
+ objs.push_back(o);sel=(int)objs.size()-1;if(gCamAct<0||activeCam()<0)gCamAct=sel;toast("Camera criada na vista atual. Toque nela de novo para ver pela camera");}
+void camViewToggle(){if(gCamView>=0){camViewOff();toast("Vista normal");return;}
+ int i=(sel>=0&&objs[sel].kind==3)?sel:activeCam();if(i<0){toast("Crie uma camera primeiro (icone de camera)");return;}
+ camViewOn(i);toast(fm("Vendo pela camera: %s",objs[i].nm));}
 void insertKey(){if(sel<0)return;Obj&o=objs[sel];bool f=false;for(auto&k:o.k)if(fabsf(k.t-tm)<.02f){k.x=o.cur;f=true;}
  if(!f){o.k.push_back({tm,o.cur});std::sort(o.k.begin(),o.k.end(),[](const Key&a,const Key&b){return a.t<b.t;});}}
 void setParent(int c,int p){for(int a=p;a>=0;a=objs[a].parent)if(a==c){toast("Nao pode: ciclo");return;}
@@ -441,7 +467,7 @@ void writeMAD(FILE*f){
  for(auto&o:objs){U_((uint32_t)o.mesh);U_((uint32_t)o.parent);U_((uint32_t)o.skin);fwrite(o.nm,1,24,f);Fl(o.len);Fl(o.met);Fl(o.rou);Fl(o.col.x);Fl(o.col.y);Fl(o.col.z);
   const float*c=&o.cur.p.x;for(int i=0;i<9;i++)Fl(c[i]);U_((uint32_t)o.k.size());for(auto&k:o.k){Fl(k.t);const float*q=&k.x.p.x;for(int i=0;i<9;i++)Fl(q[i]);}}
  Fl(yaw);Fl(pitch);Fl(cd);Fl(tgt.x);Fl(tgt.y);Fl(tgt.z);Fl(tm);
- fwrite("RIG2",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);for(auto&o:objs)U_((uint32_t)o.shape);U_((uint32_t)rigs.size());
+ fwrite("RIG3",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);for(auto&o:objs)U_((uint32_t)o.shape);for(auto&o:objs)Fl(o.fov);U_((uint32_t)rigs.size());
  for(auto&g:rigs){U_((uint32_t)g.a);U_((uint32_t)g.b);U_((uint32_t)g.c);U_((uint32_t)g.tgt);U_((uint32_t)g.pole);Fl(g.w);U_(g.rotc?1u:0u);U_((uint32_t)g.wk.size());for(auto&k:g.wk){Fl(k.first);Fl(k.second);}}}
 FILE*openOutName(const std::string&nm,const char*ext,std::string&path,bool&fb){fb=false;
  path=fm("/storage/emulated/0/Download/%s.%s",nm.c_str(),ext);FILE*f=fopen(path.c_str(),"wb");
@@ -520,7 +546,9 @@ void icon2(int id,float cx,float cy,float s,bool on){
  else if(id==91||id==92){bool en=id==91?gCanUndo:gCanRedo;float cc=en?c:.42f,sg=id==92?-1.f:1.f;const float R=s*.78f,rd=s*.17f;
   for(int k=0;k<=10;k++){float a=(20-k*22)*PI/180.f;float qx=cx+sg*R*cosf(a),qy=cy+s*.15f+R*sinf(a);rect(qx-rd,qy-rd,2*rd,2*rd,cc,cc,cc,1,rd);}
   float hx=cx+sg*R*cosf(-200*PI/180.f),hy=cy+s*.15f+R*sinf(-200*PI/180.f);
-  for(int q=0;q<3;q++){float w=s*(1.5f-q*.5f);rect(hx-w/2,hy+s*.05f+q*s*.3f,w,s*.3f,cc,cc,cc);}}}
+  for(int q=0;q<3;q++){float w=s*(1.5f-q*.5f);rect(hx-w/2,hy+s*.05f+q*s*.3f,w,s*.3f,cc,cc,cc);}}
+ else if(id==18){rect(cx-s*.95f,cy-s*.5f,s*1.5f,s*1.1f,c,c,c,1,s*.15f);rect(cx-s*.65f,cy-s*.8f,s*.6f,s*.35f,c,c,c,1,s*.1f);rect(cx+s*.55f,cy-s*.3f,s*.55f,s*.7f,c,c,c,1,s*.1f);rect(cx-s*.55f,cy-s*.2f,s*.5f,s*.5f,.3f,.3f,.33f,1,s*.25f);}
+ else if(id==19){rect(cx-s,cy-s*.75f,s*2.f,s*1.5f,c,c,c,1,s*.15f);rect(cx-s*.8f,cy-s*.55f,s*1.6f,s*1.1f,.3f,.3f,.33f,1,s*.1f);rect(cx-s*.3f,cy-s*.3f,s*.6f,s*.6f,c,c,c,1,s*.3f);}}
 // ---------- permissao "Acesso a todos os arquivos" (via JNI) ----------
 android_app*gApp=nullptr;
 bool filesGranted(){
@@ -694,8 +722,8 @@ void importGLTF(const std::string&path){
 bool gSSAO=false,gPostOK=false,gMsOK=false,gBones=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
 GLuint gMsFbo=0,gMsC=0,gMsD=0,gFbo=0,gCT=0,gDT=0,gAoFbo=0,gAoT=0,gAoP=0,gCoP=0;
 GLint uAD,uATH,uANF,uAR,uASZ,uCC,uCA,uCT,uCS;
-float gSlX[4]={0,0,1,0},gSlW[4]={1,1,1,1};
-void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
+float gSlX[5]={0,0,1,0,0},gSlW[5]={1,1,1,1,1};
+void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==4){if(sel>=0&&objs[sel].kind==3)objs[sel].fov=.17f+v*2.23f;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
 GLuint mkProg(const char*vs,const char*fs){GLuint p=glCreateProgram();glAttachShader(p,sh(GL_VERTEX_SHADER,vs));glAttachShader(p,sh(GL_FRAGMENT_SHADER,fs));glLinkProgram(p);return p;}
 void initPost(){
  gHW=std::max(W/2,1);gHH=std::max(H/2,1);
@@ -880,7 +908,7 @@ bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=6,gVidQ=1;const char*gVi
 GLuint gMcTex[2]={0,0},gMcProg=0,gMcTm=0,gMcNB=0,gMcTB=0,gMcOutF=0,gMcOutT=0;
 GLuint gMcAov[2]={0,0},gMcAlb[2]={0,0},gMcDnT[2]={0,0},gDnProg=0;bool gMcDn=true,gMcDnOK=false,gDnDirty=false;int gMcDnRes=0;GLint dnSrc,dnAov,dnSz,dnStep,dnI0,dnPhi,mcAovPrev,mcN,dnAlb,dnLast,mcAlbPrev,mcTexA;
 GLint mcLeak,mcSz,mcOff,mcFirst,mcFr,mcBn,mcCam,mcF,mcR,mcU,mcTH,mcSD,mcSC,mcSCos,mcPrv,tmAcc,tmSz;
-double gSigS=-1,gSigC=-1,gMcLast=0;float gDt=.016f;V gCE,gCF,gCR,gCU;
+double gSigS=-1,gSigC=-1,gMcLast=0;float gDt=.016f;V gCE,gCF,gCR,gCU;float gCFov=1.f;
 double nowSec(){timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
 V vmin(V a,V b){return V{std::min(a.x,b.x),std::min(a.y,b.y),std::min(a.z,b.z)};}
 V vmax(V a,V b){return V{std::max(a.x,b.x),std::max(a.y,b.y),std::max(a.z,b.z)};}
@@ -954,7 +982,8 @@ void mcStep(){
  int tw_,th_;if(gMcFinal){if(gMcCW>0&&gMcCH>0){tw_=gMcCW;th_=gMcCH;}else{float sc=std::min(1.f,(float)gMcFinW/W);tw_=(int)(W*sc);th_=(int)(H*sc);}}else{tw_=std::max(W/2,64);th_=std::max(H/2,64);}
  if(tw_!=gMcW||th_!=gMcH){mcResize(tw_,th_);gSigS=-1;gMcHaveCam=false;}
  double now=nowSec();V e=camEye();V f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);
- if(gMcFinal){if(!gMcHaveCam){mcBuild();gCE=e;gCF=f;gCR=r;gCU=u;mcReset();gMcHaveCam=true;}e=gCE;f=gCF;r=gCR;u=gCU;}
+ float rfov=FOV;{V e2,f2,r2,u2;float fv=FOV;if(gMcFinal&&camRender(e2,f2,r2,u2,fv)){e=e2;f=f2;r=r2;u=u2;rfov=fv;}}
+ if(gMcFinal){if(!gMcHaveCam){mcBuild();gCE=e;gCF=f;gCR=r;gCU=u;gCFov=rfov;mcReset();gMcHaveCam=true;}e=gCE;f=gCF;r=gCR;u=gCU;rfov=gCFov;}
  else{double ss=sigScene(),sc2=sigCam();bool rs=false;
   if(ss!=gSigS&&now-gMcLast>.15){mcBuild();gSigS=ss;gMcLast=now;rs=true;}
   if(sc2!=gSigC){gSigC=sc2;rs=true;}if(rs)mcReset();}
@@ -967,7 +996,7 @@ void mcStep(){
  glBindImageTexture(1,gMcAov[gMcCur^1],0,GL_FALSE,0,GL_WRITE_ONLY,GL_RGBA16F);glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D,gMcAov[gMcCur]);glUniform1i(mcAovPrev,1);glBindImageTexture(2,gMcAlb[gMcCur^1],0,GL_FALSE,0,GL_WRITE_ONLY,GL_RGBA16F);glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,gMcAlb[gMcCur]);glUniform1i(mcAlbPrev,2);glActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glUniform1i(mcTexA,3);glActiveTexture(GL_TEXTURE0);glUniform1i(mcN,gMcSamples+1);
  glUniform2i(mcSz,gMcW,gMcH);glUniform1i(mcOff,gMcRow);glUniform1i(mcFirst,gMcSamples==0?1:0);glUniform1i(mcFr,gMcFrame);glUniform1i(mcBn,gMcFinal?gMcBn:2);glUniform1i(mcLeak,gMcLeak?1:0);
  glUniform3f(mcCam,e.x,e.y,e.z);glUniform3f(mcF,f.x,f.y,f.z);glUniform3f(mcR,r.x,r.y,r.z);glUniform3f(mcU,u.x,u.y,u.z);
- float th=tanf(FOV/2);glUniform2f(mcTH,th*(float)gMcW/gMcH,th);
+ float th=tanf(rfov/2);glUniform2f(mcTH,th*(float)gMcW/gMcH,th);
  V sd=norm(V{.4f,.8f,.5f});glUniform3f(mcSD,sd.x,sd.y,sd.z);glUniform3f(mcSC,3.2f,3.0f,2.8f);glUniform1f(mcSCos,.9995f);
  glDispatchCompute((gMcW+7)/8,(rows+7)/8,1);
  glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT|GL_TEXTURE_FETCH_BARRIER_BIT|GL_SHADER_STORAGE_BARRIER_BIT);
@@ -1104,7 +1133,7 @@ static void hmix(uint64_t&h,const void*p,size_t n){const unsigned char*b=(const 
 uint64_t stateHash(){uint64_t h=1469598103934665603ULL;
  for(size_t i=0;i<objs.size();i++){const Obj&o=objs[i];
   int meta[6]={o.mesh,o.parent,o.skin,o.kind,o.shape,(int)o.k.size()};hmix(h,meta,sizeof(meta));hmix(h,o.nm,strnlen(o.nm,24));
-  hmix(h,&o.col,sizeof(V));hmix(h,&o.met,4);hmix(h,&o.rou,4);hmix(h,&o.len,4);
+  hmix(h,&o.col,sizeof(V));hmix(h,&o.met,4);hmix(h,&o.rou,4);hmix(h,&o.len,4);hmix(h,&o.fov,4);
   bool derived=false;for(auto&g:rigs)if((g.a==(int)i||g.b==(int)i||g.c==(int)i)&&(g.w>.001f||!g.wk.empty()))derived=true; // osso movido pelo IK
   if(o.k.empty()&&!derived)hmix(h,&o.cur,sizeof(T));
   for(auto&k:o.k){hmix(h,&k.t,4);hmix(h,&k.x,sizeof(T));}}
@@ -1117,7 +1146,7 @@ static void undoApply(const Snap&s){objs=s.o;skins=s.sk;rigs=s.rg;sel=s.sel<(int
 void doUndo(){undoCommit();if(gUndo.empty())return;gRedo.push_back(gUCur);Snap p=std::move(gUndo.back());gUndo.pop_back();undoApply(p);toast("Desfeito");}
 void doRedo(){undoCommit();if(gRedo.empty())return;gUndo.push_back(gUCur);Snap n=std::move(gRedo.back());gRedo.pop_back();undoApply(n);toast("Refeito");}
 void clearScene(){for(size_t i=6;i<meshes.size();i++){glDeleteBuffers(1,&meshes[i].vbo);if(meshes[i].svbo)glDeleteBuffers(1,&meshes[i].svbo);glDeleteVertexArrays(1,&meshes[i].vao);}
- meshes.resize(6);objs.clear();rigs.clear();skins.clear();sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
+ meshes.resize(6);objs.clear();rigs.clear();skins.clear();camViewOff();gCamAct=-1;sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
 bool loadMAD(const std::string&path,bool replace){
  FILE*f=fopen(path.c_str(),"rb");if(!f){toast("Nao consegui abrir o arquivo");return false;}
  fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);if(sz<16){fclose(f);toast("Arquivo invalido");return false;}
@@ -1136,14 +1165,15 @@ bool loadMAD(const std::string&path,bool replace){
   float c[9];r.b(c,36);memcpy(&o.cur.p.x,c,36);uint32_t nk=r.u();if(nk>100000||(size_t)nk*40>r.n-r.i){r.ok=false;break;}
   for(uint32_t k=0;k<nk;k++){Key kk;kk.t=r.f();float q[9];r.b(q,36);memcpy(&kk.x.p.x,q,36);o.k.push_back(kk);}os.push_back(o);}
  float cam[7];r.b(cam,28);
- std::vector<int> kinds,shapes;std::vector<Rig> rgs;
- {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);bool v2=memcmp(m2,"RIG2",4)==0;if(v2||memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());if(v2)for(uint32_t i=0;i<nk&&q.ok;i++)shapes.push_back(q.s());
+ std::vector<int> kinds,shapes;std::vector<float> fovs;std::vector<Rig> rgs;
+ {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);bool v3=memcmp(m2,"RIG3",4)==0,v2=v3||memcmp(m2,"RIG2",4)==0;if(v2||memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());if(v2)for(uint32_t i=0;i<nk&&q.ok;i++)shapes.push_back(q.s());if(v3)for(uint32_t i=0;i<nk&&q.ok;i++)fovs.push_back(q.f());
    uint32_t nr=q.u();if(nr>4096)q.ok=false;
    for(uint32_t i=0;i<nr&&q.ok;i++){Rig g;g.a=q.s();g.b=q.s();g.c=q.s();g.tgt=q.s();g.pole=q.s();g.w=q.f();g.rotc=q.u()!=0;uint32_t nw=q.u();if(nw>100000||(size_t)nw*8>q.n-q.i){q.ok=false;break;}
     for(uint32_t k=0;k<nw;k++){float t_=q.f(),v_=q.f();g.wk.push_back({t_,v_});}rgs.push_back(g);}
-   if(!q.ok){kinds.clear();shapes.clear();rgs.clear();}}}}}
+   if(!q.ok){kinds.clear();shapes.clear();fovs.clear();rgs.clear();}}}}}
  for(size_t i=0;i<os.size()&&i<kinds.size();i++)os[i].kind=kinds[i];
  for(size_t i=0;i<os.size()&&i<shapes.size();i++)os[i].shape=std::clamp(shapes[i],0,5);
+ for(size_t i=0;i<os.size()&&i<fovs.size();i++)os[i].fov=std::clamp(fovs[i],.1f,3.f);
  if(!r.ok){toast("Arquivo .mad corrompido");return false;}
  if(replace)clearScene();
  int mb=(int)meshes.size(),sb2=(int)skins.size(),ob=(int)objs.size();
@@ -1239,9 +1269,16 @@ static void ctrlShape(int shape,V c,V ex,V ey,V ez,float R,float tk,float cr,flo
  else if(shape==3){V p6[6]={P(1,0,0),P(-1,0,0),P(0,1,0),P(0,-1,0),P(0,0,1),P(0,0,-1)};for(int i=0;i<6;i++)for(int j=i+1;j<6;j++)if((i^j)!=1)L(p6[i],p6[j]);}
  else if(shape==4){L(P(-1,0,0),P(1,0,0));L(P(0,-1,0),P(0,1,0));L(P(0,0,-1),P(0,0,1));}
  else{L(P(-1,0,-1),P(1,0,-1));L(P(1,0,-1),P(1,0,1));L(P(1,0,1),P(-1,0,1));L(P(-1,0,1),P(-1,0,-1));}}
+static void drawCamObj(int i,bool selc){V e,f,r,u;if(!camBasis(i,e,f,r,u))return;float d=std::max({objs[i].cur.s.x,objs[i].cur.s.y,objs[i].cur.s.z})*2.f;
+ float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/std::max(H,1);float hh=d*tanf(objs[i].fov/2),hw=hh*ra;
+ V c=e+f*d,p0=c+r*hw+u*hh,p1=c-r*hw+u*hh,p2=c-r*hw-u*hh,p3=c+r*hw-u*hh;V tp=c+u*(hh*1.4f);
+ float cr=.82f,cg=.82f,cb=.88f;if(i==activeCam()){cr=.95f;cg=.6f;cb=.2f;}if(selc){cr=1;cg=.85f;cb=.2f;}float tk=d*.012f;
+ ctrlSeg(e,p0,tk,cr,cg,cb,1);ctrlSeg(e,p1,tk,cr,cg,cb,1);ctrlSeg(e,p2,tk,cr,cg,cb,1);ctrlSeg(e,p3,tk,cr,cg,cb,1);
+ ctrlSeg(p0,p1,tk,cr,cg,cb,1);ctrlSeg(p1,p2,tk,cr,cg,cb,1);ctrlSeg(p2,p3,tk,cr,cg,cb,1);ctrlSeg(p3,p0,tk,cr,cg,cb,1);
+ ctrlSeg(c+u*hh+r*(hw*.4f),tp,tk,cr,cg,cb,1);ctrlSeg(c+u*hh-r*(hw*.4f),tp,tk,cr,cg,cb,1);}
 void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!any)return;
  V e=camEye();float th=tanf(FOV/2);
- for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;if(o.kind==3){if(i!=gCamView)drawCamObj(i,i==sel);continue;}M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
   V ex=V{w.m[0],w.m[1],w.m[2]},ey=V{w.m[4],w.m[5],w.m[6]},ez=V{w.m[8],w.m[9],w.m[10]};
   if(vlen(ex)<1e-8f||vlen(ey)<1e-8f||vlen(ez)<1e-8f)continue;ex=norm(ex);ey=norm(ey);ez=norm(ez);
   float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.5f;
@@ -1291,7 +1328,7 @@ void tlDrag(int mode,float x){float rng=(float)std::max(gFE-gFS,1);float u=U();i
  else if(mode==27){int f=std::clamp(gDV0+df,gFS,gFE);tm=f/24.f;applyAnim();}
  if(mode>=23&&mode<=26){float a=gFS/24.f,b=gFE/24.f;if(tm<a)tm=a;if(tm>b)tm=b;applyAnim();}}
 void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(int)roundf(tm*24);if(rel<.33f)f--;else if(rel>.66f)f++;tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
-void frame(){solveRigs();
+void frame(){solveRigs();if(gCamView>=0)viewFromCam();
  bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
  glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
  glEnable(GL_DEPTH_TEST);
@@ -1308,6 +1345,9 @@ void frame(){solveRigs();
  if(!gMcFinal)drawCtrls();
  if(sel>=0&&tool<3)drawGizmo();
  gBtn.clear();gBlock.clear();float u=U(),ML_=ML(),hH=8.6f*u;
+ if(gCamView>=0&&gCamView<(int)objs.size()){float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/H,sa=(float)W/H;
+  if(ra<sa-.002f){float fw=H*ra,fx=(W-fw)/2;rect(0,0,fx,(float)H,0,0,0,.5f);rect(fx+fw,0,W-fx-fw,(float)H,0,0,0,.5f);rect(fx-.12f*u,0,.12f*u,(float)H,.9f,.9f,.9f,.6f);rect(fx+fw,0,.12f*u,(float)H,.9f,.9f,.9f,.6f);}
+  pill(W/2-13*u,hH+1.2f*u,26*u,5.6f*u,19,fm("Câmera: %.14s  (sair)",objs[gCamView].nm).c_str(),true,.2f,.38f,.55f);}
  // cabecalho: projeto (esquerda) e menus (direita)
  rect(0,0,W,hH,.15f,.15f,.16f,.96f);gBlock.push_back({0,0,(float)W,hH});
  auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
@@ -1326,10 +1366,10 @@ void frame(){solveRigs();
    pill(mx+1*u,my+.75f*u+3.4f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,(i==4||i==5)?.2f:.33f,(i==4||i==5)?.38f:.33f,(i==4||i==5)?.55f:.35f);}
   gBtn.push_back({{mx,my,mw,mh},299});}
  float tbX=ML_,tbY=hH+1.5f*u,tbW=0; // barra de ferramentas (2 colunas)
- {static const int C1[6]={0,1,2,10,11,12},C2[6]={3,4,5,6,8,9};
-  float bs=7.2f*u,gp=.5f*u,pad=.6f*u;tbW=2*bs+gp+2*pad;float th_=2*pad+6*bs+5*gp;panel(tbX,tbY,tbW,th_,1*u);
-  for(int c=0;c<2;c++)for(int k=0;k<6;k++){int id=c?C2[k]:C1[k];float x=tbX+pad+c*(bs+gp),y=tbY+pad+k*(bs+gp);
-   bool on=(id>=3&&id<=6&&tool==id-3)||(id==8&&playing)||(id==11&&parentMode)||gFlash[id]>0;
+ {static const int C1[7]={0,1,2,10,18,11,12},C2[7]={3,4,5,6,8,9,19};
+  float bs=7.2f*u,gp=.5f*u,pad=.6f*u;tbW=2*bs+gp+2*pad;float th_=2*pad+7*bs+6*gp;panel(tbX,tbY,tbW,th_,1*u);
+  for(int c=0;c<2;c++)for(int k=0;k<7;k++){int id=c?C2[k]:C1[k];float x=tbX+pad+c*(bs+gp),y=tbY+pad+k*(bs+gp);
+   bool on=(id>=3&&id<=6&&tool==id-3)||(id==8&&playing)||(id==11&&parentMode)||(id==19&&gCamView>=0)||gFlash[id]>0;
    rect(x,y,bs,bs,on?.28f:.33f,on?.45f:.33f,on?.7f:.35f,1,1.1f*u);icon2(id,x+bs/2,y+bs/2,bs*.27f,on);gBtn.push_back({{x,y,bs,bs},id});}
   gBtn.push_back({{tbX,tbY,tbW,th_},299});}
  if(gRenderOpen){ // painel Render (viewport + path tracing), recolhivel
@@ -1389,7 +1429,9 @@ void frame(){solveRigs();
   for(int k=0;k<3;k++){float yy=ty+4*u+k*rh;text(LB3[k],rx+1.2f*u,yy+2.2f*u-2.5f*tpx,tpx,.75f,.75f,.78f);
    for(int j=0;j<3;j++){char b[16];snprintf(b,16,k==1?"%.1f":"%.2f",(&val[k].x)[j]);float fx=rx+lw+j*fw;
     rect(fx,yy+.3f*u,fw-.5f*u,rh-.6f*u,.25f,.25f,.27f,1,.6f*u);tcen(b,fx+(fw-.5f*u)/2,yy+2.2f*u,tpx*.95f,.92f,.92f,.92f);}}
- sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);}
+ if(objs[sel].kind==3){sld(4,rx,pw,ty+4*u+3*rh,rh,tpx,fm("FOV %d",(int)(objs[sel].fov*57.2958f+.5f)).c_str(),(objs[sel].fov-.17f)/2.23f);
+   pill(rx+.9f*u,ty+4*u+4*rh+.3f*u,pw-1.8f*u,rh-.6f*u,19,gCamView==sel?"Sair da câmera":"Ver pela câmera",gCamView==sel,.2f,.38f,.55f);}
+  else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);}}
  // timeline estilo Maya/Houdini (compacta)
  float TH=17.5f*u,tT=100*u-3.6f*u-TH,tw_=W-2*ML_;if(gTlOpen)panel(ML_,tT,tw_,TH,1*u);
  if(gTlOpen){float x0=ML_+.9f*u,wd=tw_-1.8f*u;
@@ -1497,6 +1539,8 @@ void pressInner(int i){
  else if(i==38){gMcLeak=!gMcLeak;gMcHaveCam=false;gSigS=-1;mcReset();}
  else if(i==70)rigCreate();
  else if(i==39)sizeOpen();
+ else if(i==18)addCamera();
+ else if(i==19)camViewToggle();
  else if(i==91)doUndo();
  else if(i==92)doRedo();
  else if(i==84)gMode=0;
@@ -1527,7 +1571,7 @@ void press(int i){pressInner(i);if(i!=91&&i!=92)undoCommit();}
 void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
 void pick(float x,float y){
  {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
-  if(cb>=0){if(parentMode)finishParent(cb);else sel=cb;return;}}
+  if(cb>=0){if(parentMode)finishParent(cb);else if(objs[cb].kind==3&&sel==cb)camViewToggle();else sel=cb;return;}}
  if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5)continue;M w=worldM(i);
    V hd{w.m[12],w.m[13],w.m[14]},tl=hd+V{w.m[4],w.m[5],w.m[6]}*objs[i].len;float hx,hy,qx,qy;if(!prj(hd,hx,hy)||!prj(tl,qx,qy))continue;
    float vx=qx-hx,vy=qy-hy,tt=std::clamp(((x-hx)*vx+(y-hy)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);float dd=hypotf(x-hx-vx*tt,y-hy-vy*tt);if(dd<bd){bd=dd;bb=i;}}
@@ -1541,8 +1585,8 @@ void pick(float x,float y){
   V oc=e-c;float b=dot(oc,d),cc=dot(oc,oc)-r*r,ds=b*b-cc;if(ds<0)continue;
   float tt=-b-sqrtf(ds);if(tt>0&&tt<bt){bt=tt;best=i;}}
  if(parentMode)finishParent(best);else sel=best;}
-void panCam(float dx,float dy){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);float s=2*cd*tanf(FOV/2)/H;tgt=tgt+r*(-dx*s)+u*(dy*s);}
-void orbit(float dx,float dy){yaw-=dx*.006f;pitch=std::clamp(pitch+dy*.006f,-1.5f,1.5f);}
+void panCam(float dx,float dy){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);float s=2*cd*tanf(FOV/2)/H;tgt=tgt+r*(-dx*s)+u*(dy*s);if(gCamView>=0)camFromView();}
+void orbit(float dx,float dy){yaw-=dx*.006f;pitch=std::clamp(pitch+dy*.006f,-1.5f,1.5f);if(gCamView>=0)camFromView();}
 void gdrag(float dx,float dy){
  Obj&ob=objs[sel];T&t=ob.cur;V o=wp(sel);float ox,oy,ex,ey;
  if(tool==1){float px,py,qx,qy;if(!prj(ringPt(gAxis,gIdx+1),px,py)||!prj(ringPt(gAxis,gIdx+31),qx,qy))return;
@@ -1570,7 +1614,7 @@ int32_t onInput(android_app*,AInputEvent*e){
  if(act==AMOTION_EVENT_ACTION_DOWN){
   moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
   if(gImportOpen&&!gNameOpen&&!gSizeOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=303){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=304){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
   if((gVid.on||gNameOpen||gSizeOpen)&&mode<0)mode=2;
   if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
   if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
