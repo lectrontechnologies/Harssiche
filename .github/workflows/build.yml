@@ -114,6 +114,8 @@ jobs:
           #include <sys/stat.h>
           #include <zlib.h>
           #include <cctype>
+          #include <unordered_map>
+          #include <climits>
           #include <cerrno>
           #include <fcntl.h>
           #include <unistd.h>
@@ -498,7 +500,7 @@ jobs:
             rect(e.x-r,e.y-r,2*r,2*r,c[0]*k,c[1]*k,c[2]*k,1,r);
             if(e.pos){float ps=H*.0055f;text(LB[e.a],e.x-tw(LB[e.a],ps)/2,e.y-2.5f*ps,ps,1,1,1);}}}
           // ---------- exportacao (MAD / glTF) + rigging ----------
-          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;bool gCanUndo=false,gCanRedo=false,gSizeOpen=false;int gSizeField=0,gMcCW=0,gMcCH=0;std::string gSizeBuf[2];
+          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;bool gCanUndo=false,gCanRedo=false,gSceneCU=false,gSceneCR=false,gSizeOpen=false;int gSizeField=0,gMcCW=0,gMcCH=0;std::string gSizeBuf[2];
           void toast(const std::string&t){gToast=t;gToastT=4;}
           std::string fm(const char*f,...){char b[1024];va_list a;va_start(a,f);vsnprintf(b,1024,f,a);va_end(a);return b;}
           // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
@@ -811,8 +813,8 @@ jobs:
           bool gSSAO=false,gPostOK=false,gMsOK=false,gBones=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
           GLuint gMsFbo=0,gMsC=0,gMsD=0,gFbo=0,gCT=0,gDT=0,gAoFbo=0,gAoT=0,gAoP=0,gCoP=0;
           GLint uAD,uATH,uANF,uAR,uASZ,uCC,uCA,uCT,uCS;
-          float gSlX[5]={0,0,1,0,0},gSlW[5]={1,1,1,1,1};
-          void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==4){if(sel>=0&&objs[sel].kind==3)objs[sel].fov=.17f+v*2.23f;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
+          float gSlX[7]={0,0,1,0,0,0,0},gSlW[7]={1,1,1,1,1,1,1};
+          void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==5){gSRad=20+(int)(v*180+.5f);return;}if(i==6){gSStr=.05f+v*.95f;return;}if(i==4){if(sel>=0&&objs[sel].kind==3)objs[sel].fov=.17f+v*2.23f;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
           GLuint mkProg(const char*vs,const char*fs){GLuint p=glCreateProgram();glAttachShader(p,sh(GL_VERTEX_SHADER,vs));glAttachShader(p,sh(GL_FRAGMENT_SHADER,fs));glLinkProgram(p);return p;}
           void initPost(){
            gHW=std::max(W/2,1);gHH=std::max(H/2,1);
@@ -1004,6 +1006,114 @@ jobs:
           V xf(const M&m,V p){return V{m.m[0]*p.x+m.m[4]*p.y+m.m[8]*p.z+m.m[12],m.m[1]*p.x+m.m[5]*p.y+m.m[9]*p.z+m.m[13],m.m[2]*p.x+m.m[6]*p.y+m.m[10]*p.z+m.m[14]};}
           V xn(const M&m,V p){return V{m.m[0]*p.x+m.m[4]*p.y+m.m[8]*p.z,m.m[1]*p.x+m.m[5]*p.y+m.m[9]*p.z,m.m[2]*p.x+m.m[6]*p.y+m.m[10]*p.z};}
           void mcReset(){gMcSamples=0;gMcRow=0;gMcFrame=0;gMcDnOK=false;}
+          // ---------- escultura: pincel sobre a malha (malha soldada por posicao = sem rachaduras) ----------
+          struct KeyI{int x,y,z;bool operator==(const KeyI&o)const{return x==o.x&&y==o.y&&z==o.z;}};
+          struct KeyH{size_t operator()(const KeyI&k)const{return((size_t)(unsigned)k.x*73856093u)^((size_t)(unsigned)k.y*19349663u)^((size_t)(unsigned)k.z*83492791u);}};
+          struct SM{int mesh=-1;size_t nsv=0;std::vector<int> wid,ws,wl,ns,nl;std::vector<V> wp,wn;};
+          SM gSM;bool gSculpt=false,gSInv=false,gSSym=true;int gSBrush=0,gSRad=70;float gSStr=.5f;float gSCx=0,gSCy=0;
+          const char*gSBN[5]={"Desenhar","Inflar","Suavizar","Achatar","Agarrar"};
+          std::vector<int> gSDirty;std::vector<char> gSFlag,gSNF;
+          struct M3{V a,b,c;};
+          static M3 inv3(const M3&m,bool&ok){V r0=cross(m.b,m.c),r1=cross(m.c,m.a),r2=cross(m.a,m.b);float det=dot(m.a,r0);if(fabsf(det)<1e-20f){ok=false;return m;}float iv=1/det;ok=true;
+           return M3{V{r0.x,r1.x,r2.x}*iv,V{r0.y,r1.y,r2.y}*iv,V{r0.z,r1.z,r2.z}*iv};}
+          static V mul3(const M3&m,V v){return m.a*v.x+m.b*v.y+m.c*v.z;}
+          static float sFall(float d,float R){if(d>=R)return 0;float x=1-d*d/(R*R);return x*x;}
+          void smNormalFor(int w){SM&s=gSM;V n{};for(int k=s.ws[w];k<s.ws[w+1];k++){int t=s.wl[k]/3;V a=s.wp[s.wid[3*t]],b=s.wp[s.wid[3*t+1]],c=s.wp[s.wid[3*t+2]];n=n+cross(b-a,c-a);}
+           float l=vlen(n);s.wn[w]=l>1e-12f?n*(1/l):V{0,1,0};}
+          void smBuild(int mi){Mesh&m=meshes[mi];SM&s=gSM;s=SM();s.mesh=mi;size_t nv=m.cpu.size()/6;s.nsv=nv;
+           float eps=std::max(m.rad,1e-3f)*1e-5f;std::unordered_map<KeyI,int,KeyH> mp;mp.reserve(nv);s.wid.resize(nv);
+           for(size_t i=0;i<nv;i++){const float*c=&m.cpu[i*6];KeyI k{(int)lroundf(c[0]/eps),(int)lroundf(c[1]/eps),(int)lroundf(c[2]/eps)};auto it=mp.find(k);
+            if(it==mp.end()){int id2=(int)s.wp.size();mp[k]=id2;s.wp.push_back(V{c[0],c[1],c[2]});s.wid[i]=id2;}else s.wid[i]=it->second;}
+           size_t nw=s.wp.size();s.ws.assign(nw+1,0);for(size_t i=0;i<nv;i++)s.ws[s.wid[i]+1]++;for(size_t w=0;w<nw;w++)s.ws[w+1]+=s.ws[w];
+           s.wl.resize(nv);{std::vector<int> fl(s.ws.begin(),s.ws.end()-1);for(size_t i=0;i<nv;i++)s.wl[fl[s.wid[i]]++]=(int)i;}
+           {std::vector<std::vector<int>> nb(nw);for(size_t t=0;t+2<nv;t+=3){int a=s.wid[t],b=s.wid[t+1],c=s.wid[t+2];nb[a].push_back(b);nb[a].push_back(c);nb[b].push_back(a);nb[b].push_back(c);nb[c].push_back(a);nb[c].push_back(b);}
+            s.ns.assign(nw+1,0);for(size_t w=0;w<nw;w++){auto&v=nb[w];std::sort(v.begin(),v.end());v.erase(std::unique(v.begin(),v.end()),v.end());s.ns[w+1]=s.ns[w]+(int)v.size();}
+            s.nl.resize(s.ns[nw]);for(size_t w=0;w<nw;w++)std::copy(nb[w].begin(),nb[w].end(),s.nl.begin()+s.ns[w]);}
+           s.wn.assign(nw,V{0,1,0});for(size_t w=0;w<nw;w++)smNormalFor((int)w);
+           gSFlag.assign(nw,0);gSNF.assign(nw,0);gSDirty.clear();}
+          void smPose(int oi,std::vector<V>&pp){Obj&o=objs[oi];Mesh&m=meshes[o.mesh];size_t nv=m.cpu.size()/6;pp.resize(nv);
+           bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned&&m.skin.size()>=nv*8;
+           if(sk){Skin&s=skins[o.skin];std::vector<M> J(s.j.size());for(size_t k=0;k<s.j.size();k++){M jw=s.j[k]>=0?worldM(s.j[k]):(k<s.fz.size()?s.fz[k]:id());J[k]=mul(jw,s.ibm[k]);}
+            for(size_t i=0;i<nv;i++){const float*c=&m.cpu[i*6];V p{c[0],c[1],c[2]};const float*sw=&m.skin[i*8];V a{};
+             for(int q=0;q<4;q++){float wq=sw[4+q];if(wq<=0)continue;int ji=(int)sw[q];if(ji>=(int)J.size())continue;a=a+xf(J[ji],p)*wq;}pp[i]=a;}}
+           else{M w=worldM(oi);for(size_t i=0;i<nv;i++){const float*c=&m.cpu[i*6];pp[i]=xf(w,V{c[0],c[1],c[2]});}}}
+          struct SHit{bool ok=false;int tri=-1;float t=0,u=0,v=0;};
+          bool smRay(const std::vector<V>&pp,V ro,V rd,SHit&h){float best=1e30f;int bt=-1;float bu=0,bv=0;
+           for(size_t t=0;t+2<pp.size();t+=3){V e1=pp[t+1]-pp[t],e2=pp[t+2]-pp[t],pv=cross(rd,e2);float det=dot(e1,pv);if(fabsf(det)<1e-14f)continue;float iv=1/det;V tv=ro-pp[t];
+            float u=dot(tv,pv)*iv;if(u<0||u>1)continue;V qv=cross(tv,e1);float v=dot(rd,qv)*iv;if(v<0||u+v>1)continue;float tt=dot(e2,qv)*iv;if(tt>1e-5f&&tt<best){best=tt;bt=(int)(t/3);bu=u;bv=v;}}
+           h.ok=bt>=0;h.tri=bt;h.t=best;h.u=bu;h.v=bv;return h.ok;}
+          void sRay(float sx,float sy,V&ro,V&rd){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);float th=tanf(FOV/2),as=(float)W/std::max(H,1);
+           ro=e;rd=norm(f+r*((2*sx/W-1)*th*as)+u*((1-2*sy/H)*th));}
+          struct Stk{bool on=false;int obj=-1;float sx0=0,sy0=0,pxw=1,s=1,Rb=1;V r,u;M3 B,Qi;bool okA=false;std::vector<int> g1,g2;std::vector<float> k1,k2;std::vector<V> p1,p2;std::unordered_map<int,V> before;};
+          Stk gSt;
+          struct SUndo{int mesh=-1;std::vector<int> w;std::vector<V> oldp,newp;};
+          std::vector<SUndo> gSU,gSR;
+          void smRaw(int w,V np){gSM.wp[w]=np;if(!gSFlag[w]){gSFlag[w]=1;gSDirty.push_back(w);}}
+          void sSet(int w,V np){if(!gSt.before.count(w))gSt.before[w]=gSM.wp[w];smRaw(w,np);}
+          void sFlush(){SM&s=gSM;if(gSDirty.empty())return;std::vector<int> aff;aff.reserve(gSDirty.size()*4);
+           for(int w:gSDirty){if(!gSNF[w]){gSNF[w]=1;aff.push_back(w);}for(int k=s.ns[w];k<s.ns[w+1];k++){int q=s.nl[k];if(!gSNF[q]){gSNF[q]=1;aff.push_back(q);}}}
+           for(int w:aff)smNormalFor(w);
+           Mesh&m=meshes[s.mesh];int mn=INT_MAX,mx=-1;
+           for(int w:aff){gSNF[w]=0;for(int k=s.ws[w];k<s.ws[w+1];k++){int si=s.wl[k];float*c=&m.cpu[(size_t)si*6];c[0]=s.wp[w].x;c[1]=s.wp[w].y;c[2]=s.wp[w].z;c[3]=s.wn[w].x;c[4]=s.wn[w].y;c[5]=s.wn[w].z;mn=std::min(mn,si);mx=std::max(mx,si);}}
+           for(int w:gSDirty)gSFlag[w]=0;gSDirty.clear();
+           if(mx>=mn&&m.vbo){glBindBuffer(GL_ARRAY_BUFFER,m.vbo);glBufferSubData(GL_ARRAY_BUFFER,(GLintptr)mn*24,(GLsizeiptr)(mx-mn+1)*24,&m.cpu[(size_t)mn*6]);}}
+          V sAvgN(V c,float Rb){SM&s=gSM;V n{};float R=Rb*.6f,R2=R*R;for(size_t w=0;w<s.wp.size();w++){V d=s.wp[w]-c;float dd=dot(d,d);if(dd>=R2)continue;n=n+s.wn[w]*sFall(sqrtf(dd),R);}
+           float l=vlen(n);return l>1e-9f?n*(1/l):V{0,1,0};}
+          void sApplyAt(V c,V n,float Rb,int brush,bool inv,float str){SM&s=gSM;float sg=inv?-1.f:1.f,R2=Rb*Rb;size_t nw=s.wp.size();
+           if(brush==2){std::vector<std::pair<int,V>> up;
+            for(size_t w=0;w<nw;w++){V d=s.wp[w]-c;float dd=dot(d,d);if(dd>=R2)continue;float f=sFall(sqrtf(dd),Rb);int a=s.ns[w],b=s.ns[w+1];if(b<=a)continue;
+             V avg{};for(int k=a;k<b;k++)avg=avg+s.wp[s.nl[k]];avg=avg*(1.f/(b-a));up.push_back({(int)w,s.wp[w]+(avg-s.wp[w])*(str*.6f*f*(sg>0?1.f:-.5f))});}
+            for(auto&q:up)sSet(q.first,q.second);return;}
+           float amt=str*.06f*Rb;
+           for(size_t w=0;w<nw;w++){V d=s.wp[w]-c;float dd=dot(d,d);if(dd>=R2)continue;float f=sFall(sqrtf(dd),Rb);V p=s.wp[w],np;
+            if(brush==0)np=p+n*(amt*f*sg);else if(brush==1)np=p+s.wn[w]*(amt*f*sg);else np=p-n*(dot(p-c,n)*str*.5f*f*sg);
+            sSet((int)w,np);}}
+          bool sProbe(float x,float y,std::vector<V>&pp,V&cB,SHit&h){if(gSt.obj<0)return false;Mesh&m=meshes[objs[gSt.obj].mesh];smPose(gSt.obj,pp);V ro,rd;sRay(x,y,ro,rd);if(!smRay(pp,ro,rd,h))return false;
+           size_t t=(size_t)h.tri*3;const float*c0=&m.cpu[t*6],*c1=&m.cpu[(t+1)*6],*c2=&m.cpu[(t+2)*6];V b0{c0[0],c0[1],c0[2]},b1{c1[0],c1[1],c1[2]},b2{c2[0],c2[1],c2[2]};
+           cB=b0*(1-h.u-h.v)+b1*h.u+b2*h.v;V q0=pp[t],q1=pp[t+1],q2=pp[t+2];
+           float eb=vlen(b1-b0),eq=vlen(q1-q0);gSt.s=eb>1e-9f?eq/eb:1;gSt.pxw=2*h.t*tanf(FOV/2)/std::max(H,1);gSt.Rb=gSRad*gSt.pxw/std::max(gSt.s,1e-9f);
+           V nb=cross(b1-b0,b2-b0),nq=cross(q1-q0,q2-q0);float lb=vlen(nb),lq=vlen(nq);
+           if(lb>1e-14f&&lq>1e-14f){V nbs=nb*(sqrtf(lb)/lb),nqs=nq*(sqrtf(lq)/lq);M3 B{b1-b0,b2-b0,nbs},Q{q1-q0,q2-q0,nqs};bool ok=false;M3 Qi=inv3(Q,ok);gSt.B=B;gSt.Qi=Qi;gSt.okA=ok;}else gSt.okA=false;
+           return true;}
+          bool sculptBegin(float x,float y){if(!gSculpt||sel<0)return false;Obj&o=objs[sel];
+           if(o.kind||o.mesh==5||o.mesh<0||o.mesh>=(int)meshes.size()||meshes[o.mesh].cpu.empty()||gSM.mesh!=o.mesh)return false;
+           gSt=Stk();gSt.obj=sel;std::vector<V> pp;V cB;SHit h;if(!sProbe(x,y,pp,cB,h)){gSt.obj=-1;return false;}
+           gSt.on=true;gSt.sx0=x;gSt.sy0=y;gSCx=x;gSCy=y;
+           {V e=camEye(),f=norm(tgt-e);gSt.r=norm(cross(f,V{0,1,0}));gSt.u=cross(gSt.r,f);}
+           float Rb=gSt.Rb;SM&s=gSM;
+           if(gSBrush==4){
+            for(int pass=0;pass<2;pass++){V c=pass?V{-cB.x,cB.y,cB.z}:cB;if(pass&&(!gSSym||fabsf(cB.x)<=.15f*Rb))break;
+             auto&gi=pass?gSt.g2:gSt.g1;auto&gk=pass?gSt.k2:gSt.k1;auto&gp=pass?gSt.p2:gSt.p1;
+             for(size_t w=0;w<s.wp.size();w++){V d=s.wp[w]-c;float dd=dot(d,d);if(dd>=Rb*Rb)continue;gi.push_back((int)w);gk.push_back(sFall(sqrtf(dd),Rb));gp.push_back(s.wp[w]);}}
+            return true;}
+           V n=sAvgN(cB,Rb);sApplyAt(cB,n,Rb,gSBrush,gSInv,gSStr);
+           if(gSSym&&fabsf(cB.x)>.15f*Rb)sApplyAt(V{-cB.x,cB.y,cB.z},V{-n.x,n.y,n.z},Rb,gSBrush,gSInv,gSStr);
+           sFlush();return true;}
+          void sculptMove(float x,float y){if(!gSt.on)return;gSCx=x;gSCy=y;
+           if(gSBrush==4){V dw=(gSt.r*(x-gSt.sx0)-gSt.u*(y-gSt.sy0))*gSt.pxw;V db=gSt.okA?mul3(gSt.B,mul3(gSt.Qi,dw)):dw*(1/std::max(gSt.s,1e-9f));
+            for(size_t i=0;i<gSt.g1.size();i++)sSet(gSt.g1[i],gSt.p1[i]+db*gSt.k1[i]);
+            V dm{-db.x,db.y,db.z};for(size_t i=0;i<gSt.g2.size();i++)sSet(gSt.g2[i],gSt.p2[i]+dm*gSt.k2[i]);
+            sFlush();return;}
+           std::vector<V> pp;V cB;SHit h;if(!sProbe(x,y,pp,cB,h))return;float Rb=gSt.Rb;V n=sAvgN(cB,Rb);
+           sApplyAt(cB,n,Rb,gSBrush,gSInv,gSStr);
+           if(gSSym&&fabsf(cB.x)>.15f*Rb)sApplyAt(V{-cB.x,cB.y,cB.z},V{-n.x,n.y,n.z},Rb,gSBrush,gSInv,gSStr);
+           sFlush();}
+          void sculptEnd(){if(!gSt.on)return;gSt.on=false;
+           if(!gSt.before.empty()){SUndo u;u.mesh=gSM.mesh;for(auto&kv:gSt.before){u.w.push_back(kv.first);u.oldp.push_back(kv.second);u.newp.push_back(gSM.wp[kv.first]);}
+            gSU.push_back(std::move(u));if(gSU.size()>30)gSU.erase(gSU.begin());gSR.clear();}
+           gSt.before.clear();gSt.g1.clear();gSt.g2.clear();gSt.k1.clear();gSt.k2.clear();gSt.p1.clear();gSt.p2.clear();gSigS=-1;}
+          static void sApplyUndo(const SUndo&u,bool useOld){if(u.mesh!=gSM.mesh)return;for(size_t i=0;i<u.w.size();i++)smRaw(u.w[i],useOld?u.oldp[i]:u.newp[i]);sFlush();gSigS=-1;}
+          void sculptUndo(){if(gSU.empty())return;SUndo u=std::move(gSU.back());gSU.pop_back();sApplyUndo(u,true);gSR.push_back(std::move(u));toast("Desfeito");}
+          void sculptRedo(){if(gSR.empty())return;SUndo u=std::move(gSR.back());gSR.pop_back();sApplyUndo(u,false);gSU.push_back(std::move(u));toast("Refeito");}
+          static bool sculptable(int i){return i>=0&&i<(int)objs.size()&&!objs[i].kind&&objs[i].mesh!=5&&objs[i].mesh>=0&&objs[i].mesh<(int)meshes.size()&&!meshes[objs[i].mesh].cpu.empty();}
+          void sculptToggle(){if(gSculpt){gSculpt=false;gSt.on=false;gCanUndo=gSceneCU;gCanRedo=gSceneCR;toast("Escultura desligada");return;}
+           if(!sculptable(sel)){toast("Selecione um objeto com malha para esculpir");return;}
+           if(meshes[objs[sel].mesh].cpu.size()/6>900000){toast("Malha pesada demais para esculpir (limite: 300 mil triangulos)");return;}
+           smBuild(objs[sel].mesh);gSU.clear();gSR.clear();gSculpt=true;gRenderOpen=false;gRigOpen=false;gFileMenu=false;toast("Escultura: 1 dedo esculpe, 2 dedos movem a camera");}
+          void sculptSync(){if(!gSculpt)return;
+           if(!sculptable(sel)){gSculpt=false;gSt.on=false;gCanUndo=gSceneCU;gCanRedo=gSceneCR;return;}
+           int mi=objs[sel].mesh;if(gSM.mesh!=mi||gSM.nsv!=meshes[mi].cpu.size()/6){gSt.on=false;smBuild(mi);gSU.clear();gSR.clear();}
+           gCanUndo=!gSU.empty();gCanRedo=!gSR.empty();}
           void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
            for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
             for(size_t k=0;k<sk.j.size();k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<sk.fz.size()?sk.fz[k]:id());JS[s2][k]=mul(jw,sk.ibm[k]);}}
@@ -1229,9 +1339,9 @@ jobs:
            for(auto&g:rigs){int m[7]={g.a,g.b,g.c,g.tgt,g.pole,(int)g.rotc,(int)g.wk.size()};hmix(h,m,sizeof(m));hmix(h,&g.w,4);for(auto&k:g.wk)hmix(h,&k,sizeof(k));}
            return h;}
           Snap snapNow(){Snap s;s.o=objs;s.sk=skins;s.rg=rigs;s.sel=sel;return s;}
-          void undoClear(){gUndo.clear();gRedo.clear();gUCur=snapNow();gUHash=stateHash();gCanUndo=gCanRedo=false;}
-          void undoCommit(){uint64_t h=stateHash();if(h==gUHash)return;gUndo.push_back(std::move(gUCur));if(gUndo.size()>40)gUndo.erase(gUndo.begin());gRedo.clear();gUCur=snapNow();gUHash=h;gCanUndo=true;gCanRedo=false;}
-          static void undoApply(const Snap&s){objs=s.o;skins=s.sk;rigs=s.rg;sel=s.sel<(int)objs.size()?s.sel:-1;gUCur=s;gUHash=stateHash();gMcHaveCam=false;gSigS=-1;mcReset();applyAnim();gCanUndo=!gUndo.empty();gCanRedo=!gRedo.empty();}
+          void undoClear(){gUndo.clear();gRedo.clear();gUCur=snapNow();gUHash=stateHash();gCanUndo=gCanRedo=gSceneCU=gSceneCR=false;}
+          void undoCommit(){uint64_t h=stateHash();if(h==gUHash)return;gUndo.push_back(std::move(gUCur));if(gUndo.size()>40)gUndo.erase(gUndo.begin());gRedo.clear();gUCur=snapNow();gUHash=h;gCanUndo=gSceneCU=true;gCanRedo=gSceneCR=false;}
+          static void undoApply(const Snap&s){objs=s.o;skins=s.sk;rigs=s.rg;sel=s.sel<(int)objs.size()?s.sel:-1;gUCur=s;gUHash=stateHash();gMcHaveCam=false;gSigS=-1;mcReset();applyAnim();gSceneCU=!gUndo.empty();gSceneCR=!gRedo.empty();if(!gSculpt){gCanUndo=gSceneCU;gCanRedo=gSceneCR;}}
           void doUndo(){undoCommit();if(gUndo.empty())return;gRedo.push_back(gUCur);Snap p=std::move(gUndo.back());gUndo.pop_back();undoApply(p);toast("Desfeito");}
           void doRedo(){undoCommit();if(gRedo.empty())return;gUndo.push_back(gUCur);Snap n=std::move(gRedo.back());gRedo.pop_back();undoApply(n);toast("Refeito");}
           void clearScene(){for(size_t i=6;i<meshes.size();i++){glDeleteBuffers(1,&meshes[i].vbo);if(meshes[i].svbo)glDeleteBuffers(1,&meshes[i].svbo);glDeleteVertexArrays(1,&meshes[i].vao);}
@@ -1417,7 +1527,7 @@ jobs:
            else if(mode==27){int f=std::clamp(gDV0+df,gFS,gFE);tm=f/24.f;applyAnim();}
            if(mode>=23&&mode<=26){float a=gFS/24.f,b=gFE/24.f;if(tm<a)tm=a;if(tm>b)tm=b;applyAnim();}}
           void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(int)roundf(tm*24);if(rel<.33f)f--;else if(rel>.66f)f++;tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
-          void frame(){solveRigs();if(gCamView>=0)viewFromCam();
+          void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
            bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
            glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
            glEnable(GL_DEPTH_TEST);
@@ -1437,6 +1547,7 @@ jobs:
            if(gCamView>=0&&gCamView<(int)objs.size()){float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/H,sa=(float)W/H;
             if(ra<sa-.002f){float fw=H*ra,fx=(W-fw)/2;rect(0,0,fx,(float)H,0,0,0,.5f);rect(fx+fw,0,W-fx-fw,(float)H,0,0,0,.5f);rect(fx-.12f*u,0,.12f*u,(float)H,.9f,.9f,.9f,.6f);rect(fx+fw,0,.12f*u,(float)H,.9f,.9f,.9f,.6f);}
             pill(W/2-13*u,hH+1.2f*u,26*u,5.6f*u,19,fm("Câmera: %.14s  (sair)",objs[gCamView].nm).c_str(),true,.2f,.38f,.55f);}
+           if(gSculpt&&gSt.on){for(int k=0;k<40;k++){float an=k*2*PI/40;float qx=gSCx+cosf(an)*gSRad,qy=gSCy+sinf(an)*gSRad;rect(qx-.18f*u,qy-.18f*u,.36f*u,.36f*u,.95f,.95f,.95f,.8f,.18f*u);}}
            // cabecalho: projeto (esquerda) e menus (direita)
            rect(0,0,W,hH,.15f,.15f,.16f,.96f);gBlock.push_back({0,0,(float)W,hH});
            auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
@@ -1444,7 +1555,8 @@ jobs:
             rect(sx+sw*v-.7f*u,yy+rh_/2-1.1f*u,1.4f*u,2.2f*u,.95f,.95f,.95f,1,.7f*u);gBtn.push_back({{sx-.8f*u,yy,sw+1.6f*u,rh_},300+i});gSlX[i]=sx;gSlW[i]=sw;};
            {float bs=7*u,x=ML_,by=(hH-bs)/2; // desfazer / refazer
             for(int k=0;k<2;k++){int id=91+k;rect(x,by,bs,bs,.33f,.33f,.35f,1,.9f*u);icon2(id,x+bs/2,by+bs/2,bs*.27f,false);gBtn.push_back({{x,by,bs,bs},id});x+=bs+.6f*u;}
-            char fb[24];snprintf(fb,24,"%d FPS",(int)(gFps+.5f));float tf=.34f*u;text(fb,x+1*u,by+bs/2-2.5f*tf,tf,.55f,.55f,.6f);}
+            char fb[24];snprintf(fb,24,"%d FPS",(int)(gFps+.5f));float tf=.34f*u;text(fb,x+1*u,by+bs/2-2.5f*tf,tf,.55f,.55f,.6f);x+=tw(fb,tf)+4*u;
+            {float ps=bs*.072f,w=tw("Escultura",ps)+4*u;pill(x,by,w,bs,93,"Escultura",gSculpt,.33f,.33f,.35f);}}
            {float ph=6.4f*u,py=(hH-ph)/2,ps=ph*.072f,xr=W-ML_;
             const char*ml[4]={"Arquivo","Render","Rig","Timeline"};const int mid[4]={60,61,63,62};bool mon[4]={gFileMenu,gRenderOpen,gRigOpen,gTlOpen};
             for(int k=0;k<4;k++){float w=tw(ml[k],ps)+4*u,x=xr-w;pill(x,py,w,ph,mid[k],ml[k],mon[k],.33f,.33f,.35f);xr=x-.8f*u;}}
@@ -1480,6 +1592,16 @@ jobs:
              pill(px+1.2f*u,y2+8*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
              pill(px+1.2f*u,y2+9*rh,bw_,bh_,39,gMcCW>0?fm("Tamanho: %dx%d",gMcCW,gMcCH).c_str():"Tamanho: tela",gMcCW>0,.3f,.3f,.33f);
              char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+10*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
+            gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
+           if(gSculpt){ // painel de escultura
+            float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u,hw=(bw_-.6f*u)/2,x2=px+1.2f*u+hw+.6f*u;int nr=10;
+            panel(px,py,pw2,rh*nr+1.6f*u,1*u);
+            char tl[64];snprintf(tl,64,"Escultura: %.16s",sel>=0?objs[sel].nm:"");text(tl,px+1.2f*u,y1+rh/2-2.5f*tp2,tp2*.9f,.8f,.8f,.85f);
+            for(int k=0;k<5;k++)pill(px+1.2f*u,y1+(1+k)*rh,bw_,bh_,94+k,gSBN[k],gSBrush==k,.3f,.3f,.33f);
+            sld(5,px,pw2,y1+6*rh,rh,tp2,fm("Raio %d",gSRad).c_str(),(gSRad-20)/180.f);
+            sld(6,px,pw2,y1+7*rh,rh,tp2,fm("Força %d%%",(int)(gSStr*100+.5f)).c_str(),(gSStr-.05f)/.95f);
+            pill(px+1.2f*u,y1+8*rh,hw,bh_,99,gSInv?"Inverter: on":"Inverter: off",gSInv,.3f,.3f,.33f);pill(x2,y1+8*rh,hw,bh_,82,gSSym?"Simetria X: on":"Simetria X: off",gSSym,.3f,.3f,.33f);
+            pill(px+1.2f*u,y1+9*rh,bw_,bh_,83,"Sair da escultura",false,.5f,.2f,.2f);
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            if(gRigOpen){ // painel Rig (IK de 2 ossos + IK/FK + formas)
             float px=tbX+tbW+1*u,py=hH+1.5f*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u,hw=(bw_-.6f*u)/2,x2=px+1.2f*u+hw+.6f*u;
@@ -1630,8 +1752,12 @@ jobs:
            else if(i==39)sizeOpen();
            else if(i==18)addCamera();
            else if(i==19)camViewToggle();
-           else if(i==91)doUndo();
-           else if(i==92)doRedo();
+           else if(i==91){if(gSculpt)sculptUndo();else doUndo();}
+           else if(i==92){if(gSculpt)sculptRedo();else doRedo();}
+           else if(i==93||i==83)sculptToggle();
+           else if(i>=94&&i<=98)gSBrush=i-94;
+           else if(i==99)gSInv=!gSInv;
+           else if(i==82)gSSym=!gSSym;
            else if(i==84)gMode=0;
            else if(i==85||i==86)toast(i==85?"Modo Modelagem: em desenvolvimento":"Modo Escultura: em desenvolvimento");
            else if(i==90){gFileMenu=false;gNameMode=1;gNameBuf=gProj;gNameOpen=true;gImportOpen=false;showKb();}
@@ -1703,7 +1829,7 @@ jobs:
            if(act==AMOTION_EVENT_ACTION_DOWN){
             moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
             if(gImportOpen&&!gNameOpen&&!gSizeOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=304){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+            for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=306){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
             if((gVid.on||gNameOpen||gSizeOpen)&&mode<0)mode=2;
             if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
             if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
@@ -1712,11 +1838,12 @@ jobs:
              else if(gTlOpen&&inR(gTrack,x,y)){mode=3;scrub(x);}
              else if(hypotf(x-navX(),y-navY())<navR()+12)mode=4;
              else{bool blk=false;for(auto&r:gBlock)if(inR(r,x,y))blk=true;
-              if(blk)mode=2;else{int a=hitGizmo(x,y);if(a>=0){gAxis=a;gDrag=true;mode=5;}else mode=1;}}}
-           }else if(act==AMOTION_EVENT_ACTION_POINTER_DOWN){moved=true;rl=true;pinch=0;}
+              if(blk)mode=2;else if(gSculpt){mode=sculptBegin(x,y)?40:2;}else{int a=hitGizmo(x,y);if(a>=0){gAxis=a;gDrag=true;mode=5;}else mode=1;}}}
+           }else if(act==AMOTION_EVENT_ACTION_POINTER_DOWN){if(mode==40){sculptEnd();mode=1;}moved=true;rl=true;pinch=0;}
            else if(act==AMOTION_EVENT_ACTION_POINTER_UP){rl=true;pinch=0;}
            else if(act==AMOTION_EVENT_ACTION_MOVE){
-            if(mode==30){float dyy=y-gSY0;if(fabsf(dyy)>12)moved=true;gScrollPx=std::max(0.f,gSS0-dyy);}
+            if(mode==40)sculptMove(x,y);
+            else if(mode==30){float dyy=y-gSY0;if(fabsf(dyy)>12)moved=true;gScrollPx=std::max(0.f,gSS0-dyy);}
             else if(mode==3)scrub(x);
             else if(mode>=20){if(hypotf(x-sx,y-sy)>20)moved=true;tlDrag(mode,x);}
             else if(mode>=6)setSlider(mode-6,x);
@@ -1727,6 +1854,7 @@ jobs:
              else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>20)moved=true;
               if(mode==5)gdrag(dx,dy);else if(moved){if(tool==3&&mode==1)panCam(dx,dy);else orbit(dx,dy);}}}
            }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
+            if(mode==40)sculptEnd();
             if(mode==30&&!moved&&gImportOpen){int k=(int)floorf((y-gListR.y+gScrollPx)/gRowH);if(k>=0&&k<(int)gFiles.size()){gImportOpen=false;pickPath(gFiles[k]);}}
             if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);undoCommit();mode=0;gDrag=false;}
            return 1;}
