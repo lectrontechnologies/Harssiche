@@ -1106,13 +1106,16 @@ jobs:
           void sculptUndo(){if(gSU.empty())return;SUndo u=std::move(gSU.back());gSU.pop_back();sApplyUndo(u,true);gSR.push_back(std::move(u));toast("Desfeito");}
           void sculptRedo(){if(gSR.empty())return;SUndo u=std::move(gSR.back());gSR.pop_back();sApplyUndo(u,false);gSU.push_back(std::move(u));toast("Refeito");}
           static bool sculptable(int i){return i>=0&&i<(int)objs.size()&&!objs[i].kind&&objs[i].mesh!=5&&objs[i].mesh>=0&&objs[i].mesh<(int)meshes.size()&&!meshes[objs[i].mesh].cpu.empty();}
+          int cloneMesh(int mi){Mesh src=meshes[mi];Mesh mm=upload(src.cpu,src.mode);mm.rad=src.rad;if(src.skinned&&!src.skin.empty())attachSkin(mm,src.skin);if(!src.uv.empty())attachUV(mm,src.uv);meshes.push_back(mm);return(int)meshes.size()-1;}
+          static void sculptPrep(int oi){ // malhas padrao (cubo, esfera, plano...) sao compartilhadas: esculpir cria uma copia propria do objeto
+           if(oi<0||oi>=(int)objs.size())return;int mi=objs[oi].mesh;if(mi>=0&&mi<6&&!meshes[mi].cpu.empty())objs[oi].mesh=cloneMesh(mi);}
           void sculptToggle(){if(gSculpt){gSculpt=false;gSt.on=false;gCanUndo=gSceneCU;gCanRedo=gSceneCR;toast("Escultura desligada");return;}
            if(!sculptable(sel)){toast("Selecione um objeto com malha para esculpir");return;}
            if(meshes[objs[sel].mesh].cpu.size()/6>900000){toast("Malha pesada demais para esculpir (limite: 300 mil triangulos)");return;}
-           smBuild(objs[sel].mesh);gSU.clear();gSR.clear();gSculpt=true;gRenderOpen=false;gRigOpen=false;gFileMenu=false;toast("Escultura: 1 dedo esculpe, 2 dedos movem a camera");}
+           sculptPrep(sel);smBuild(objs[sel].mesh);gSU.clear();gSR.clear();gSculpt=true;gRenderOpen=false;gRigOpen=false;gFileMenu=false;toast("Escultura: 1 dedo esculpe, 2 dedos movem a camera");}
           void sculptSync(){if(!gSculpt)return;
            if(!sculptable(sel)){gSculpt=false;gSt.on=false;gCanUndo=gSceneCU;gCanRedo=gSceneCR;return;}
-           int mi=objs[sel].mesh;if(gSM.mesh!=mi||gSM.nsv!=meshes[mi].cpu.size()/6){gSt.on=false;smBuild(mi);gSU.clear();gSR.clear();}
+           sculptPrep(sel);int mi=objs[sel].mesh;if(gSM.mesh!=mi||gSM.nsv!=meshes[mi].cpu.size()/6){gSt.on=false;smBuild(mi);gSU.clear();gSR.clear();}
            gCanUndo=!gSU.empty();gCanRedo=!gSR.empty();}
           void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
            for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
