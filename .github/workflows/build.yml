@@ -500,7 +500,7 @@ jobs:
             rect(e.x-r,e.y-r,2*r,2*r,c[0]*k,c[1]*k,c[2]*k,1,r);
             if(e.pos){float ps=H*.0055f;text(LB[e.a],e.x-tw(LB[e.a],ps)/2,e.y-2.5f*ps,ps,1,1,1);}}}
           // ---------- exportacao (MAD / glTF) + rigging ----------
-          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;bool gCanUndo=false,gCanRedo=false,gSceneCU=false,gSceneCR=false,gSizeOpen=false;int gSizeField=0,gMcCW=0,gMcCH=0;std::string gSizeBuf[2];
+          bool parentMode=false;std::string gToast;float gToastT=0;const char*gDir=".";std::string gProj="projeto";bool gNameOpen=false,gKbShift=false;int gNameMode=0,gMode=0;std::string gNameBuf;bool gCanUndo=false,gCanRedo=false,gSceneCU=false,gSceneCR=false,gSizeOpen=false;int gSRad=70;float gSStr=.5f;int gSizeField=0,gMcCW=0,gMcCH=0;std::string gSizeBuf[2];
           void toast(const std::string&t){gToast=t;gToastT=4;}
           std::string fm(const char*f,...){char b[1024];va_list a;va_start(a,f);vsnprintf(b,1024,f,a);va_end(a);return b;}
           // ---------- control rig: criar / alternar IK-FK / bake / remover ----------
@@ -1010,7 +1010,7 @@ jobs:
           struct KeyI{int x,y,z;bool operator==(const KeyI&o)const{return x==o.x&&y==o.y&&z==o.z;}};
           struct KeyH{size_t operator()(const KeyI&k)const{return((size_t)(unsigned)k.x*73856093u)^((size_t)(unsigned)k.y*19349663u)^((size_t)(unsigned)k.z*83492791u);}};
           struct SM{int mesh=-1;size_t nsv=0;std::vector<int> wid,ws,wl,ns,nl;std::vector<V> wp,wn;};
-          SM gSM;bool gSculpt=false,gSInv=false,gSSym=true;int gSBrush=0,gSRad=70;float gSStr=.5f;float gSCx=0,gSCy=0;
+          SM gSM;bool gSculpt=false,gSInv=false,gSSym=true;int gSBrush=0;float gSCx=0,gSCy=0;
           const char*gSBN[5]={"Desenhar","Inflar","Suavizar","Achatar","Agarrar"};
           std::vector<int> gSDirty;std::vector<char> gSFlag,gSNF;
           struct M3{V a,b,c;};
