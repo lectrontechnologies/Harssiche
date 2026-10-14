@@ -1464,21 +1464,23 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
   pill(W/2-13*u,hH+1.2f*u,26*u,5.6f*u,19,fm("Câmera: %.14s  (sair)",objs[gCamView].nm).c_str(),true,.2f,.38f,.55f);}
  if(gSculpt&&gSt.on){for(int k=0;k<40;k++){float an=k*2*PI/40;float qx=gSCx+cosf(an)*gSRad,qy=gSCy+sinf(an)*gSRad;rect(qx-.18f*u,qy-.18f*u,.36f*u,.36f*u,.95f,.95f,.95f,.8f,.18f*u);}}
  // topo: apenas os cantos (estilo app 3D movel)
- rect(0,0,(float)W,hH,0,0,0,.28f);
- auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
+            auto sld=[&](int i,float px_,float pw_,float yy,float rh_,float tp_,const char*lab,float v){float lw=9.5f*u,sx=px_+lw,sw=pw_-lw-1.4f*u;text(lab,px_+1.2f*u,yy+rh_/2-2.5f*tp_,tp_,.85f,.85f,.88f);
   rect(sx,yy+rh_/2-.45f*u,sw,.9f*u,.1f,.1f,.11f,1,.45f*u);rect(sx,yy+rh_/2-.45f*u,sw*v,.9f*u,.28f,.45f,.7f,1,.45f*u);
   rect(sx+sw*v-.7f*u,yy+rh_/2-1.1f*u,1.4f*u,2.2f*u,.95f,.95f,.95f,1,.7f*u);gBtn.push_back({{sx-.8f*u,yy,sw+1.6f*u,rh_},300+i});gSlX[i]=sx;gSlW[i]=sw;};
- float bsR=7.4f*u,cxT=ML_+bsR/2+.4f*u,cyT=1.2f*u+bsR/2,cyA=cyT+bsR+1.1f*u;float tbX=ML_,tbW=0;
- {auto rb=[&](float cx,float cy,float sz,int id,int iconId,bool on){rect(cx-sz/2,cy-sz/2,sz,sz,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,sz/2);icon2(iconId,cx,cy,sz*.27f,on);gBtn.push_back({{cx-sz/2,cy-sz/2,sz,sz},id});};
-  rb(cxT,cyT,bsR,120,3+tool,gToolFan);rb(cxT,cyA,bsR,121,0,gAddFan);
-  if(gToolFan){static const int FT[4]={3,4,5,6};for(int k=0;k<4;k++){float an=(k*32.f)*PI/180.f,r=bsR*1.75f;rb(cxT+cosf(an)*r,cyT+sinf(an)*r,bsR*.86f,FT[k],FT[k],tool==FT[k]-3);}}
-  if(gAddFan){static const int FA[5]={0,1,2,10,18};for(int k=0;k<5;k++){float an=(-24.f+k*32.f)*PI/180.f,r=bsR*1.75f;rb(cxT+cosf(an)*r,cyA+sinf(an)*r,bsR*.86f,FA[k],FA[k],false);}}}
+ float Rd=26*u,cx0=ML_+9.5f*u,cy0=5.5f*u,ra=17.5f*u,ib=8.6f*u;float tbX=ML_,tbW=0; // menu radial (estilo Prisma)
+ rect(cx0-Rd,cy0-Rd,2*Rd,2*Rd,.09f,.09f,.1f,.9f,Rd);gBlock.push_back({0,0,cx0+Rd*.72f,cy0+Rd*.72f});
+ rect(cx0-9.5f*u,cy0-9.5f*u,19*u,19*u,.05f,.05f,.06f,.95f,9.5f*u);
+ icon2(0,cx0,cy0,3.4f*u,gAddFan);gBtn.push_back({{cx0-9.5f*u,cy0-9.5f*u,19*u,19*u},44});
+ for(int k=0;k<4;k++){float an=k*30.f*PI/180.f,tx_=cx0+cosf(an)*ra,ty_=cy0+sinf(an)*ra;bool on=tool==k;
+  if(on)rect(tx_-ib/2,ty_-ib/2,ib,ib,.28f,.45f,.7f,.95f,ib/2);icon2(3+k,tx_,ty_,ib*.32f,on);gBtn.push_back({{tx_-ib/2,ty_-ib/2,ib,ib},3+k});}
+ if(gAddFan){const char*nm_[5]={"Cubo","Esfera","Plano","Osso","Câmera"};const int ai[5]={0,1,2,10,18};float lx=ML_+1.5f*u,ly=cy0+Rd+1*u,lw=24*u,lh=6*u,lt=5*(lh+.5f*u)+1.5f*u;panel(lx-1*u,ly-1*u,lw+2*u,lt,1*u);
+  for(int k=0;k<5;k++)pill(lx,ly+k*(lh+.5f*u),lw,lh,ai[k],nm_[k],false,.33f,.33f,.35f);gBtn.push_back({{lx-1*u,ly-1*u,lw+2*u,lt},299});}
  {float ps=.52f*u;const char*tn[2]={"Animação","Escultura"};const int ti[2]={84,93};float w0=tw(tn[0],ps),w1=tw(tn[1],ps),gap=5*u,x=(W-(w0+w1+gap))/2;
   for(int k=0;k<2;k++){bool act=(k==1)==gSculpt;float ww=k?w1:w0;text(tn[k],x,hH/2-2.5f*ps,ps,act?1.f:.5f,act?1.f:.5f,act?1.f:.55f);
    if(act)rect(x,hH/2+3.6f*ps,ww,.28f*u,.95f,.62f,.2f);gBtn.push_back({{x-1.5f*u,0,ww+3*u,hH},ti[k]});x+=ww+gap;}}
- {float bs=7.4f*u,by=1.2f*u,x=W-ML_-bs;
-  rect(x,by,bs,bs,.16f,.16f,.18f,.94f,bs/2);for(int k=0;k<3;k++)rect(x+bs*.26f,by+bs*(.3f+k*.2f),bs*.48f,bs*.07f,.93f,.93f,.93f,1,bs*.035f);gBtn.push_back({{x,by,bs,bs},60});x-=bs+.9f*u;
-  for(int k=1;k>=0;k--){int id=91+k;rect(x,by,bs,bs,.16f,.16f,.18f,.94f,bs/2);icon2(id,x+bs/2,by+bs/2,bs*.27f,false);gBtn.push_back({{x,by,bs,bs},id});x-=bs+.9f*u;}}
+ {float bs=8*u,by=.6f*u,x=W-ML_-bs;
+  for(int k=0;k<3;k++)rect(x+bs*.22f,by+bs*(.28f+k*.22f),bs*.56f,bs*.075f,.93f,.93f,.93f,1,bs*.04f);gBtn.push_back({{x,by,bs,bs},60});x-=bs+1*u;
+  for(int k=1;k>=0;k--){int id=91+k;icon2(id,x+bs/2,by+bs/2,bs*.32f,false);gBtn.push_back({{x,by,bs,bs},id});x-=bs+1*u;}}
  if(gFileMenu){ // menu do botao de tres linhas
   const char*rl[9]={"Novo projeto","Abrir projeto","Salvar projeto","Renomear projeto","Renderizar","Import glTF","Import MAD","Export glTF","Export MAD"};const int rid[9]={40,41,42,90,61,15,43,14,13};
   float mw=30*u,ph=5.8f*u,mx=W-ML_-mw,my=hH+.4f*u,mh=9*(ph+.5f*u)+1.5f*u+3.4f*u;panel(mx,my,mw,mh,1*u);
@@ -1657,7 +1659,7 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
 // ---------- input ----------
 void pressInner(int i){
  if(gVid.on&&i!=36)return;
- if(i==120){gToolFan=!gToolFan;gAddFan=false;return;}if(i==121){gAddFan=!gAddFan;gToolFan=false;return;}
+ if(i==44){gAddFan=!gAddFan;return;}
  if(i>=3&&i<=6)gToolFan=false;if(i<3||i==10||i==18)gAddFan=false;
  if(i>=0&&i<64)gFlash[i]=.35f;
  if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gFileMenu=false;gRenderOpen=!gRenderOpen;if(gRenderOpen)gRigOpen=false;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
@@ -1758,7 +1760,7 @@ int32_t onInput(android_app*,AInputEvent*e){
  if(act==AMOTION_EVENT_ACTION_DOWN){
   moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
   if(gImportOpen&&!gNameOpen&&!gSizeOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=306){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else{if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=306){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else if(b.id-100<(int)objs.size()){if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
   if((gVid.on||gNameOpen||gSizeOpen)&&mode<0)mode=2;
   if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
   if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}
