@@ -15,5 +15,7 @@ Android 3D Animation Software
 - Gizmos (Added)
 - Path Tracing (Added)
 - Image Rendering (Added)
-- Video Rendering 
+- Video Rendering (Added)
 - Control Rigging (Added)
+- New Interface (Added)
+- Qt (Added)
