@@ -9,13 +9,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - name: Install system deps
+      - name: Install deps
         run: sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0 python3-pip
-      - name: Install aqtinstall
+      - name: Install aqt
         run: pip3 install aqtinstall==3.1.16
-      - name: Install Qt 6.5.3 Desktop + Android
+      - name: Install Qt 6.5.3
         run: |
-          set -e
           mkdir -p $HOME/Qt
           aqt install-qt linux desktop 6.5.3 gcc_64 -O $HOME/Qt
           aqt install-qt linux android 6.5.3 android_arm64_v8a -O $HOME/Qt
@@ -35,21 +34,24 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
-      - name: Create project files
+      - name: Create project
         run: |
           rm -f settings.gradle build.gradle
-          rm -rf .gradle
-          mkdir -p src android/res/values
+          rm -rf .gradle src android
+          mkdir -p src android
           cat > CMakeLists.txt << 'EOF'
           cmake_minimum_required(VERSION 3.16)
           project(NomadAnimator LANGUAGES CXX)
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_AUTOMOC ON)
           find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
-          qt_add_executable(NomadAnimator src/main.cpp src/mainwindow.cpp src/mainwindow.h src/glwidget.cpp src/glwidget.h)
-          target_link_libraries(NomadAnimator PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
+          qt_add_executable(NomadAnimator
+            src/main.cpp src/mainwindow.cpp src/mainwindow.h
+            src/glwidget.cpp src/glwidget.h)
+          target_link_libraries(NomadAnimator PRIVATE
+            Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
           set_target_properties(NomadAnimator PROPERTIES
-            QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
+            QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
             QT_ANDROID_PACKAGE_NAME "com.nomad.animator"
             QT_ANDROID_APP_NAME "Nomad Animator"
             QT_ANDROID_TARGET_SDK_VERSION 33
@@ -174,41 +176,37 @@ jobs:
           void GLWidget::mouseMoveEvent(QMouseEvent *e){if(!m_drag)return;QPoint d=e->pos()-m_last;m_last=e->pos();if(e->buttons()&Qt::LeftButton){m_yaw-=d.x()*0.008f;m_pitch=qBound(-1.4f,m_pitch+d.y()*0.008f,1.4f);update();}else if(e->buttons()&Qt::RightButton){m_target.setX(m_target.x()-d.x()*0.01f);m_target.setY(m_target.y()+d.y()*0.01f);update();}}
           void GLWidget::wheelEvent(QWheelEvent *e){m_dist=qBound(1.f,m_dist-e->angleDelta().y()/120.f*0.8f,40.f);update();}
           EOF
+          # Manifest mínimo - deixa o Qt completar o resto
           cat > android/AndroidManifest.xml << 'EOF'
           <?xml version="1.0"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <uses-feature android:glEsVersion="0x00030000" android:required="true"/>
-            <application android:label="Nomad Animator" android:extractNativeLibs="true">
-              <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
-                android:exported="true" android:screenOrientation="landscape"
-                android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
-                android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN"/>
-                  <category android:name="android.intent.category.LAUNCHER"/>
-                </intent-filter>
-                <meta-data android:name="android.app.lib_name" android:value="NomadAnimator"/>
-              </activity>
-            </application>
+          <manifest package="org.qtproject.example.NomadAnimator" xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="1" android:versionName="1.0">
+              <application android:label="Nomad Animator" android:hardwareAccelerated="true">
+                  <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
+                      android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
+                      android:launchMode="singleTop"
+                      android:screenOrientation="landscape"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                      <meta-data android:name="android.app.lib_name" android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
+                      <meta-data android:name="android.app.arguments" android:value="-- %%INSERT_APP_ARGUMENTS%% --"/>
+                  </activity>
+              </application>
           </manifest>
           EOF
-          cat > android/gradle.properties << 'EOF'
-          android.useAndroidX=true
-          android.suppressUnsupportedCompileSdk=33
-          EOF
-          echo "OK"
-      - name: Build APK
+          echo "Project created"
+      - name: Build
         run: |
           set -e
           rm -f settings.gradle build.gradle
-          rm -rf .gradle
           QT_HOST=$HOME/Qt/6.5.3/gcc_64
           QT_ANDROID=$HOME/Qt/6.5.3/android_arm64_v8a
           export PATH=$QT_HOST/bin:$PATH
           export ANDROID_SDK_ROOT=$ANDROID_HOME
           export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.1.8937393
-          export ANDROID_NDK=$ANDROID_NDK_ROOT
-          mkdir -p build && cd build
+          mkdir build && cd build
           $QT_ANDROID/bin/qt-cmake \
             -DQT_HOST_PATH=$QT_HOST \
             -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
@@ -219,19 +217,11 @@ jobs:
             -GNinja \
             ..
           cmake --build . --parallel $(nproc)
-          $QT_HOST/bin/androiddeployqt \
-            --input android-NomadAnimator-deployment-settings.json \
-            --output android-build \
-            --android-platform android-33 \
-            --jdk $JAVA_HOME \
-            --gradle \
-            --verbose || true
-          find . -name "*.apk" -o -name "*.aab" | head -20
+          # Usa o target apk do CMake (mais estável que chamar androiddeployqt na mão)
+          cmake --build . --target apk --verbose || true
+          find . -name "*.apk" | head -10
       - uses: actions/upload-artifact@v4
         with:
           name: nomad-animator-qt6-apk
-          path: |
-            build/**/*.apk
-            build/**/*.aab
-            build/android-build/**/*.apk
+          path: build/**/*.apk
           if-no-files-found: warn
