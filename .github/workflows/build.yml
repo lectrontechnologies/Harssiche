@@ -1,5 +1,4 @@
 name: Build Nomad Animator (Qt 6)
-# Projeto convertido para Qt 6 + barra de ferramentas igual à imagem
 on: [push, workflow_dispatch]
 permissions:
   contents: write
@@ -18,17 +17,29 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-pip ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
 
-      - name: Install aqtinstall and Qt 6 (Android + Host)
-        run: |
-          pip3 install aqtinstall
-          # Host Qt (necessário para androiddeployqt / qt-cmake)
-          aqt install-qt linux desktop 6.7.3 gcc_64 -O $HOME/Qt
-          # Qt for Android arm64-v8a
-          aqt install-qt linux android 6.7.3 android_arm64_v8a -O $HOME/Qt --autodesktop
-          echo "Qt instalado em $HOME/Qt"
-          ls -la $HOME/Qt/6.7.3/
+      # Método mais estável que aqtinstall puro
+      - name: Install Qt 6 (Host + Android)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: 'linux'
+          target: 'desktop'
+          arch: 'linux_gcc_64'
+          dir: ${{ runner.temp }}/Qt
+          cache: true
+
+      - name: Install Qt 6 Android
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: 'linux'
+          target: 'android'
+          arch: 'android_arm64_v8a'
+          dir: ${{ runner.temp }}/Qt
+          modules: ''
+          cache: true
 
       - name: Android SDK + NDK
         run: |
@@ -54,21 +65,17 @@ jobs:
       - name: Criar arquivos do projeto Qt 6
         run: |
           set -e
-          mkdir -p src android/res/values android/res/drawable
+          mkdir -p src android/res/values
 
-          # ---------- CMakeLists.txt ----------
           cat > CMakeLists.txt << 'EOF'
           cmake_minimum_required(VERSION 3.22)
           project(NomadAnimator VERSION 1.0 LANGUAGES CXX)
-
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_AUTOMOC ON)
           set(CMAKE_AUTORCC ON)
           set(CMAKE_AUTOUIC ON)
-
           find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
-
           qt_add_executable(NomadAnimator
               src/main.cpp
               src/mainwindow.cpp
@@ -76,16 +83,9 @@ jobs:
               src/glwidget.cpp
               src/glwidget.h
           )
-
           target_link_libraries(NomadAnimator PRIVATE
-              Qt6::Core
-              Qt6::Gui
-              Qt6::Widgets
-              Qt6::OpenGL
-              Qt6::OpenGLWidgets
+              Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets
           )
-
-          # Configuração Android
           set_target_properties(NomadAnimator PROPERTIES
               QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android"
               QT_ANDROID_PACKAGE_NAME "com.nomad.animator"
@@ -97,35 +97,26 @@ jobs:
           )
           EOF
 
-          # ---------- main.cpp ----------
           cat > src/main.cpp << 'EOF'
           #include <QApplication>
           #include <QSurfaceFormat>
           #include "mainwindow.h"
-
-          int main(int argc, char *argv[])
-          {
-              // OpenGL ES 3.0
+          int main(int argc, char *argv[]) {
               QSurfaceFormat fmt;
               fmt.setVersion(3, 0);
               fmt.setProfile(QSurfaceFormat::CoreProfile);
               fmt.setDepthBufferSize(24);
               fmt.setSamples(4);
               QSurfaceFormat::setDefaultFormat(fmt);
-
               QApplication app(argc, argv);
               app.setApplicationName("Nomad Animator");
-              app.setOrganizationName("Nomad");
               app.setStyle("Fusion");
-
               MainWindow w;
               w.show();
-
               return app.exec();
           }
           EOF
 
-          # ---------- mainwindow.h ----------
           cat > src/mainwindow.h << 'EOF'
           #pragma once
           #include <QMainWindow>
@@ -133,498 +124,254 @@ jobs:
           #include <QToolButton>
           #include <QAction>
           class GLWidget;
-
-          class MainWindow : public QMainWindow
-          {
+          class MainWindow : public QMainWindow {
               Q_OBJECT
           public:
               explicit MainWindow(QWidget *parent = nullptr);
-
           private slots:
-              void onMove();
-              void onRotate();
-              void onSelect();
-              void onAddCube();
-              void onUndo();
-              void onRedo();
-              void onMenu();
-
+              void onMove(); void onRotate(); void onSelect();
+              void onAddCube(); void onUndo(); void onRedo(); void onMenu();
           private:
               void createToolbars();
-              QIcon makeMoveIcon();
-              QIcon makeRotateIcon();
-              QIcon makeSelectIcon();
-              QIcon makeCubeIcon();
-              QIcon makeUndoIcon();
-              QIcon makeRedoIcon();
-              QIcon makeMenuIcon();
-
+              QIcon makeMoveIcon(); QIcon makeRotateIcon(); QIcon makeSelectIcon();
+              QIcon makeCubeIcon(); QIcon makeUndoIcon(); QIcon makeRedoIcon(); QIcon makeMenuIcon();
               GLWidget *m_gl = nullptr;
               QToolBar *m_leftBar = nullptr;
               QToolBar *m_rightBar = nullptr;
               QToolButton *m_cubeBtn = nullptr;
-
               int m_tool = 0;
           };
           EOF
 
-          # ---------- mainwindow.cpp ----------
           cat > src/mainwindow.cpp << 'EOF'
           #include "mainwindow.h"
           #include "glwidget.h"
           #include <QPainter>
           #include <QPixmap>
-          #include <QVBoxLayout>
-          #include <QHBoxLayout>
-          #include <QWidget>
-          #include <QStyle>
           #include <QApplication>
           #include <QMessageBox>
-          #include <QFrame>
           #include <QActionGroup>
-
-          MainWindow::MainWindow(QWidget *parent)
-              : QMainWindow(parent)
-          {
+          MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
               setWindowTitle("Nomad Animator");
               resize(1280, 720);
-
               m_gl = new GLWidget(this);
               setCentralWidget(m_gl);
-
               createToolbars();
-
               qApp->setStyleSheet(R"(
-                  QMainWindow, QWidget {
-                      background-color: #1e1e1e;
-                      color: #e0e0e0;
-                  }
-                  QToolBar {
-                      background-color: #2a2a2a;
-                      border: none;
-                      spacing: 4px;
-                      padding: 4px;
-                  }
-                  QToolButton {
-                      background-color: transparent;
-                      border: none;
-                      border-radius: 6px;
-                      padding: 6px;
-                      min-width: 36px;
-                      min-height: 36px;
-                  }
-                  QToolButton:hover {
-                      background-color: #3a3a3a;
-                  }
-                  QToolButton:checked, QToolButton:pressed {
-                      background-color: #3d5a80;
-                  }
+                  QMainWindow, QWidget { background-color: #1e1e1e; color: #e0e0e0; }
+                  QToolBar { background-color: #2a2a2a; border: none; spacing: 4px; padding: 4px; }
+                  QToolButton { background-color: transparent; border: none; border-radius: 6px; padding: 6px; min-width: 36px; min-height: 36px; }
+                  QToolButton:hover { background-color: #3a3a3a; }
+                  QToolButton:checked, QToolButton:pressed { background-color: #3d5a80; }
               )");
           }
-
-          void MainWindow::createToolbars()
-          {
-              // BARRA ESQUERDA (igual à imagem)
+          void MainWindow::createToolbars() {
               m_leftBar = new QToolBar("Tools", this);
               m_leftBar->setMovable(false);
-              m_leftBar->setFloatable(false);
               m_leftBar->setIconSize(QSize(28, 28));
               addToolBar(Qt::TopToolBarArea, m_leftBar);
-
               QAction *actMove = m_leftBar->addAction(makeMoveIcon(), "Mover", this, &MainWindow::onMove);
-              actMove->setCheckable(true);
-              actMove->setChecked(true);
-
+              actMove->setCheckable(true); actMove->setChecked(true);
               QAction *actRot = m_leftBar->addAction(makeRotateIcon(), "Rotacionar", this, &MainWindow::onRotate);
               actRot->setCheckable(true);
-
               QAction *actSel = m_leftBar->addAction(makeSelectIcon(), "Selecionar", this, &MainWindow::onSelect);
               actSel->setCheckable(true);
-
               QActionGroup *group = new QActionGroup(this);
-              group->addAction(actMove);
-              group->addAction(actRot);
-              group->addAction(actSel);
+              group->addAction(actMove); group->addAction(actRot); group->addAction(actSel);
               group->setExclusive(true);
-
-              // Botão do Cubo (abaixo da barra)
               m_cubeBtn = new QToolButton(this);
               m_cubeBtn->setIcon(makeCubeIcon());
               m_cubeBtn->setIconSize(QSize(32, 32));
               m_cubeBtn->setToolTip("Adicionar Cubo");
               m_cubeBtn->setFixedSize(48, 48);
-              m_cubeBtn->setStyleSheet(
-                  "QToolButton { background-color: #2a2a2a; border-radius: 8px; }"
-                  "QToolButton:hover { background-color: #3a3a3a; }"
-                  "QToolButton:pressed { background-color: #3d5a80; }"
-              );
+              m_cubeBtn->setStyleSheet("QToolButton { background-color: #2a2a2a; border-radius: 8px; } QToolButton:hover { background-color: #3a3a3a; } QToolButton:pressed { background-color: #3d5a80; }");
               connect(m_cubeBtn, &QToolButton::clicked, this, &MainWindow::onAddCube);
-              m_cubeBtn->move(12, 56);
-              m_cubeBtn->raise();
-              m_cubeBtn->show();
-
-              // BARRA DIREITA (undo / redo / menu)
+              m_cubeBtn->move(12, 56); m_cubeBtn->raise(); m_cubeBtn->show();
               m_rightBar = new QToolBar("Actions", this);
               m_rightBar->setMovable(false);
-              m_rightBar->setFloatable(false);
               m_rightBar->setIconSize(QSize(26, 26));
               addToolBar(Qt::TopToolBarArea, m_rightBar);
-
               QWidget *spacer = new QWidget(this);
               spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
               m_rightBar->addWidget(spacer);
-
               m_rightBar->addAction(makeUndoIcon(), "Desfazer", this, &MainWindow::onUndo);
               m_rightBar->addAction(makeRedoIcon(), "Refazer", this, &MainWindow::onRedo);
               m_rightBar->addAction(makeMenuIcon(), "Menu", this, &MainWindow::onMenu);
           }
-
-          QIcon MainWindow::makeMoveIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeMoveIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
               p.drawLine(12, 32, 52, 32);
-              p.drawLine(12, 32, 22, 22);
-              p.drawLine(12, 32, 22, 42);
-              p.drawLine(52, 32, 42, 22);
-              p.drawLine(52, 32, 42, 42);
+              p.drawLine(12, 32, 22, 22); p.drawLine(12, 32, 22, 42);
+              p.drawLine(52, 32, 42, 22); p.drawLine(52, 32, 42, 42);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeRotateIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeRotateIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
               p.drawArc(14, 14, 36, 36, 40 * 16, 280 * 16);
-              p.drawLine(48, 22, 42, 14);
-              p.drawLine(48, 22, 54, 18);
+              p.drawLine(48, 22, 42, 14); p.drawLine(48, 22, 54, 18);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeSelectIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeSelectIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               QPen pen(Qt::white, 3, Qt::DashLine, Qt::RoundCap, Qt::RoundJoin);
-              pen.setDashPattern({4, 3});
-              p.setPen(pen);
+              pen.setDashPattern({4, 3}); p.setPen(pen);
               p.drawRoundedRect(12, 12, 40, 40, 6, 6);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeCubeIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeCubeIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 3));
-              QPolygon front;
-              front << QPoint(18, 28) << QPoint(46, 28) << QPoint(46, 52) << QPoint(18, 52);
-              p.drawPolygon(front);
-              QPolygon top;
-              top << QPoint(18, 28) << QPoint(30, 16) << QPoint(58, 16) << QPoint(46, 28);
-              p.drawPolygon(top);
-              QPolygon side;
-              side << QPoint(46, 28) << QPoint(58, 16) << QPoint(58, 40) << QPoint(46, 52);
-              p.drawPolygon(side);
+              QPolygon front; front << QPoint(18,28) << QPoint(46,28) << QPoint(46,52) << QPoint(18,52); p.drawPolygon(front);
+              QPolygon top; top << QPoint(18,28) << QPoint(30,16) << QPoint(58,16) << QPoint(46,28); p.drawPolygon(top);
+              QPolygon side; side << QPoint(46,28) << QPoint(58,16) << QPoint(58,40) << QPoint(46,52); p.drawPolygon(side);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeUndoIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeUndoIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
               p.drawArc(16, 16, 32, 32, 30 * 16, 200 * 16);
-              p.drawLine(16, 28, 10, 20);
-              p.drawLine(16, 28, 24, 20);
+              p.drawLine(16, 28, 10, 20); p.drawLine(16, 28, 24, 20);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeRedoIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeRedoIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
               p.drawArc(16, 16, 32, 32, 150 * 16, -200 * 16);
-              p.drawLine(48, 28, 54, 20);
-              p.drawLine(48, 28, 40, 20);
+              p.drawLine(48, 28, 54, 20); p.drawLine(48, 28, 40, 20);
               return QIcon(px);
           }
-
-          QIcon MainWindow::makeMenuIcon()
-          {
-              QPixmap px(64, 64);
-              px.fill(Qt::transparent);
-              QPainter p(&px);
-              p.setRenderHint(QPainter::Antialiasing);
+          QIcon MainWindow::makeMenuIcon() {
+              QPixmap px(64, 64); px.fill(Qt::transparent);
+              QPainter p(&px); p.setRenderHint(QPainter::Antialiasing);
               p.setPen(QPen(Qt::white, 4, Qt::SolidLine, Qt::RoundCap));
-              p.drawLine(16, 22, 48, 22);
-              p.drawLine(16, 32, 48, 32);
-              p.drawLine(16, 42, 48, 42);
+              p.drawLine(16, 22, 48, 22); p.drawLine(16, 32, 48, 32); p.drawLine(16, 42, 48, 42);
               return QIcon(px);
           }
-
           void MainWindow::onMove()   { m_tool = 0; m_gl->setTool(0); }
           void MainWindow::onRotate() { m_tool = 1; m_gl->setTool(1); }
           void MainWindow::onSelect() { m_tool = 2; m_gl->setTool(2); }
           void MainWindow::onAddCube(){ m_gl->addCube(); }
           void MainWindow::onUndo()   { m_gl->undo(); }
           void MainWindow::onRedo()   { m_gl->redo(); }
-          void MainWindow::onMenu()
-          {
-              QMessageBox::information(this, "Menu",
-                  "Nomad Animator (Qt 6)\n\n"
-                  "Arquivo • Importar • Exportar • Render\n"
-                  "(funcionalidades em portagem)");
+          void MainWindow::onMenu() {
+              QMessageBox::information(this, "Menu", "Nomad Animator (Qt 6)\n\nArquivo • Importar • Exportar • Render");
           }
           EOF
 
-          # ---------- glwidget.h ----------
           cat > src/glwidget.h << 'EOF'
           #pragma once
           #include <QOpenGLWidget>
-          #include <QOpenGLFunctions>
           #include <QOpenGLExtraFunctions>
           #include <QMatrix4x4>
           #include <QVector3D>
           #include <vector>
-
-          class GLWidget : public QOpenGLWidget, protected QOpenGLExtraFunctions
-          {
+          class GLWidget : public QOpenGLWidget, protected QOpenGLExtraFunctions {
               Q_OBJECT
           public:
               explicit GLWidget(QWidget *parent = nullptr);
-              void setTool(int t);
-              void addCube();
-              void undo();
-              void redo();
-
+              void setTool(int t); void addCube(); void undo(); void redo();
           protected:
-              void initializeGL() override;
-              void resizeGL(int w, int h) override;
-              void paintGL() override;
-              void mousePressEvent(QMouseEvent *e) override;
-              void mouseMoveEvent(QMouseEvent *e) override;
+              void initializeGL() override; void resizeGL(int w, int h) override; void paintGL() override;
+              void mousePressEvent(QMouseEvent *e) override; void mouseMoveEvent(QMouseEvent *e) override;
               void wheelEvent(QWheelEvent *e) override;
-
           private:
               int m_tool = 0;
               float m_yaw = 0.6f, m_pitch = 0.4f, m_dist = 8.0f;
               QVector3D m_target{0, 0.5f, 0};
-              QPoint m_lastPos;
-              bool m_dragging = false;
-
-              struct Cube {
-                  QVector3D pos;
-                  QVector3D rot;
-                  QVector3D scale{1,1,1};
-                  QVector3D color;
-              };
+              QPoint m_lastPos; bool m_dragging = false;
+              struct Cube { QVector3D pos, rot, scale{1,1,1}, color; };
               std::vector<Cube> m_cubes;
-              std::vector<std::vector<Cube>> m_undoStack;
-              std::vector<std::vector<Cube>> m_redoStack;
-
+              std::vector<std::vector<Cube>> m_undoStack, m_redoStack;
               QMatrix4x4 viewMatrix() const;
           };
           EOF
 
-          # ---------- glwidget.cpp ----------
           cat > src/glwidget.cpp << 'EOF'
           #include "glwidget.h"
           #include <QMouseEvent>
           #include <QWheelEvent>
           #include <QtMath>
           #include <QPainter>
-
-          GLWidget::GLWidget(QWidget *parent)
-              : QOpenGLWidget(parent)
-          {
+          GLWidget::GLWidget(QWidget *parent) : QOpenGLWidget(parent) {
               setMinimumSize(400, 300);
-              Cube c;
-              c.pos = {0, 0.5f, 0};
-              c.color = {0.9f, 0.35f, 0.3f};
-              m_cubes.push_back(c);
+              Cube c; c.pos = {0, 0.5f, 0}; c.color = {0.9f, 0.35f, 0.3f}; m_cubes.push_back(c);
           }
-
           void GLWidget::setTool(int t) { m_tool = t; update(); }
-          void GLWidget::addCube()
-          {
-              m_undoStack.push_back(m_cubes);
-              m_redoStack.clear();
-              Cube c;
-              c.pos = {float(m_cubes.size() % 4) * 1.5f - 2.0f, 0.5f, 0};
-              static const QVector3D colors[] = {
-                  {0.9f,0.35f,0.3f},{0.3f,0.7f,0.9f},{0.5f,0.85f,0.4f},
-                  {0.95f,0.8f,0.3f},{0.7f,0.45f,0.9f}
-              };
-              c.color = colors[m_cubes.size() % 5];
-              m_cubes.push_back(c);
-              update();
+          void GLWidget::addCube() {
+              m_undoStack.push_back(m_cubes); m_redoStack.clear();
+              Cube c; c.pos = {float(m_cubes.size() % 4) * 1.5f - 2.0f, 0.5f, 0};
+              static const QVector3D colors[] = {{0.9f,0.35f,0.3f},{0.3f,0.7f,0.9f},{0.5f,0.85f,0.4f},{0.95f,0.8f,0.3f},{0.7f,0.45f,0.9f}};
+              c.color = colors[m_cubes.size() % 5]; m_cubes.push_back(c); update();
           }
-          void GLWidget::undo()
-          {
-              if (m_undoStack.empty()) return;
-              m_redoStack.push_back(m_cubes);
-              m_cubes = m_undoStack.back();
-              m_undoStack.pop_back();
-              update();
-          }
-          void GLWidget::redo()
-          {
-              if (m_redoStack.empty()) return;
-              m_undoStack.push_back(m_cubes);
-              m_cubes = m_redoStack.back();
-              m_redoStack.pop_back();
-              update();
-          }
-
-          void GLWidget::initializeGL()
-          {
-              initializeOpenGLFunctions();
-              glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
-              glEnable(GL_DEPTH_TEST);
-          }
-
-          void GLWidget::resizeGL(int w, int h)
-          {
-              glViewport(0, 0, w, h);
-          }
-
-          QMatrix4x4 GLWidget::viewMatrix() const
-          {
-              QMatrix4x4 m;
-              float cy = qCos(m_yaw), sy = qSin(m_yaw);
-              float cp = qCos(m_pitch), sp = qSin(m_pitch);
+          void GLWidget::undo() { if (m_undoStack.empty()) return; m_redoStack.push_back(m_cubes); m_cubes = m_undoStack.back(); m_undoStack.pop_back(); update(); }
+          void GLWidget::redo() { if (m_redoStack.empty()) return; m_undoStack.push_back(m_cubes); m_cubes = m_redoStack.back(); m_redoStack.pop_back(); update(); }
+          void GLWidget::initializeGL() { initializeOpenGLFunctions(); glClearColor(0.12f, 0.12f, 0.14f, 1.0f); glEnable(GL_DEPTH_TEST); }
+          void GLWidget::resizeGL(int w, int h) { glViewport(0, 0, w, h); }
+          QMatrix4x4 GLWidget::viewMatrix() const {
+              QMatrix4x4 m; float cy = qCos(m_yaw), sy = qSin(m_yaw), cp = qCos(m_pitch), sp = qSin(m_pitch);
               QVector3D eye = m_target + QVector3D(cp * sy, sp, cp * cy) * m_dist;
-              m.lookAt(eye, m_target, {0, 1, 0});
-              return m;
+              m.lookAt(eye, m_target, {0, 1, 0}); return m;
           }
-
-          void GLWidget::paintGL()
-          {
+          void GLWidget::paintGL() {
               glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-              QMatrix4x4 proj;
-              proj.perspective(60.0f, float(width()) / qMax(1, height()), 0.1f, 100.0f);
+              QMatrix4x4 proj; proj.perspective(60.0f, float(width()) / qMax(1, height()), 0.1f, 100.0f);
               QMatrix4x4 view = viewMatrix();
-
-              QPainter painter(this);
-              painter.setRenderHint(QPainter::Antialiasing);
-
+              QPainter painter(this); painter.setRenderHint(QPainter::Antialiasing);
               auto project = [&](const QVector3D &p) -> QPointF {
-                  QMatrix4x4 mvp = proj * view;
-                  QVector4D clip = mvp * QVector4D(p, 1.0f);
+                  QMatrix4x4 mvp = proj * view; QVector4D clip = mvp * QVector4D(p, 1.0f);
                   if (qAbs(clip.w()) < 1e-6f) return {-1000, -1000};
-                  float x = clip.x() / clip.w();
-                  float y = clip.y() / clip.w();
-                  return QPointF((x * 0.5f + 0.5f) * width(),
-                                 (1.0f - (y * 0.5f + 0.5f)) * height());
+                  float x = clip.x() / clip.w(), y = clip.y() / clip.w();
+                  return QPointF((x * 0.5f + 0.5f) * width(), (1.0f - (y * 0.5f + 0.5f)) * height());
               };
-
               painter.setPen(QPen(QColor(60, 60, 70), 1));
               for (int i = -10; i <= 10; ++i) {
                   painter.drawLine(project({float(i), 0, -10}), project({float(i), 0, 10}));
                   painter.drawLine(project({-10, 0, float(i)}), project({10, 0, float(i)}));
               }
-
               for (const auto &c : m_cubes) {
                   QVector3D corners[8] = {
-                      c.pos + QVector3D(-0.5f,-0.5f,-0.5f) * c.scale,
-                      c.pos + QVector3D( 0.5f,-0.5f,-0.5f) * c.scale,
-                      c.pos + QVector3D( 0.5f, 0.5f,-0.5f) * c.scale,
-                      c.pos + QVector3D(-0.5f, 0.5f,-0.5f) * c.scale,
-                      c.pos + QVector3D(-0.5f,-0.5f, 0.5f) * c.scale,
-                      c.pos + QVector3D( 0.5f,-0.5f, 0.5f) * c.scale,
-                      c.pos + QVector3D( 0.5f, 0.5f, 0.5f) * c.scale,
-                      c.pos + QVector3D(-0.5f, 0.5f, 0.5f) * c.scale,
+                      c.pos + QVector3D(-0.5f,-0.5f,-0.5f)*c.scale, c.pos + QVector3D(0.5f,-0.5f,-0.5f)*c.scale,
+                      c.pos + QVector3D(0.5f,0.5f,-0.5f)*c.scale, c.pos + QVector3D(-0.5f,0.5f,-0.5f)*c.scale,
+                      c.pos + QVector3D(-0.5f,-0.5f,0.5f)*c.scale, c.pos + QVector3D(0.5f,-0.5f,0.5f)*c.scale,
+                      c.pos + QVector3D(0.5f,0.5f,0.5f)*c.scale, c.pos + QVector3D(-0.5f,0.5f,0.5f)*c.scale
                   };
-                  QPointF pts[8];
-                  for (int i = 0; i < 8; ++i) pts[i] = project(corners[i]);
-
+                  QPointF pts[8]; for (int i = 0; i < 8; ++i) pts[i] = project(corners[i]);
                   QColor col(int(c.color.x()*255), int(c.color.y()*255), int(c.color.z()*255));
-                  painter.setPen(QPen(col.darker(120), 2));
-                  painter.setBrush(col);
-
-                  auto face = [&](int a, int b, int c_, int d) {
-                      QPolygonF poly;
-                      poly << pts[a] << pts[b] << pts[c_] << pts[d];
-                      painter.drawPolygon(poly);
-                  };
-                  face(0,1,2,3);
-                  face(4,5,6,7);
-                  face(0,1,5,4);
-                  face(2,3,7,6);
-                  face(0,3,7,4);
-                  face(1,2,6,5);
+                  painter.setPen(QPen(col.darker(120), 2)); painter.setBrush(col);
+                  auto face = [&](int a, int b, int c_, int d) { QPolygonF poly; poly << pts[a] << pts[b] << pts[c_] << pts[d]; painter.drawPolygon(poly); };
+                  face(0,1,2,3); face(4,5,6,7); face(0,1,5,4); face(2,3,7,6); face(0,3,7,4); face(1,2,6,5);
               }
-
               QString toolName[] = {"Mover", "Rotacionar", "Selecionar"};
               painter.setPen(Qt::white);
-              painter.drawText(20, height() - 20, QString("Ferramenta: %1  |  Cubos: %2")
-                               .arg(toolName[m_tool]).arg(m_cubes.size()));
+              painter.drawText(20, height() - 20, QString("Ferramenta: %1  |  Cubos: %2").arg(toolName[m_tool]).arg(m_cubes.size()));
           }
-
-          void GLWidget::mousePressEvent(QMouseEvent *e)
-          {
-              m_lastPos = e->pos();
-              m_dragging = true;
+          void GLWidget::mousePressEvent(QMouseEvent *e) { m_lastPos = e->pos(); m_dragging = true; }
+          void GLWidget::mouseMoveEvent(QMouseEvent *e) {
+              if (!m_dragging) return; QPoint d = e->pos() - m_lastPos; m_lastPos = e->pos();
+              if (e->buttons() & Qt::LeftButton) { m_yaw -= d.x() * 0.008f; m_pitch = qBound(-1.4f, m_pitch + d.y() * 0.008f, 1.4f); update(); }
+              else if (e->buttons() & Qt::RightButton) { m_target.setX(m_target.x() - d.x() * 0.01f); m_target.setY(m_target.y() + d.y() * 0.01f); update(); }
           }
-
-          void GLWidget::mouseMoveEvent(QMouseEvent *e)
-          {
-              if (!m_dragging) return;
-              QPoint d = e->pos() - m_lastPos;
-              m_lastPos = e->pos();
-
-              if (e->buttons() & Qt::LeftButton) {
-                  m_yaw   -= d.x() * 0.008f;
-                  m_pitch  = qBound(-1.4f, m_pitch + d.y() * 0.008f, 1.4f);
-                  update();
-              } else if (e->buttons() & Qt::RightButton) {
-                  m_target.setX(m_target.x() - d.x() * 0.01f);
-                  m_target.setY(m_target.y() + d.y() * 0.01f);
-                  update();
-              }
-          }
-
-          void GLWidget::wheelEvent(QWheelEvent *e)
-          {
-              float delta = e->angleDelta().y() / 120.0f;
-              m_dist = qBound(1.0f, m_dist - delta * 0.8f, 40.0f);
-              update();
-          }
+          void GLWidget::wheelEvent(QWheelEvent *e) { float delta = e->angleDelta().y() / 120.0f; m_dist = qBound(1.0f, m_dist - delta * 0.8f, 40.0f); update(); }
           EOF
 
-          # ---------- AndroidManifest ----------
           cat > android/AndroidManifest.xml << 'EOF'
           <?xml version="1.0"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.nomad.animator"
-              android:versionCode="1"
-              android:versionName="1.0">
+              package="com.nomad.animator" android:versionCode="1" android:versionName="1.0">
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-feature android:glEsVersion="0x00030000" android:required="true"/>
-              <application android:label="Nomad Animator"
-                           android:extractNativeLibs="true">
+              <application android:label="Nomad Animator" android:extractNativeLibs="true">
                   <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
                       android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
-                      android:launchMode="singleTop"
-                      android:screenOrientation="landscape"
-                      android:exported="true"
+                      android:launchMode="singleTop" android:screenOrientation="landscape" android:exported="true"
                       android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
@@ -646,20 +393,23 @@ jobs:
           </resources>
           EOF
 
-          echo "Arquivos Qt 6 criados com sucesso."
+          echo "Arquivos Qt 6 criados."
 
-      - name: Build APK (Qt 6 Android)
+      - name: Build APK
         run: |
           set -e
-          export QT_HOST=$HOME/Qt/6.7.3/gcc_64
-          export QT_ANDROID=$HOME/Qt/6.7.3/android_arm64_v8a
-          export PATH=$QT_HOST/bin:$PATH
+          export QT_ROOT="${{ runner.temp }}/Qt/6.7.3"
+          export QT_HOST="$QT_ROOT/gcc_64"
+          [ -d "$QT_HOST" ] || QT_HOST="$QT_ROOT/linux_gcc_64"
+          export QT_ANDROID="$QT_ROOT/android_arm64_v8a"
+          export PATH="$QT_HOST/bin:$PATH"
           export ANDROID_SDK_ROOT=$ANDROID_HOME
           export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.1.10909125
-
-          mkdir build && cd build
-
-          $QT_ANDROID/bin/qt-cmake \
+          echo "QT_HOST=$QT_HOST"
+          echo "QT_ANDROID=$QT_ANDROID"
+          ls -la "$QT_ROOT" || true
+          mkdir -p build && cd build
+          "$QT_ANDROID/bin/qt-cmake" \
             -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
             -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
             -DANDROID_ABI=arm64-v8a \
@@ -667,11 +417,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -GNinja \
             ..
-
           cmake --build . --parallel $(nproc) || true
           cmake --build . --parallel $(nproc) --target apk || true
-
-          echo "Build finalizado. Procurando APK..."
           find . -name "*.apk" -o -name "*.aab" | head -20
 
       - name: Upload APK
@@ -682,10 +429,3 @@ jobs:
             build/**/*.apk
             build/**/*.aab
           if-no-files-found: warn
-
-      - name: Salvar arquivos no repositório (opcional)
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add CMakeLists.txt src android || true
-          git diff --cached --quiet || (git commit -m "Projeto convertido para Qt 6 + toolbar da imagem" && git push) || echo "Sem permissão de push"
