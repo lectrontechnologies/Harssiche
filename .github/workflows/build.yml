@@ -39,16 +39,16 @@ jobs:
             SDKM=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
           fi
           yes | $SDKM --licenses >/dev/null || true
-          $SDKM "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393"
+          $SDKM "platforms;android-34" "platforms;android-33" "build-tools;34.0.0" "ndk;25.1.8937393"
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
 
       - name: Create project files
         run: |
-          # Remove arquivos do projeto nativo antigo que atrapalham o Gradle do Qt
+          # Remove arquivos do projeto nativo antigo
           rm -f settings.gradle build.gradle
-          rm -rf .gradle src/main build.gradle settings.gradle
+          rm -rf .gradle
 
           mkdir -p src android/res/values
           cat > CMakeLists.txt << 'EOF'
@@ -196,7 +196,7 @@ jobs:
 
           cat > android/AndroidManifest.xml << 'EOF'
           <?xml version="1.0"?>
-          <manifest package="com.nomad.animator" xmlns:android="http://schemas.android.com/apk/res/android">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-feature android:glEsVersion="0x00030000" android:required="true"/>
             <application android:label="Nomad Animator" android:extractNativeLibs="true">
               <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
@@ -212,13 +212,19 @@ jobs:
             </application>
           </manifest>
           EOF
-          echo "android.useAndroidX=true" > android/gradle.properties
-          echo "Project files created. Old gradle files removed."
+
+          # Força SDK 34 e suprime avisos
+          cat > android/gradle.properties << 'EOF'
+          android.useAndroidX=true
+          android.suppressUnsupportedCompileSdk=34
+          android.defaults.buildfeatures.buildconfig=true
+          android.nonTransitiveRClass=false
+          EOF
+          echo "Project files created."
 
       - name: Build APK
         run: |
           set -e
-          # Garante que não existe settings.gradle na raiz
           rm -f settings.gradle build.gradle
           rm -rf .gradle
 
@@ -235,13 +241,21 @@ jobs:
             -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
             -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_PLATFORM=android-34 \
             -DCMAKE_BUILD_TYPE=Release \
             -GNinja \
             ..
 
           cmake --build . --parallel $(nproc)
-          cmake --build . --target apk || true
+
+          # Força plataforma 34 no androiddeployqt
+          $QT_HOST/bin/androiddeployqt \
+            --input android-NomadAnimator-deployment-settings.json \
+            --output android-build \
+            --android-platform android-34 \
+            --jdk $JAVA_HOME \
+            --gradle \
+            --verbose || true
 
           echo "=== Procurando APK ==="
           find . -name "*.apk" -o -name "*.aab" | head -20
