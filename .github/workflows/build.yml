@@ -2102,7 +2102,8 @@ jobs:
           host: linux
           target: android
           arch: android_arm64_v8a
-          modules: 'qtdeclarative qtshadertools qtquickcontrols2'
+          modules: 'qtdeclarative qtshadertools'
+          aqtversion: '==3.2.*'
       - name: Criar aplicativo Qt Quick real
         shell: bash
         run: |
