@@ -1,4 +1,4 @@
-name: Build Nomad Animator (Qt 6.5)
+name: Build Nomad Animator (ImGui)
 on: [push, workflow_dispatch]
 permissions:
   contents: write
@@ -9,16 +9,340 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
-      - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0 python3-pip
-      - name: Install aqt
-        run: pip3 install aqtinstall==3.1.16
-      - name: Install Qt 6.5.3
+
+      - name: Create project + download ImGui
         run: |
-          mkdir -p $HOME/Qt
-          aqt install-qt linux desktop 6.5.3 gcc_64 -O $HOME/Qt
-          aqt install-qt linux android 6.5.3 android_arm64_v8a -O $HOME/Qt
-      - name: Android SDK + NDK
+          set -e
+          rm -f settings.gradle build.gradle
+          rm -rf src .gradle
+
+          mkdir -p src/main/cpp src/main/java/com/nomad/animator
+
+          # Gradle
+          cat > build.gradle << 'EOF'
+          plugins { id 'com.android.application' version '8.2.0' }
+          android {
+              namespace 'com.nomad.animator'
+              compileSdk 34
+              ndkVersion '25.1.8937393'
+              defaultConfig {
+                  applicationId 'com.nomad.animator'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+                  ndk { abiFilters 'arm64-v8a' }
+                  externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared' } }
+              }
+              externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt' } }
+              buildTypes { release { minifyEnabled false } }
+          }
+          EOF
+
+          cat > settings.gradle << 'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "NomadAnimator"
+          EOF
+
+          # Manifest
+          cat > src/main/AndroidManifest.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-feature android:glEsVersion="0x00030000" android:required="true"/>
+            <application android:label="Nomad Animator" android:hasCode="true">
+              <activity android:name="android.app.NativeActivity"
+                  android:exported="true"
+                  android:screenOrientation="landscape"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+                  android:configChanges="orientation|keyboardHidden|screenSize">
+                <meta-data android:name="android.app.lib_name" android:value="nomad"/>
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+
+          # CMake
+          cat > src/main/cpp/CMakeLists.txt << 'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(nomad)
+          set(CMAKE_CXX_STANDARD 17)
+          add_library(nomad SHARED
+            main.cpp
+            imgui/imgui.cpp
+            imgui/imgui_draw.cpp
+            imgui/imgui_tables.cpp
+            imgui/imgui_widgets.cpp
+            imgui/backends/imgui_impl_opengl3.cpp
+            android_native_app_glue.c
+          )
+          target_include_directories(nomad PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+            ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
+            ${ANDROID_NDK}/sources/android/native_app_glue
+          )
+          target_compile_definitions(nomad PRIVATE IMGUI_IMPL_OPENGL_ES3)
+          find_library(log-lib log)
+          find_library(android-lib android)
+          find_library(EGL-lib EGL)
+          find_library(GLESv3-lib GLESv3)
+          target_link_libraries(nomad ${log-lib} ${android-lib} ${EGL-lib} ${GLESv3-lib})
+          EOF
+
+          # native_app_glue
+          cp $ANDROID_NDK/sources/android/native_app_glue/android_native_app_glue.c src/main/cpp/ 2>/dev/null || \
+          cp /usr/local/lib/android/sdk/ndk/*/sources/android/native_app_glue/android_native_app_glue.c src/main/cpp/ 2>/dev/null || true
+
+          # Download Dear ImGui
+          git clone --depth 1 https://github.com/ocornut/imgui.git src/main/cpp/imgui
+
+          # Main app with ImGui toolbar
+          cat > src/main/cpp/main.cpp << 'EOF'
+          #include <android_native_app_glue.h>
+          #include <android/log.h>
+          #include <EGL/egl.h>
+          #include <GLES3/gl3.h>
+          #include <cmath>
+          #include <vector>
+          #include <string>
+
+          #include "imgui.h"
+          #include "backends/imgui_impl_opengl3.h"
+
+          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "Nomad", __VA_ARGS__)
+
+          static android_app* g_app = nullptr;
+          static EGLDisplay g_display = EGL_NO_DISPLAY;
+          static EGLSurface g_surface = EGL_NO_SURFACE;
+          static EGLContext g_context = EGL_NO_CONTEXT;
+          static int g_width = 0, g_height = 0;
+          static bool g_imgui_init = false;
+
+          // App state
+          static int g_tool = 0; // 0=move 1=rotate 2=select
+          static float g_yaw = 0.6f, g_pitch = 0.4f, g_dist = 8.f;
+          static float g_target[3] = {0, 0.5f, 0};
+
+          struct Cube { float pos[3]; float color[3]; };
+          static std::vector<Cube> g_cubes;
+          static std::vector<std::vector<Cube>> g_undo, g_redo;
+
+          static bool initEGL(ANativeWindow* window) {
+            g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+            eglInitialize(g_display, nullptr, nullptr);
+            const EGLint attribs[] = {
+              EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+              EGL_BLUE_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_RED_SIZE, 8,
+              EGL_DEPTH_SIZE, 24, EGL_NONE
+            };
+            EGLConfig config; EGLint num;
+            eglChooseConfig(g_display, attribs, &config, 1, &num);
+            EGLint ctxAttribs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+            g_context = eglCreateContext(g_display, config, nullptr, ctxAttribs);
+            g_surface = eglCreateWindowSurface(g_display, config, window, nullptr);
+            eglMakeCurrent(g_display, g_surface, g_surface, g_context);
+            eglQuerySurface(g_display, g_surface, EGL_WIDTH, &g_width);
+            eglQuerySurface(g_display, g_surface, EGL_HEIGHT, &g_height);
+            return true;
+          }
+
+          static void termEGL() {
+            if (g_display != EGL_NO_DISPLAY) {
+              eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+              if (g_context != EGL_NO_CONTEXT) eglDestroyContext(g_display, g_context);
+              if (g_surface != EGL_NO_SURFACE) eglDestroySurface(g_display, g_surface);
+              eglTerminate(g_display);
+            }
+            g_display = EGL_NO_DISPLAY; g_context = EGL_NO_CONTEXT; g_surface = EGL_NO_SURFACE;
+          }
+
+          static void initImGui() {
+            IMGUI_CHECKVERSION();
+            ImGui::CreateContext();
+            ImGuiIO& io = ImGui::GetIO();
+            io.IniFilename = nullptr;
+            io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+            ImGui::StyleColorsDark();
+            ImGuiStyle& style = ImGui::GetStyle();
+            style.WindowRounding = 8.f;
+            style.FrameRounding = 6.f;
+            style.Colors[ImGuiCol_WindowBg] = ImVec4(0.12f, 0.12f, 0.14f, 0.95f);
+            style.Colors[ImGuiCol_Button] = ImVec4(0.18f, 0.18f, 0.20f, 1.f);
+            style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.28f, 0.28f, 0.32f, 1.f);
+            style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.24f, 0.35f, 0.50f, 1.f);
+            ImGui_ImplOpenGL3_Init("#version 300 es");
+            g_imgui_init = true;
+          }
+
+          static void addCube() {
+            g_undo.push_back(g_cubes); g_redo.clear();
+            Cube c;
+            c.pos[0] = (g_cubes.size() % 4) * 1.5f - 2.f;
+            c.pos[1] = 0.5f; c.pos[2] = 0.f;
+            float cols[][3] = {{0.9f,0.35f,0.3f},{0.3f,0.7f,0.9f},{0.5f,0.85f,0.4f},{0.95f,0.8f,0.3f},{0.7f,0.45f,0.9f}};
+            int i = g_cubes.size() % 5;
+            c.color[0]=cols[i][0]; c.color[1]=cols[i][1]; c.color[2]=cols[i][2];
+            g_cubes.push_back(c);
+          }
+
+          static void undo() {
+            if (g_undo.empty()) return;
+            g_redo.push_back(g_cubes);
+            g_cubes = g_undo.back(); g_undo.pop_back();
+          }
+          static void redo() {
+            if (g_redo.empty()) return;
+            g_undo.push_back(g_cubes);
+            g_cubes = g_redo.back(); g_redo.pop_back();
+          }
+
+          static void drawToolbar() {
+            ImGuiIO& io = ImGui::GetIO();
+            const float barH = 52.f;
+            ImGui::SetNextWindowPos(ImVec2(0, 0));
+            ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, barH));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+            ImGui::Begin("##toolbar", nullptr,
+              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
+
+            // Left tools
+            if (ImGui::Button(g_tool==0 ? "[Move]" : "Move", ImVec2(64, 34))) g_tool = 0;
+            ImGui::SameLine();
+            if (ImGui::Button(g_tool==1 ? "[Rotate]" : "Rotate", ImVec2(64, 34))) g_tool = 1;
+            ImGui::SameLine();
+            if (ImGui::Button(g_tool==2 ? "[Select]" : "Select", ImVec2(64, 34))) g_tool = 2;
+            ImGui::SameLine();
+            if (ImGui::Button("+ Cube", ImVec2(64, 34))) addCube();
+
+            // Right actions
+            float rightX = io.DisplaySize.x - 220;
+            ImGui::SameLine(rightX);
+            if (ImGui::Button("Undo", ImVec2(56, 34))) undo();
+            ImGui::SameLine();
+            if (ImGui::Button("Redo", ImVec2(56, 34))) redo();
+            ImGui::SameLine();
+            if (ImGui::Button("Menu", ImVec2(56, 34))) { /* menu */ }
+
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+
+            // Floating cube button below toolbar (like the image)
+            ImGui::SetNextWindowPos(ImVec2(12, barH + 8));
+            ImGui::SetNextWindowSize(ImVec2(48, 48));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
+            ImGui::Begin("##cube", nullptr,
+              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
+            if (ImGui::Button("Cube", ImVec2(40, 40))) addCube();
+            ImGui::End();
+            ImGui::PopStyleVar();
+          }
+
+          static void drawScene() {
+            glClearColor(0.12f, 0.12f, 0.14f, 1.f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glEnable(GL_DEPTH_TEST);
+            // Simple grid + cubes would go here with a basic shader.
+            // For now the ImGui overlay is the focus.
+          }
+
+          static void frame() {
+            if (!g_imgui_init) return;
+            ImGuiIO& io = ImGui::GetIO();
+            io.DisplaySize = ImVec2((float)g_width, (float)g_height);
+            io.DeltaTime = 1.f / 60.f;
+
+            ImGui_ImplOpenGL3_NewFrame();
+            ImGui::NewFrame();
+            drawToolbar();
+
+            // Status
+            ImGui::SetNextWindowPos(ImVec2(12, g_height - 40));
+            ImGui::Begin("##status", nullptr,
+              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoBackground);
+            const char* tools[] = {"Move", "Rotate", "Select"};
+            ImGui::Text("Tool: %s  |  Cubes: %d", tools[g_tool], (int)g_cubes.size());
+            ImGui::End();
+
+            ImGui::Render();
+            drawScene();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+            eglSwapBuffers(g_display, g_surface);
+          }
+
+          static int32_t onInput(android_app* app, AInputEvent* event) {
+            if (!g_imgui_init) return 0;
+            ImGuiIO& io = ImGui::GetIO();
+            int32_t type = AInputEvent_getType(event);
+            if (type == AINPUT_EVENT_TYPE_MOTION) {
+              int32_t action = AMotionEvent_getAction(event) & AMOTION_EVENT_ACTION_MASK;
+              float x = AMotionEvent_getX(event, 0);
+              float y = AMotionEvent_getY(event, 0);
+              io.AddMousePosEvent(x, y);
+              if (action == AMOTION_EVENT_ACTION_DOWN)
+                io.AddMouseButtonEvent(0, true);
+              else if (action == AMOTION_EVENT_ACTION_UP || action == AMOTION_EVENT_ACTION_CANCEL)
+                io.AddMouseButtonEvent(0, false);
+              return io.WantCaptureMouse ? 1 : 0;
+            }
+            return 0;
+          }
+
+          static void onCmd(android_app* app, int32_t cmd) {
+            switch (cmd) {
+              case APP_CMD_INIT_WINDOW:
+                if (app->window) {
+                  initEGL(app->window);
+                  initImGui();
+                  if (g_cubes.empty()) addCube();
+                }
+                break;
+              case APP_CMD_TERM_WINDOW:
+                if (g_imgui_init) {
+                  ImGui_ImplOpenGL3_Shutdown();
+                  ImGui::DestroyContext();
+                  g_imgui_init = false;
+                }
+                termEGL();
+                break;
+              case APP_CMD_WINDOW_RESIZED:
+              case APP_CMD_CONFIG_CHANGED:
+                if (g_display != EGL_NO_DISPLAY && g_surface != EGL_NO_SURFACE) {
+                  eglQuerySurface(g_display, g_surface, EGL_WIDTH, &g_width);
+                  eglQuerySurface(g_display, g_surface, EGL_HEIGHT, &g_height);
+                  glViewport(0, 0, g_width, g_height);
+                }
+                break;
+            }
+          }
+
+          void android_main(android_app* app) {
+            g_app = app;
+            app->onAppCmd = onCmd;
+            app->onInputEvent = onInput;
+            while (true) {
+              int events; android_poll_source* source;
+              while (ALooper_pollAll(g_imgui_init ? 0 : -1, nullptr, &events, (void**)&source) >= 0) {
+                if (source) source->process(app, source);
+                if (app->destroyRequested) return;
+              }
+              if (g_imgui_init && g_display != EGL_NO_DISPLAY) frame();
+            }
+          }
+          EOF
+
+          echo "Project + ImGui created"
+
+      - name: Android SDK
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKM=$(ls $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)
@@ -30,198 +354,25 @@ jobs:
             SDKM=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
           fi
           yes | $SDKM --licenses >/dev/null || true
-          $SDKM "platforms;android-33" "build-tools;33.0.2" "ndk;25.1.8937393"
+          $SDKM "platforms;android-34" "build-tools;34.0.0" "ndk;25.1.8937393" "cmake;3.22.1"
+          # copy native_app_glue if missing
+          NDK=$ANDROID_HOME/ndk/25.1.8937393
+          if [ ! -f src/main/cpp/android_native_app_glue.c ]; then
+            cp $NDK/sources/android/native_app_glue/android_native_app_glue.c src/main/cpp/
+            cp $NDK/sources/android/native_app_glue/android_native_app_glue.h src/main/cpp/
+          fi
           echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
-      - name: Create project
+
+      - uses: gradle/actions/setup-gradle@v3
+        with: { gradle-version: "8.4" }
+
+      - name: Build APK
         run: |
-          rm -f settings.gradle build.gradle
-          rm -rf .gradle src android
-          mkdir -p src android
-          cat > CMakeLists.txt << 'EOF'
-          cmake_minimum_required(VERSION 3.16)
-          project(NomadAnimator LANGUAGES CXX)
-          set(CMAKE_CXX_STANDARD 17)
-          set(CMAKE_AUTOMOC ON)
-          find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
-          qt_add_executable(NomadAnimator
-            src/main.cpp src/mainwindow.cpp src/mainwindow.h
-            src/glwidget.cpp src/glwidget.h)
-          target_link_libraries(NomadAnimator PRIVATE
-            Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
-          set_target_properties(NomadAnimator PROPERTIES
-            QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android
-            QT_ANDROID_PACKAGE_NAME "com.nomad.animator"
-            QT_ANDROID_APP_NAME "Nomad Animator"
-            QT_ANDROID_TARGET_SDK_VERSION 33
-            QT_ANDROID_MIN_SDK_VERSION 24
-            QT_ANDROID_ABIS "arm64-v8a")
-          EOF
-          cat > src/main.cpp << 'EOF'
-          #include <QApplication>
-          #include <QSurfaceFormat>
-          #include "mainwindow.h"
-          int main(int argc, char *argv[]) {
-            QSurfaceFormat fmt; fmt.setVersion(3,0); fmt.setProfile(QSurfaceFormat::CoreProfile);
-            QSurfaceFormat::setDefaultFormat(fmt);
-            QApplication app(argc, argv); app.setStyle("Fusion");
-            MainWindow w; w.show(); return app.exec();
-          }
-          EOF
-          cat > src/mainwindow.h << 'EOF'
-          #pragma once
-          #include <QMainWindow>
-          #include <QToolBar>
-          #include <QToolButton>
-          class GLWidget;
-          class MainWindow : public QMainWindow {
-            Q_OBJECT
-          public:
-            explicit MainWindow(QWidget *parent = nullptr);
-          private slots:
-            void onMove(); void onRotate(); void onSelect();
-            void onAddCube(); void onUndo(); void onRedo(); void onMenu();
-          private:
-            void createToolbars();
-            QIcon makeMoveIcon(); QIcon makeRotateIcon(); QIcon makeSelectIcon();
-            QIcon makeCubeIcon(); QIcon makeUndoIcon(); QIcon makeRedoIcon(); QIcon makeMenuIcon();
-            GLWidget *m_gl = nullptr;
-            QToolButton *m_cubeBtn = nullptr;
-          };
-          EOF
-          cat > src/mainwindow.cpp << 'EOF'
-          #include "mainwindow.h"
-          #include "glwidget.h"
-          #include <QPainter>
-          #include <QPixmap>
-          #include <QApplication>
-          #include <QMessageBox>
-          #include <QActionGroup>
-          MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-            setWindowTitle("Nomad Animator"); resize(1280,720);
-            m_gl = new GLWidget(this); setCentralWidget(m_gl); createToolbars();
-            qApp->setStyleSheet("QMainWindow,QWidget{background:#1e1e1e;color:#e0e0e0;}QToolBar{background:#2a2a2a;border:none;spacing:4px;padding:4px;}QToolButton{background:transparent;border:none;border-radius:6px;padding:6px;min-width:36px;min-height:36px;}QToolButton:hover{background:#3a3a3a;}QToolButton:checked,QToolButton:pressed{background:#3d5a80;}");
-          }
-          void MainWindow::createToolbars() {
-            QToolBar *left = addToolBar("Tools"); left->setMovable(false); left->setIconSize(QSize(28,28));
-            QAction *a1=left->addAction(makeMoveIcon(),"Mover",this,&MainWindow::onMove); a1->setCheckable(true); a1->setChecked(true);
-            QAction *a2=left->addAction(makeRotateIcon(),"Rotacionar",this,&MainWindow::onRotate); a2->setCheckable(true);
-            QAction *a3=left->addAction(makeSelectIcon(),"Selecionar",this,&MainWindow::onSelect); a3->setCheckable(true);
-            QActionGroup *g=new QActionGroup(this); g->addAction(a1); g->addAction(a2); g->addAction(a3); g->setExclusive(true);
-            m_cubeBtn=new QToolButton(this); m_cubeBtn->setIcon(makeCubeIcon()); m_cubeBtn->setIconSize(QSize(32,32)); m_cubeBtn->setFixedSize(48,48);
-            m_cubeBtn->setStyleSheet("QToolButton{background:#2a2a2a;border-radius:8px;}QToolButton:hover{background:#3a3a3a;}");
-            connect(m_cubeBtn,&QToolButton::clicked,this,&MainWindow::onAddCube); m_cubeBtn->move(12,56); m_cubeBtn->show();
-            QToolBar *right=addToolBar("Actions"); right->setMovable(false); right->setIconSize(QSize(26,26));
-            QWidget *sp=new QWidget; sp->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred); right->addWidget(sp);
-            right->addAction(makeUndoIcon(),"Desfazer",this,&MainWindow::onUndo);
-            right->addAction(makeRedoIcon(),"Refazer",this,&MainWindow::onRedo);
-            right->addAction(makeMenuIcon(),"Menu",this,&MainWindow::onMenu);
-          }
-          QIcon MainWindow::makeMoveIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.drawLine(12,32,52,32);p.drawLine(12,32,22,22);p.drawLine(12,32,22,42);p.drawLine(52,32,42,22);p.drawLine(52,32,42,42);return QIcon(px);}
-          QIcon MainWindow::makeRotateIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.drawArc(14,14,36,36,40*16,280*16);p.drawLine(48,22,42,14);p.drawLine(48,22,54,18);return QIcon(px);}
-          QIcon MainWindow::makeSelectIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);QPen pen(Qt::white,3,Qt::DashLine);pen.setDashPattern({4,3});p.setPen(pen);p.drawRoundedRect(12,12,40,40,6,6);return QIcon(px);}
-          QIcon MainWindow::makeCubeIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,3));p.drawPolygon(QPolygon()<<QPoint(18,28)<<QPoint(46,28)<<QPoint(46,52)<<QPoint(18,52));p.drawPolygon(QPolygon()<<QPoint(18,28)<<QPoint(30,16)<<QPoint(58,16)<<QPoint(46,28));p.drawPolygon(QPolygon()<<QPoint(46,28)<<QPoint(58,16)<<QPoint(58,40)<<QPoint(46,52));return QIcon(px);}
-          QIcon MainWindow::makeUndoIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.drawArc(16,16,32,32,30*16,200*16);p.drawLine(16,28,10,20);p.drawLine(16,28,24,20);return QIcon(px);}
-          QIcon MainWindow::makeRedoIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,4,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));p.drawArc(16,16,32,32,150*16,-200*16);p.drawLine(48,28,54,20);p.drawLine(48,28,40,20);return QIcon(px);}
-          QIcon MainWindow::makeMenuIcon(){QPixmap px(64,64);px.fill(Qt::transparent);QPainter p(&px);p.setRenderHint(QPainter::Antialiasing);p.setPen(QPen(Qt::white,4,Qt::SolidLine,Qt::RoundCap));p.drawLine(16,22,48,22);p.drawLine(16,32,48,32);p.drawLine(16,42,48,42);return QIcon(px);}
-          void MainWindow::onMove(){m_gl->setTool(0);} void MainWindow::onRotate(){m_gl->setTool(1);} void MainWindow::onSelect(){m_gl->setTool(2);}
-          void MainWindow::onAddCube(){m_gl->addCube();} void MainWindow::onUndo(){m_gl->undo();} void MainWindow::onRedo(){m_gl->redo();}
-          void MainWindow::onMenu(){QMessageBox::information(this,"Menu","Nomad Animator (Qt 6)");}
-          EOF
-          cat > src/glwidget.h << 'EOF'
-          #pragma once
-          #include <QOpenGLWidget>
-          #include <QOpenGLExtraFunctions>
-          #include <QMatrix4x4>
-          #include <QVector3D>
-          #include <vector>
-          class GLWidget : public QOpenGLWidget, protected QOpenGLExtraFunctions {
-            Q_OBJECT
-          public:
-            explicit GLWidget(QWidget *parent=nullptr);
-            void setTool(int t); void addCube(); void undo(); void redo();
-          protected:
-            void initializeGL() override; void resizeGL(int,int) override; void paintGL() override;
-            void mousePressEvent(QMouseEvent*) override; void mouseMoveEvent(QMouseEvent*) override;
-            void wheelEvent(QWheelEvent*) override;
-          private:
-            int m_tool=0; float m_yaw=0.6f,m_pitch=0.4f,m_dist=8.f;
-            QVector3D m_target{0,0.5f,0}; QPoint m_last; bool m_drag=false;
-            struct Cube{QVector3D pos,scale{1,1,1},color;};
-            std::vector<Cube> m_cubes; std::vector<std::vector<Cube>> m_undo,m_redo;
-            QMatrix4x4 view() const;
-          };
-          EOF
-          cat > src/glwidget.cpp << 'EOF'
-          #include "glwidget.h"
-          #include <QMouseEvent>
-          #include <QWheelEvent>
-          #include <QtMath>
-          #include <QPainter>
-          GLWidget::GLWidget(QWidget *p):QOpenGLWidget(p){setMinimumSize(400,300);Cube c;c.pos={0,0.5f,0};c.color={0.9f,0.35f,0.3f};m_cubes.push_back(c);}
-          void GLWidget::setTool(int t){m_tool=t;update();}
-          void GLWidget::addCube(){m_undo.push_back(m_cubes);m_redo.clear();Cube c;c.pos={float(m_cubes.size()%4)*1.5f-2.f,0.5f,0};static QVector3D cols[]={{0.9f,0.35f,0.3f},{0.3f,0.7f,0.9f},{0.5f,0.85f,0.4f},{0.95f,0.8f,0.3f},{0.7f,0.45f,0.9f}};c.color=cols[m_cubes.size()%5];m_cubes.push_back(c);update();}
-          void GLWidget::undo(){if(m_undo.empty())return;m_redo.push_back(m_cubes);m_cubes=m_undo.back();m_undo.pop_back();update();}
-          void GLWidget::redo(){if(m_redo.empty())return;m_undo.push_back(m_cubes);m_cubes=m_redo.back();m_redo.pop_back();update();}
-          void GLWidget::initializeGL(){initializeOpenGLFunctions();glClearColor(0.12f,0.12f,0.14f,1);glEnable(GL_DEPTH_TEST);}
-          void GLWidget::resizeGL(int w,int h){glViewport(0,0,w,h);}
-          QMatrix4x4 GLWidget::view() const {QMatrix4x4 m;float cy=qCos(m_yaw),sy=qSin(m_yaw),cp=qCos(m_pitch),sp=qSin(m_pitch);m.lookAt(m_target+QVector3D(cp*sy,sp,cp*cy)*m_dist,m_target,{0,1,0});return m;}
-          void GLWidget::paintGL(){glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);QMatrix4x4 proj;proj.perspective(60.f,float(width())/qMax(1,height()),0.1f,100.f);QMatrix4x4 v=view();QPainter painter(this);painter.setRenderHint(QPainter::Antialiasing);
-            auto pr=[&](QVector3D p){QVector4D c=(proj*v)*QVector4D(p,1);if(qAbs(c.w())<1e-6f)return QPointF(-999,-999);return QPointF((c.x()/c.w()*0.5f+0.5f)*width(),(1.f-(c.y()/c.w()*0.5f+0.5f))*height());};
-            painter.setPen(QPen(QColor(60,60,70),1));for(int i=-10;i<=10;i++){painter.drawLine(pr({float(i),0,-10}),pr({float(i),0,10}));painter.drawLine(pr({-10,0,float(i)}),pr({10,0,float(i)}));}
-            for(auto&c:m_cubes){QVector3D co[8]={c.pos+QVector3D(-.5f,-.5f,-.5f)*c.scale,c.pos+QVector3D(.5f,-.5f,-.5f)*c.scale,c.pos+QVector3D(.5f,.5f,-.5f)*c.scale,c.pos+QVector3D(-.5f,.5f,-.5f)*c.scale,c.pos+QVector3D(-.5f,-.5f,.5f)*c.scale,c.pos+QVector3D(.5f,-.5f,.5f)*c.scale,c.pos+QVector3D(.5f,.5f,.5f)*c.scale,c.pos+QVector3D(-.5f,.5f,.5f)*c.scale};QPointF pt[8];for(int i=0;i<8;i++)pt[i]=pr(co[i]);QColor col(c.color.x()*255,c.color.y()*255,c.color.z()*255);painter.setPen(QPen(col.darker(120),2));painter.setBrush(col);auto f=[&](int a,int b,int c,int d){QPolygonF poly;poly<<pt[a]<<pt[b]<<pt[c]<<pt[d];painter.drawPolygon(poly);};f(0,1,2,3);f(4,5,6,7);f(0,1,5,4);f(2,3,7,6);f(0,3,7,4);f(1,2,6,5);}
-            QString tn[]={"Mover","Rotacionar","Selecionar"};painter.setPen(Qt::white);painter.drawText(20,height()-20,QString("Ferramenta: %1 | Cubos: %2").arg(tn[m_tool]).arg(m_cubes.size()));}
-          void GLWidget::mousePressEvent(QMouseEvent *e){m_last=e->pos();m_drag=true;}
-          void GLWidget::mouseMoveEvent(QMouseEvent *e){if(!m_drag)return;QPoint d=e->pos()-m_last;m_last=e->pos();if(e->buttons()&Qt::LeftButton){m_yaw-=d.x()*0.008f;m_pitch=qBound(-1.4f,m_pitch+d.y()*0.008f,1.4f);update();}else if(e->buttons()&Qt::RightButton){m_target.setX(m_target.x()-d.x()*0.01f);m_target.setY(m_target.y()+d.y()*0.01f);update();}}
-          void GLWidget::wheelEvent(QWheelEvent *e){m_dist=qBound(1.f,m_dist-e->angleDelta().y()/120.f*0.8f,40.f);update();}
-          EOF
-          # Manifest mínimo - deixa o Qt completar o resto
-          cat > android/AndroidManifest.xml << 'EOF'
-          <?xml version="1.0"?>
-          <manifest package="org.qtproject.example.NomadAnimator" xmlns:android="http://schemas.android.com/apk/res/android" android:versionCode="1" android:versionName="1.0">
-              <application android:label="Nomad Animator" android:hardwareAccelerated="true">
-                  <activity android:name="org.qtproject.qt.android.bindings.QtActivity"
-                      android:configChanges="orientation|uiMode|screenLayout|screenSize|smallestScreenSize|layoutDirection|locale|fontScale|keyboard|keyboardHidden|navigation|mcc|mnc|density"
-                      android:launchMode="singleTop"
-                      android:screenOrientation="landscape"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                      <meta-data android:name="android.app.lib_name" android:value="-- %%INSERT_APP_LIB_NAME%% --"/>
-                      <meta-data android:name="android.app.arguments" android:value="-- %%INSERT_APP_ARGUMENTS%% --"/>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-          echo "Project created"
-      - name: Build
-        run: |
-          set -e
-          rm -f settings.gradle build.gradle
-          QT_HOST=$HOME/Qt/6.5.3/gcc_64
-          QT_ANDROID=$HOME/Qt/6.5.3/android_arm64_v8a
-          export PATH=$QT_HOST/bin:$PATH
-          export ANDROID_SDK_ROOT=$ANDROID_HOME
-          export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.1.8937393
-          mkdir build && cd build
-          $QT_ANDROID/bin/qt-cmake \
-            -DQT_HOST_PATH=$QT_HOST \
-            -DANDROID_SDK_ROOT=$ANDROID_SDK_ROOT \
-            -DANDROID_NDK_ROOT=$ANDROID_NDK_ROOT \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-33 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -GNinja \
-            ..
-          cmake --build . --parallel $(nproc)
-          # Usa o target apk do CMake (mais estável que chamar androiddeployqt na mão)
-          cmake --build . --target apk --verbose || true
-          find . -name "*.apk" | head -10
+          gradle assembleDebug --no-daemon
+          find build -name "*.apk"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: nomad-animator-qt6-apk
-          path: build/**/*.apk
+          name: nomad-animator-imgui-apk
+          path: build/outputs/apk/debug/*.apk
           if-no-files-found: warn
