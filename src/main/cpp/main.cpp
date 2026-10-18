@@ -9,7 +9,6 @@
 #include <vector>
 #include <algorithm>
 #include <ctime>
-#include <chrono>
 #include <cstdio>
 #include <cstdarg>
 #include <cstdint>
@@ -27,7 +26,6 @@
 #include <zlib.h>
 #include <cctype>
 #include <unordered_map>
-#include <mutex>
 #include <climits>
 #include <cerrno>
 #include <fcntl.h>
@@ -355,8 +353,6 @@ float gTX0=0,gTW=1;float tx(float t){return gTX0+(t*24-gVS)/(float)std::max(gVE-
 
 // ---------- EGL ----------
 EGLDisplay dpy=EGL_NO_DISPLAY;EGLSurface surf=EGL_NO_SURFACE;EGLContext ctx=EGL_NO_CONTEXT;bool ready=false;
-// Qt Quick owns the GL context and framebuffer in the Qt Android build.
-bool gQtMode=false;GLuint gQtFbo=0;bool gQtInitialized=false;std::mutex gQtMutex;
 bool initEGL(ANativeWindow*w){
  dpy=eglGetDisplay(EGL_DEFAULT_DISPLAY);eglInitialize(dpy,0,0);
  EGLint ca[]={EGL_RENDERABLE_TYPE,0x0040,EGL_SURFACE_TYPE,EGL_WINDOW_BIT,EGL_RED_SIZE,8,EGL_GREEN_SIZE,8,EGL_BLUE_SIZE,8,EGL_DEPTH_SIZE,24,EGL_SAMPLE_BUFFERS,1,EGL_SAMPLES,4,EGL_NONE};
@@ -1447,7 +1443,7 @@ void tlDrag(int mode,float x){float rng=(float)std::max(gFE-gFS,1);float u=U();i
  if(mode>=23&&mode<=26){float a=gFS/24.f,b=gFE/24.f;if(tm<a)tm=a;if(tm>b)tm=b;applyAnim();}}
 void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(int)roundf(tm*24);if(rel<.33f)f--;else if(rel>.66f)f++;tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
 void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
- bool post=!gQtMode&&gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,gQtMode?gQtFbo:(post?(gMsOK?gMsFbo:gFbo):0));
+ bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
  glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
  glEnable(GL_DEPTH_TEST);
  gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);}
@@ -1460,7 +1456,6 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
  glDisable(GL_DEPTH_TEST);
  if(gBones)drawBones();
- if(gQtMode){if(sel>=0&&tool<3)drawGizmo();return;}
  if(!gMcFinal)drawCtrls();
  if(sel>=0&&tool<3)drawGizmo();
  gBtn.clear();gBlock.clear();float u=U(),ML_=ML(),hH=8.6f*u;
@@ -1812,26 +1807,3 @@ void android_main(android_app*app){
   if(ready){double t=now();float dt=(float)(t-last);last=t;gDt=dt;gToastT-=dt;gFAcc+=dt;gFN++;if(gFAcc>=.5f){gFps=gFN/gFAcc;gFAcc=0;gFN=0;}for(float&fl:gFlash)if(fl>0)fl-=dt;
    if(playing){tm+=dt*gPlayDir;float a_=gFS/24.f,b_=gFE/24.f;if(tm>b_)tm=a_;if(tm<a_)tm=b_;applyAnim();}
    frame();}else last=now();}}
-
-// Qt adapter: these functions operate on the same scene vectors, animation,
-// selection, tools, transform gizmo and undo/redo history as the native engine.
-extern "C" void nomadQtInit(int w,int h){std::lock_guard<std::mutex> lock(gQtMutex);if(gQtInitialized)return;
- gQtMode=true;W=std::max(1,w);H=std::max(1,h);gSSAO=false;gMcPrev=false;gMcFinal=false;initGL();addObj(0);undoClear();gQtInitialized=true;}
-extern "C" void nomadQtRender(int w,int h,unsigned int fbo){std::lock_guard<std::mutex> lock(gQtMutex);gQtMode=true;W=std::max(1,w);H=std::max(1,h);gQtFbo=fbo;
- static auto last=std::chrono::steady_clock::now();auto now=std::chrono::steady_clock::now();gDt=std::chrono::duration<float>(now-last).count();last=now;
- if(playing){tm+=gDt*gPlayDir;float a_=gFS/24.f,b_=gFE/24.f;if(tm>b_)tm=a_;if(tm<a_)tm=b_;applyAnim();}gToastT-=gDt;frame();}
-extern "C" void nomadQtSetTool(int t){std::lock_guard<std::mutex> lock(gQtMutex);tool=std::clamp(t,0,3);}
-extern "C" void nomadQtAddObject(int mesh){std::lock_guard<std::mutex> lock(gQtMutex);addObj(std::clamp(mesh,0,2));undoCommit();}
-extern "C" void nomadQtRemoveSelected(){std::lock_guard<std::mutex> lock(gQtMutex);if(sel>=0&&sel<(int)objs.size()){delObj(sel);undoCommit();}}
-extern "C" void nomadQtUndo(){std::lock_guard<std::mutex> lock(gQtMutex);doUndo();}
-extern "C" void nomadQtRedo(){std::lock_guard<std::mutex> lock(gQtMutex);doRedo();}
-extern "C" void nomadQtSetFrame(int f){std::lock_guard<std::mutex> lock(gQtMutex);tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
-extern "C" void nomadQtTogglePlayback(){std::lock_guard<std::mutex> lock(gQtMutex);playing=!playing;if(playing)gPlayDir=1;}
-bool gQtTransform=false;
-extern "C" void nomadQtOrbit(float dx,float dy){std::lock_guard<std::mutex> lock(gQtMutex);orbit(dx,dy);}
-extern "C" int nomadQtPointerDown(float nx,float ny){std::lock_guard<std::mutex> lock(gQtMutex);float x=nx*W,y=ny*H;int a=hitGizmo(x,y);gQtTransform=a>=0;if(gQtTransform){gAxis=a;gDrag=true;}return gQtTransform?1:0;}
-extern "C" void nomadQtPointerMove(float dx,float dy){std::lock_guard<std::mutex> lock(gQtMutex);if(gQtTransform)gdrag(dx,dy);else orbit(dx,dy);}
-extern "C" void nomadQtPointerUp(){std::lock_guard<std::mutex> lock(gQtMutex);gDrag=false;gQtTransform=false;undoCommit();}
-extern "C" void nomadQtPick(float nx,float ny){std::lock_guard<std::mutex> lock(gQtMutex);pick(nx*W,ny*H);undoCommit();}
-extern "C" int nomadQtObjectCount(){std::lock_guard<std::mutex> lock(gQtMutex);return (int)objs.size();}
-extern "C" void nomadQtObjectName(int i,char*out,int cap){std::lock_guard<std::mutex> lock(gQtMutex);if(!out||cap<1)return;out[0]=0;if(i>=0&&i<(int)objs.size())snprintf(out,(size_t)cap,"%s",objs[i].nm);}
