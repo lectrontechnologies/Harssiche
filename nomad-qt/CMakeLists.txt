@@ -35,4 +35,9 @@ if(ANDROID)
         QT_ANDROID_VERSION_CODE 1
         QT_ANDROID_VERSION_NAME "1.0"
         QT_ANDROID_TARGET_SDK_VERSION 34)
+    # Manifesto gerado pelo workflow a partir do template do Qt (orientacao em paisagem)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml")
+        set_target_properties(Nomad PROPERTIES
+            QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
+    endif()
 endif()
