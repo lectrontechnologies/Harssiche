@@ -1178,7 +1178,7 @@ jobs:
           set -e
           QT_HOST="$HOME/Qt/$QT_VERSION/gcc_64"
           QT_ANDROID="$HOME/Qt/$QT_VERSION/android_arm64_v8a"
-          "$QT_ANDROID/bin/qt-cmake" -S nomad-qt -B nomad-qt/build -G Ninja \
+          "$QT_ANDROID/bin/qt-cmake" -S nomad-qt -B "$RUNNER_TEMP/nomad-build" -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_CXX_FLAGS_DEBUG="-O2 -g1" \
             -DQT_HOST_PATH="$QT_HOST" \
@@ -1188,10 +1188,10 @@ jobs:
       - name: Compilar APK
         run: |
           set -e
-          cmake --build nomad-qt/build --target apk
-          find nomad-qt/build -name "*.apk" -print
+          cmake --build "$RUNNER_TEMP/nomad-build" --target apk
+          find "$RUNNER_TEMP/nomad-build" -name "*.apk" -print
 
       - uses: actions/upload-artifact@v4
         with:
           name: nomad-animator-qt-apk
-          path: nomad-qt/build/android-build/build/outputs/apk/**/*.apk
+          path: ${{ runner.temp }}/nomad-build/android-build/build/outputs/apk/**/*.apk
