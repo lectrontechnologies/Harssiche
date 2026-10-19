@@ -57,6 +57,11 @@ jobs:
                   QT_ANDROID_VERSION_CODE 1
                   QT_ANDROID_VERSION_NAME "1.0"
                   QT_ANDROID_TARGET_SDK_VERSION 34)
+              # Manifesto gerado pelo workflow a partir do template do Qt (orientacao em paisagem)
+              if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml")
+                  set_target_properties(Nomad PROPERTIES
+                      QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
+              endif()
           endif()
           NOMADEOF
           cat > nomad-qt/main.cpp <<'NOMADEOF'
@@ -1172,6 +1177,22 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Manifesto Android (forcar paisagem)
+        run: |
+          set -e
+          QT_ANDROID="$HOME/Qt/$QT_VERSION/android_arm64_v8a"
+          TPL="$(find "$QT_ANDROID" -path '*templates/AndroidManifest.xml' | head -n1)"
+          test -n "$TPL" || { echo "Template do manifesto do Qt nao encontrado"; exit 1; }
+          mkdir -p nomad-qt/android
+          M=nomad-qt/android/AndroidManifest.xml
+          cp "$TPL" "$M"
+          if grep -q 'android:screenOrientation=' "$M"; then
+            sed -i 's/android:screenOrientation="[^"]*"/android:screenOrientation="sensorLandscape"/' "$M"
+          else
+            sed -i 's/<activity /<activity android:screenOrientation="sensorLandscape" /' "$M"
+          fi
+          grep -n 'screenOrientation' "$M"
 
       - name: Configurar (qt-cmake)
         run: |
