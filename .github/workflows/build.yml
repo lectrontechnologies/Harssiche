@@ -705,7 +705,7 @@ jobs:
           void main(){vec4 p=vec4(aP,1.0);vec3 n=aN;if(uSk>0.5){mat4 S=aW.x*uJ[int(aJ.x)]+aW.y*uJ[int(aJ.y)]+aW.z*uJ[int(aJ.z)]+aW.w*uJ[int(aJ.w)];p=S*p;n=mat3(S)*n;}
            gl_Position=uMVP*p; vN=mat3(uM)*n; vP=aP; vW=(uM*p).xyz; vUV=aUV;})";
           const char*FS=R"(#version 300 es
-          precision highp float; in vec3 vN; in vec3 vP; in vec3 vW; in vec2 vUV; uniform highp sampler2DArray uTex; uniform vec4 uTL; uniform vec4 uC; uniform float uL; uniform vec3 uS; uniform vec3 uCam; uniform vec2 uMR; out vec4 o;
+          precision highp float; in vec3 vN; in vec3 vP; in vec3 vW; in vec2 vUV; uniform highp sampler2DArray uTex; uniform vec4 uTL; uniform vec4 uC; uniform float uL; uniform vec3 uS; uniform vec3 uCam; uniform float uMc; uniform vec3 uMcR,uMcU,uMcB; uniform vec2 uMR; out vec4 o;
           vec3 shade(vec3 L,vec3 Lc,vec3 N,vec3 V,vec3 alb,vec3 F0,float met,float rou){
            vec3 H=normalize(L+V);float a=rou*rou,a2=a*a;float NL=max(dot(N,L),0.0),NV=max(dot(N,V),1e-3),NH=max(dot(N,H),0.0),VH=max(dot(V,H),0.0);
            float dd=NH*NH*(a2-1.0)+1.0;float D=a2/(3.14159*dd*dd+1e-6);float k=(rou+1.0)*(rou+1.0)/8.0;
@@ -724,8 +724,16 @@ jobs:
            vec3 Fa=F0+(max(vec3(1.0-rou),F0)-F0)*pow(1.0-NV,5.0);
            col+=amb*(alb*(1.0-met)+Fa*0.6);
            col=col*(2.51*col+0.03)/(col*(2.43*col+0.59)+0.14);return pow(clamp(col,0.0,1.0),vec3(1.0/2.2));}
-          void main(){if(uL<-1.5){vec2 q=(vP.xy-.5)*uS.xy;float dd=(abs(q.x)+abs(q.y)-uS.x*.5)*.7071;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL<0.0){vec2 q=(vP.xy-.5)*uS.xy;vec2 e=abs(q)-uS.xy*.5+uS.z;float dd=length(max(e,0.0))+min(max(e.x,e.y),0.0)-uS.z;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL>0.5){if(uTL.w>0.5&&uTL.x>=0.0&&texture(uTex,vec3(vUV,uTL.x)).a<0.5)discard;o=vec4(pbr(),uC.a);return;} o=vec4(uC.rgb,uC.a);})";
-          GLuint uMVP,uM,uC,uL,uS,uCamL,uMRL,uJL,uSkL,uTLL,uTexL,gProg=0;float gS[3]={1,1,0},gMR[2]={0,.5f},gSk=0,gTL[4]={-1,-1,-1,0};void initText();void initPost();void initMC();void initTexArr();
+          vec3 matcap(){vec3 N=normalize(vN),V=normalize(uCam-vW);if(dot(N,V)<0.0)N=-N;
+            vec3 n=vec3(dot(N,uMcR),dot(N,uMcU),dot(N,uMcB));
+            vec3 L1=normalize(vec3(-.45,.65,.62)),L2=normalize(vec3(.70,-.20,.35));
+            float d1=max(dot(n,L1),0.0),d2=max(dot(n,L2),0.0),hemi=.5+.5*n.y;
+            vec3 c=vec3(.62)*(.30+.80*d1+.22*d2+.25*hemi);
+            vec3 H=normalize(L1+vec3(0.0,0.0,1.0));c+=vec3(1.0)*pow(max(dot(n,H),0.0),48.0)*.45;
+            c+=vec3(.85)*pow(clamp(1.0-n.z,0.0,1.0),3.0)*.16;
+            return clamp(c,0.0,1.0);}
+           void main(){if(uL<-1.5){vec2 q=(vP.xy-.5)*uS.xy;float dd=(abs(q.x)+abs(q.y)-uS.x*.5)*.7071;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL<0.0){vec2 q=(vP.xy-.5)*uS.xy;vec2 e=abs(q)-uS.xy*.5+uS.z;float dd=length(max(e,0.0))+min(max(e.x,e.y),0.0)-uS.z;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL>0.5){if(uTL.w>0.5&&uTL.x>=0.0&&texture(uTex,vec3(vUV,uTL.x)).a<0.5)discard;o=vec4(uMc>0.5?matcap():pbr(),uC.a);return;} o=vec4(uC.rgb,uC.a);})";
+          GLint uMcL=-1,uMcRL=-1,uMcUL=-1,uMcBL=-1;GLuint uMVP,uM,uC,uL,uS,uCamL,uMRL,uJL,uSkL,uTLL,uTexL,gProg=0;float gS[3]={1,1,0},gMR[2]={0,.5f},gSk=0,gTL[4]={-1,-1,-1,0};void initText();void initPost();void initMC();void initTexArr();
           struct Mesh{GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
           std::vector<Mesh> meshes(6); // 0 cubo,1 esfera,2 plano,3 quad2D,4 grade,5 osso
           GLuint sh(GLenum t,const char*s){GLuint h=glCreateShader(t);glShaderSource(h,1,&s,0);glCompileShader(h);GLint ok;glGetShaderiv(h,GL_COMPILE_STATUS,&ok);
@@ -772,7 +780,7 @@ jobs:
           void initGL(){
            GLuint p=gProg=glCreateProgram();glAttachShader(p,sh(GL_VERTEX_SHADER,VS));glAttachShader(p,sh(GL_FRAGMENT_SHADER,FS));
            glLinkProgram(p);glUseProgram(p);
-           uMVP=glGetUniformLocation(p,"uMVP");uM=glGetUniformLocation(p,"uM");uC=glGetUniformLocation(p,"uC");uL=glGetUniformLocation(p,"uL");uS=glGetUniformLocation(p,"uS");uCamL=glGetUniformLocation(p,"uCam");uJL=glGetUniformLocation(p,"uJ");uSkL=glGetUniformLocation(p,"uSk");uTLL=glGetUniformLocation(p,"uTL");uTexL=glGetUniformLocation(p,"uTex");glUniform1i(uTexL,1);uMRL=glGetUniformLocation(p,"uMR");
+           uMVP=glGetUniformLocation(p,"uMVP");uM=glGetUniformLocation(p,"uM");uC=glGetUniformLocation(p,"uC");uL=glGetUniformLocation(p,"uL");uS=glGetUniformLocation(p,"uS");uCamL=glGetUniformLocation(p,"uCam");uMcL=glGetUniformLocation(p,"uMc");uMcRL=glGetUniformLocation(p,"uMcR");uMcUL=glGetUniformLocation(p,"uMcU");uMcBL=glGetUniformLocation(p,"uMcB");uJL=glGetUniformLocation(p,"uJ");uSkL=glGetUniformLocation(p,"uSk");uTLL=glGetUniformLocation(p,"uTL");uTexL=glGetUniformLocation(p,"uTex");glUniform1i(uTexL,1);uMRL=glGetUniformLocation(p,"uMR");
            glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);buildMeshes();for(size_t i=6;i<meshes.size();i++){std::vector<float> c=meshes[i].cpu,sk=meshes[i].skin,uvv=meshes[i].uv;float r=meshes[i].rad;meshes[i]=upload(c,GL_TRIANGLES);meshes[i].rad=r;if(!sk.empty())attachSkin(meshes[i],sk);if(!uvv.empty())attachUV(meshes[i],uvv);}initText();initPost();initMC();initTexArr();}
           void draw(Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
            glUniformMatrix4fv(uMVP,1,GL_FALSE,mvp.m);glUniformMatrix4fv(uM,1,GL_FALSE,mod.m);
@@ -1218,7 +1226,7 @@ jobs:
             sel=base;}
            cgltf_free(d);toast(fm("Importado: %d objetos",(int)nn));}
           // ---------- SSAO (meia resolucao) + render pbr ----------
-          bool gSSAO=false,gPostOK=false,gMsOK=false,gBones=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
+          bool gMatcap=true,gSSAO=false,gPostOK=false,gMsOK=false,gBones=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
           GLuint gMsFbo=0,gMsC=0,gMsD=0,gFbo=0,gCT=0,gDT=0,gAoFbo=0,gAoT=0,gAoP=0,gCoP=0;
           GLint uAD,uATH,uANF,uAR,uASZ,uCC,uCA,uCT,uCS;
           float gSlX[7]={0,0,1,0,0,0,0},gSlW[7]={1,1,1,1,1,1,1};
@@ -1953,7 +1961,7 @@ jobs:
            bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
            glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);drawBg();
            glEnable(GL_DEPTH_TEST);
-           gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);}
+           gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);}
            draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
            auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
            ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
