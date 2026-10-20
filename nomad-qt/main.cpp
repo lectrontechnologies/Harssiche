@@ -1,11 +1,10 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
-#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSurfaceFormat>
 
 int main(int argc, char *argv[]) {
-    // O motor usa OpenGL ES; forcamos o backend OpenGL do Qt Quick.
+    // O motor usa OpenGL ES 3.x: forcamos o backend OpenGL do Qt Quick.
     QSurfaceFormat fmt;
     fmt.setRenderableType(QSurfaceFormat::OpenGLES);
     fmt.setVersion(3, 0);
@@ -15,7 +14,6 @@ int main(int argc, char *argv[]) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 
     QGuiApplication app(argc, argv);
-    QQuickStyle::setStyle("Basic");
 
     QQmlApplicationEngine engine;
     QObject::connect(

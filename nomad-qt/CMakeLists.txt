@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
-project(Nomad VERSION 0.1 LANGUAGES CXX)
+project(Nomad VERSION 0.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Quick QuickControls2 Gui OpenGL)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Quick Gui OpenGL)
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(Nomad main.cpp)
@@ -14,28 +14,26 @@ qt_add_qml_module(Nomad
     VERSION 1.0
     QML_FILES
         Main.qml
-        Icon.qml
-        IconButton.qml
-        NomadMenu.qml
-        DarkItem.qml
     SOURCES
-        viewport.h
-        viewport.cpp
-        scene.h
-        shaders.h
-        meshes.h
-        meshes.cpp
+        engineview.h
+        engineview.cpp
+        engine.cpp
+        engine_api.h
+        engine_shim.h
 )
 
-target_link_libraries(Nomad PRIVATE Qt6::Quick Qt6::QuickControls2 Qt6::Gui Qt6::OpenGL)
+# Bibliotecas do NDK usadas pelo motor (as mesmas do projeto antigo)
+target_link_libraries(Nomad PRIVATE
+    Qt6::Quick Qt6::Gui Qt6::OpenGL
+    android EGL GLESv3 log z mediandk)
 
 if(ANDROID)
     set_target_properties(Nomad PROPERTIES
         QT_ANDROID_PACKAGE_NAME "com.nomad.animator"
-        QT_ANDROID_VERSION_CODE 1
-        QT_ANDROID_VERSION_NAME "1.0"
+        QT_ANDROID_VERSION_CODE 2
+        QT_ANDROID_VERSION_NAME "1.1"
         QT_ANDROID_TARGET_SDK_VERSION 34)
-    # Manifesto gerado pelo workflow a partir do template do Qt (orientacao em paisagem)
+    # Manifesto e recursos gerados pelo workflow (paisagem, tela cheia, permissoes)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/android/AndroidManifest.xml")
         set_target_properties(Nomad PROPERTIES
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android")
