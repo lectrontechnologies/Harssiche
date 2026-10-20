@@ -735,6 +735,7 @@ jobs:
            void main(){if(uL<-1.5){vec2 q=(vP.xy-.5)*uS.xy;float dd=(abs(q.x)+abs(q.y)-uS.x*.5)*.7071;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL<0.0){vec2 q=(vP.xy-.5)*uS.xy;vec2 e=abs(q)-uS.xy*.5+uS.z;float dd=length(max(e,0.0))+min(max(e.x,e.y),0.0)-uS.z;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL>0.5){if(uTL.w>0.5&&uTL.x>=0.0&&texture(uTex,vec3(vUV,uTL.x)).a<0.5)discard;o=vec4(uMc>0.5?matcap():pbr(),uC.a);return;} o=vec4(uC.rgb,uC.a);})";
           GLint uMcL=-1,uMcRL=-1,uMcUL=-1,uMcBL=-1;GLuint uMVP,uM,uC,uL,uS,uCamL,uMRL,uJL,uSkL,uTLL,uTexL,gProg=0;float gS[3]={1,1,0},gMR[2]={0,.5f},gSk=0,gTL[4]={-1,-1,-1,0};void initText();void initPost();void initMC();void initTexArr();
           struct Mesh{GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
+          Mesh gBoneWire,gJointRing;
           std::vector<Mesh> meshes(6); // 0 cubo,1 esfera,2 plano,3 quad2D,4 grade,5 osso
           GLuint sh(GLenum t,const char*s){GLuint h=glCreateShader(t);glShaderSource(h,1,&s,0);glCompileShader(h);GLint ok;glGetShaderiv(h,GL_COMPILE_STATUS,&ok);
            if(!ok){char b[512];glGetShaderInfoLog(h,512,0,b);__android_log_print(ANDROID_LOG_ERROR,"NA","%s",b);}return h;}
@@ -776,7 +777,14 @@ jobs:
            a.clear();{V h{0,0,0},t{0,1,0};float w=.12f,y=.15f;V r[4]={{w,y,0},{0,y,w},{-w,y,0},{0,y,-w}};
             for(int i=0;i<4;i++){V p=r[i],q=r[(i+1)%4];V n1=norm(cross(p-h,q-h)),n2=norm(cross(q-t,p-t));
              vtx(a,h,n1);vtx(a,p,n1);vtx(a,q,n1);vtx(a,t,n2);vtx(a,q,n2);vtx(a,p,n2);}}
-           meshes[5]=upload(a,GL_TRIANGLES);}
+           meshes[5]=upload(a,GL_TRIANGLES);
+           a.clear();{V h{0,0,0},t{0,1,0};float w=.12f,y=.15f;V r[4]={{w,y,0},{0,y,w},{-w,y,0},{0,y,-w}};
+            for(int i=0;i<4;i++){V p=r[i],q=r[(i+1)%4];vtx(a,h,up);vtx(a,p,up);vtx(a,p,up);vtx(a,q,up);vtx(a,t,up);vtx(a,p,up);}}
+           gBoneWire=upload(a,GL_LINES);
+           a.clear();for(int ax=0;ax<3;ax++)for(int k=0;k<24;k++){float a0=k*2*PI/24,a1=(k+1)*2*PI/24;V p0,p1;
+            if(ax==0){p0={cosf(a0),sinf(a0),0};p1={cosf(a1),sinf(a1),0};}else if(ax==1){p0={cosf(a0),0,sinf(a0)};p1={cosf(a1),0,sinf(a1)};}else{p0={0,cosf(a0),sinf(a0)};p1={0,cosf(a1),sinf(a1)};}
+            vtx(a,p0,up);vtx(a,p1,up);}
+           gJointRing=upload(a,GL_LINES);}
           void initGL(){
            GLuint p=gProg=glCreateProgram();glAttachShader(p,sh(GL_VERTEX_SHADER,VS));glAttachShader(p,sh(GL_FRAGMENT_SHADER,FS));
            glLinkProgram(p);glUseProgram(p);
@@ -1905,10 +1913,21 @@ jobs:
             bool s=(i==sel);float cr=o.kind==1?.25f:.3f,cg=o.kind==1?.6f:.9f,cb=o.kind==1?1.f:.4f;if(s){cr=1;cg=.85f;cb=.2f;}
             ctrlShape(o.shape,c,ex,ey,ez,R,R*.05f,cr,cg,cb);
             if(o.kind==2){int ri=rigOf(i);if(ri>=0&&rigs[ri].b>=0&&rigs[ri].b<(int)objs.size())ctrlSeg(c,wp(rigs[ri].b),R*.03f,cr,cg,cb,.8f);}}}
-          void drawBones(){for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;M mod=worldM(i);float wd=o.len*.35f;
-            for(int k=0;k<4;k++){mod.m[k]*=wd;mod.m[4+k]*=o.len;mod.m[8+k]*=wd;}
-            float h=(i==sel)?.55f:0;gMR[0]=0;gMR[1]=.5f;gSk=0;
-            draw(meshes[5],mul(gVP,mod),mod,o.col.x+(.98f-o.col.x)*h,o.col.y+(.62f-o.col.y)*h,o.col.z+(.15f-o.col.z)*h,1,1);}}
+          void drawBones(){ // estilo Maya: losango fino (aresta + corpo translucido) e junta em aneis; roxo normal, verde selecionado
+           std::vector<char> hc(objs.size(),0);for(auto&q:objs)if(q.mesh==5&&q.parent>=0&&q.parent<(int)objs.size())hc[q.parent]=1;
+           for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;
+            M w=worldM(i);bool sl=(i==sel);
+            float cr=sl?.45f:.56f,cg=sl?.95f:.26f,cb=sl?.35f:.86f;
+            gMR[0]=0;gMR[1]=.5f;gSk=0;
+            float wd=o.len*.35f;M mod=w;for(int k=0;k<4;k++){mod.m[k]*=wd;mod.m[4+k]*=o.len;mod.m[8+k]*=wd;}
+            M mvp=mul(gVP,mod);
+            draw(meshes[5],mvp,mod,cr,cg,cb,sl?.24f:.15f,0);
+            draw(gBoneWire,mvp,mod,cr,cg,cb,1,0);
+            float rj=o.len*(sl?.115f:.10f);
+            M jm=w;for(int k=0;k<4;k++){jm.m[k]*=rj;jm.m[4+k]*=rj;jm.m[8+k]*=rj;}
+            draw(gJointRing,mul(gVP,jm),jm,cr,cg,cb,1,0);
+            if(!hc[i]){M jt=jm;jt.m[12]=w.m[12]+w.m[4]*o.len;jt.m[13]=w.m[13]+w.m[5]*o.len;jt.m[14]=w.m[14]+w.m[6]*o.len;
+             draw(gJointRing,mul(gVP,jt),jt,cr,cg,cb,1,0);}}}
           // ---------- timeline estilo Maya/Houdini ----------
           Rc gFldR[5]={};float gTrX0=0,gTrW=1,gBarY=0,gBarH=0,gDX0=0;int gDV0=0,gDV1=0;
           void tri(float cx,float cy,float s,int dir){const float c=.93f;for(int i=0;i<10;i++){float h=2*s*(1-i/10.f);float x=dir>0?cx-s*.7f+i*s*.14f:cx+s*.7f-(i+1)*s*.14f;rect(x,cy-h/2,s*.15f,h,c,c,c);}}
