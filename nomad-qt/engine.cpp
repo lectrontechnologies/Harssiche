@@ -1404,15 +1404,15 @@ void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!a
   bool s=(i==sel);float cr=o.kind==1?.25f:.3f,cg=o.kind==1?.6f:.9f,cb=o.kind==1?1.f:.4f;if(s){cr=1;cg=.85f;cb=.2f;}
   ctrlShape(o.shape,c,ex,ey,ez,R,R*.05f,cr,cg,cb);
   if(o.kind==2){int ri=rigOf(i);if(ri>=0&&rigs[ri].b>=0&&rigs[ri].b<(int)objs.size())ctrlSeg(c,wp(rigs[ri].b),R*.03f,cr,cg,cb,.8f);}}}
-void drawBones(){ // estilo Maya: losango fino (aresta + corpo translucido) e junta em aneis; roxo normal, verde selecionado
+void drawBones(){ // estilo Maya: losango fino (aresta + corpo translucido) e junta em aneis; preto normal, verde selecionado
  std::vector<char> hc(objs.size(),0);for(auto&q:objs)if(q.mesh==5&&q.parent>=0&&q.parent<(int)objs.size())hc[q.parent]=1;
  for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;
   M w=worldM(i);bool sl=(i==sel);
-  float cr=sl?.45f:.56f,cg=sl?.95f:.26f,cb=sl?.35f:.86f;
+  float cr=sl?.45f:.03f,cg=sl?.95f:.03f,cb=sl?.35f:.03f;
   gMR[0]=0;gMR[1]=.5f;gSk=0;
   float wd=o.len*.35f;M mod=w;for(int k=0;k<4;k++){mod.m[k]*=wd;mod.m[4+k]*=o.len;mod.m[8+k]*=wd;}
   M mvp=mul(gVP,mod);
-  draw(meshes[5],mvp,mod,cr,cg,cb,sl?.24f:.15f,0);
+  draw(meshes[5],mvp,mod,cr,cg,cb,sl?.24f:.28f,0);
   draw(gBoneWire,mvp,mod,cr,cg,cb,1,0);
   float rj=o.len*(sl?.115f:.10f);
   M jm=w;for(int k=0;k<4;k++){jm.m[k]*=rj;jm.m[4+k]*=rj;jm.m[8+k]*=rj;}
