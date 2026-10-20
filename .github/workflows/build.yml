@@ -1938,12 +1938,23 @@ jobs:
            else if(mode==27){int f=std::clamp(gDV0+df,gFS,gFE);tm=f/24.f;applyAnim();}
            if(mode>=23&&mode<=26){float a=gFS/24.f,b=gFE/24.f;if(tm<a)tm=a;if(tm>b)tm=b;applyAnim();}}
           void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(int)roundf(tm*24);if(rel<.33f)f--;else if(rel>.66f)f++;tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
+          // Fundo em gradiente vertical (cores do viewport do Maya): claro azulado em cima, escuro embaixo
+          GLuint gBgP=0;GLint gBgH=-1;
+          void drawBg(){
+           if(!gBgP){
+            const char*vs="#version 300 es\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.0-1.0,0.0,1.0);}";
+            const char*fs="#version 300 es\nprecision highp float;uniform float uH;out vec4 o;\nvoid main(){float t=clamp(gl_FragCoord.y/uH,0.0,1.0);vec3 top=vec3(.49,.56,.64),bot=vec3(.065,.07,.08);o=vec4(mix(bot,top,t),1.0);}";
+            gBgP=mkProg(vs,fs);gBgH=glGetUniformLocation(gBgP,"uH");}
+           glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);glDisable(GL_BLEND);
+           glBindVertexArray(0);glUseProgram(gBgP);glUniform1f(gBgH,(float)H);
+           glDrawArrays(GL_TRIANGLES,0,3);
+           glDepthMask(GL_TRUE);glEnable(GL_BLEND);glUseProgram(gProg);}
           void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
            bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
-           glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+           glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);drawBg();
            glEnable(GL_DEPTH_TEST);
            gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);}
-           draw(meshes[4],gVP,id(),.34f,.34f,.37f,1,0);
+           draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
            auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
            ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
            glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glActiveTexture(GL_TEXTURE0);
@@ -2229,19 +2240,7 @@ jobs:
            if(parentMode)finishParent(best);else sel=best;}
           void panCam(float dx,float dy){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);float s=2*cd*tanf(FOV/2)/H;tgt=tgt+r*(-dx*s)+u*(dy*s);if(gCamView>=0)camFromView();}
           void orbit(float dx,float dy){yaw-=dx*.006f;pitch=std::clamp(pitch+dy*.006f,-1.5f,1.5f);if(gCamView>=0)camFromView();}
-          void gdrag(float dx,float dy){
-           Obj&ob=objs[sel];T&t=ob.cur;V o=wp(sel);float ox,oy,ex,ey;
-           if(tool==1){float px,py,qx,qy;if(!prj(ringPt(gAxis,gIdx+1),px,py)||!prj(ringPt(gAxis,gIdx+31),qx,qy))return;
-            float vx=px-qx,vy=py-qy,l=hypotf(vx,vy);if(l<1)return;rotateWorld(ob,gAxis,(dx*vx+dy*vy)/l*.012f);return;}
-           if(!prj(o,ox,oy)||!prj(o+AX[gAxis]*gl(),ex,ey))return;
-           float vx=ex-ox,vy=ey-oy,k=(dx*vx+dy*vy)/(vx*vx+vy*vy+1e-3f);
-           if(tool==0){V nw=o+AX[gAxis]*(k*gl());t.p=ob.parent>=0?invPt(worldM(ob.parent),nw):nw;}
-           else if(ob.mesh==5)ob.len=std::max(.05f,ob.len*(1+k));
-           else{float&sc=(&t.s.x)[gAxis];sc=std::max(.05f,sc*(1+k));}}
-          void snap(float x,float y){ND d[6];navPts(d);
-           for(auto&e:d)if(hypotf(x-e.x,y-e.y)<H*.035f){
-            if(e.a==0){yaw=e.pos?PI/2:-PI/2;pitch=0;}else if(e.a==1)pitch=e.pos?1.45f:-1.45f;else{yaw=e.pos?0.f:PI;pitch=0;}return;}}
-          int32_t onInput(ShimEvt*e){
+          void gdrag(float dx,float int32_t onInput(ShimEvt*e){
            static int mode=0;static float lx,ly,sx,sy,pinch,lmx,lmy;static bool moved,rl;
            if(e->type==1&&(gNameOpen||gSizeOpen)){
             int ac=e->keyAction,kc=e->keyCode;bool used=false;
@@ -2315,6 +2314,7 @@ jobs:
                   gFirstInit = false;
               }
               W = w; H = h;
+              gBgP = 0;
               initGL();
               ready = true;
               gLastT = engNow();
