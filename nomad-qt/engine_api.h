@@ -1,14 +1,27 @@
 #pragma once
 #include <jni.h>
+#include <vector>
 
 // Evento ja traduzido do Qt para o formato que o motor entende.
 struct EngEvent {
-    int kind = 0;    // 0 toque, 1 texto, 2 backspace, 3 enter, 4 voltar
+    int kind = 0;    // 0 toque, 1 texto, 2 backspace, 3 enter, 4 voltar, 5 comando da timeline (action = comando, x[0], x[1] = valores)
     int action = 0;  // acoes do Android: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL, 5 POINTER_DOWN, 6 POINTER_UP
     int n = 0;       // quantidade de dedos
     float x[2] = {0, 0};
     float y[2] = {0, 0};
     int cp = 0;      // caractere (kind == 1)
+};
+
+// Estado da timeline lido pelo QML (frames em unidades de frame, 24 fps)
+struct EngTimeline {
+    float frame = 1;
+    int fs = 1, fe = 240;  // intervalo global
+    int vs = 1, ve = 120;  // janela visivel
+    bool playing = false;
+    int dir = 1;
+    bool visible = true;   // falso no modo Escultura
+    bool hasSel = false;
+    std::vector<float> keys;  // keyframes do objeto selecionado
 };
 
 // ---- motor (engine.cpp) - tudo isto roda na thread de render ----
@@ -20,6 +33,7 @@ void eng_event(const EngEvent &e);
 void eng_frame();
 void eng_gl_lost();
 bool eng_dialog_open();
+void eng_timeline(EngTimeline &t);
 
 // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
 void plat_show_keyboard();

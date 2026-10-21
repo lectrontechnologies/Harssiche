@@ -532,7 +532,7 @@ void exportGLTF(){
  fwrite(js.data(),1,js.size(),f);fclose(f);saved(path,fb);}
 // ---------- icones, importacao glTF ----------
 Rc gListR={0,0,0,0};float gScrollPx=0,gSY0=0,gSS0=0,gRowH=1;
-float gFlash[64]={};bool gFileMenu=false,gRenderOpen=false,gRigOpen=false,gTlOpen=false,gToolFan=false,gAddFan=false;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
+float gFlash[64]={};bool gTlQml=true;bool gFileMenu=false,gRenderOpen=false,gRigOpen=false,gTlOpen=false,gToolFan=false,gAddFan=false;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
 void icon2(int id,float cx,float cy,float s,bool on){
  if(id>=3&&id<=6){icon(id,cx,cy,s,on);return;}
  const float c=.93f;
@@ -1619,7 +1619,7 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
    float rng=(float)std::max(gFE-gFS,1),b0=gTrX0+(gVS-gFS)/rng*gTrW,b1=gTrX0+(gVE-gFS)/rng*gTrW,cy=ry3+h3/2;
    rect(gTrX0,cy-.2f*u,gTrW,.4f*u,.07f,.07f,.08f,1,.2f*u);rect(b0,cy-.35f*u,std::max(b1-b0,.5f*u),.7f*u,.55f,.55f,.58f,1,.3f*u);
    rect(b0-.5f*u,ry3+.3f*u,1.0f*u,h3-.6f*u,.75f,.75f,.78f,1,.3f*u);rect(b1-.5f*u,ry3+.3f*u,1.0f*u,h3-.6f*u,.75f,.75f,.78f,1,.3f*u);}}
-else if(!gSculpt){ // faixa fina: play + linha do tempo
+else if(!gSculpt&&!gTlQml){ // faixa fina: play + linha do tempo
  float sh=9*u,y0=H-sh;rect(0,y0,(float)W,sh,0,0,0,.5f);gBlock.push_back({0,y0,(float)W,sh});
  float pb=6.6f*u,px0=ML_+.2f*u,py0=y0+(sh-pb)/2;bool pon=playing||gFlash[8]>0;
  rect(px0,py0,pb,pb,pon?.28f:.2f,pon?.45f:.2f,pon?.7f:.22f,.95f,pb/2);icon2(8,px0+pb/2,py0+pb/2,pb*.28f,pon);gBtn.push_back({{px0,py0,pb,pb},8});
@@ -1632,7 +1632,7 @@ else if(!gSculpt){ // faixa fina: play + linha do tempo
  {float cf=tm*24;if(cf>=gVS-.01f&&cf<=gVE+.01f){float pxh=tx(tm);rect(pxh-.07f*u,ty0+2.2f*u,.14f*u,th-2.2f*u,1,1,1);dia(pxh,ty0+2.4f*u,1.5f*u,.95f,.95f,.95f);}}
  pill(W-ML_-13.5f*u,y0+(sh-6.2f*u)/2,13.5f*u,6.2f*u,62,"Timeline",false,.27f,.27f,.29f);}
 else{gTrack={0,0,0,0};}
-{float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-9*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
+{float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-(gTlQml?20.5f:9.f)*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
  if(gImportOpen){float pw2=82*u,rh2=5.8f*u,tp2=.46f*u;int n=(int)gFiles.size();float lh=6*rh2,ph2=6.5f*u+lh+1.5f*u,px2=(W-pw2)/2,py2=(H-ph2)/2;
              float tot=n*rh2,maxs=std::max(0.f,tot-lh);gScrollPx=std::clamp(gScrollPx,0.f,maxs);gRowH=rh2;gListR={px2+1*u,py2+6.5f*u,pw2-2*u,lh};
              panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
@@ -1677,7 +1677,7 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
  {float y5=fy+fh+1.8f*u,bw=(pw2-2*pad-.8f*u)/2;pill(px+pad,y5,bw,bh,2004,"Cancelar",false,.3f,.3f,.33f);pill(px+pad+bw+.8f*u,y5,bw,bh,2003,"OK",true,.2f,.38f,.55f);
   text("Toque no campo para abrir o teclado",px+pad,y5+bh+1.2f*u,.32f*u,.55f,.55f,.6f);}
  gBtn.push_back({{0,0,(float)W,(float)H},299});}
- if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:(float)H-9.5f*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
+ if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:(float)H-(gTlQml?21.f:9.5f)*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
  if(!gFileMenu)drawNav();
 }
 
@@ -1856,6 +1856,30 @@ void api_resize(int w, int h) {
     initPost();
 }
 
+void api_timeline(EngTimeline &t) {
+    t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
+    t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
+    t.hasSel = sel >= 0 && sel < (int)objs.size();
+    t.keys.clear();
+    if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
+}
+
+void api_cmd(int c, float a, float b) {
+    switch (c) {
+    case 0: tm = gFS / 24.f; applyAnim(); break;
+    case 1: playing = true; gPlayDir = -1; break;
+    case 2: playing = false; break;
+    case 3: playing = true; gPlayDir = 1; break;
+    case 4: tm = gFE / 24.f; applyAnim(); break;
+    case 5: jumpKey(-1); break;
+    case 6: jumpKey(1); break;
+    case 7: insertKey(); break;
+    case 8: delKey(); break;
+    case 9: { int f = std::clamp((int)roundf(a), gFS, gFE); tm = f / 24.f; applyAnim(); break; }
+    case 10: { int e = std::clamp((int)roundf(b), gFS + 5, gFE); int st = std::clamp((int)roundf(a), gFS, e - 5); gVS = st; gVE = e; break; }
+    }
+}
+
 void api_event(const EngEvent &e) {
     switch (e.kind) {
     case 0: {
@@ -1869,6 +1893,7 @@ void api_event(const EngEvent &e) {
     case 2: if (gNameOpen) nameBack(); else if (gSizeOpen) sizeBack(); break;
     case 3: if (gNameOpen) nameConfirm(); else if (gSizeOpen) sizeApply(); break;
     case 4: if (gNameOpen || gSizeOpen) { gNameOpen = false; gSizeOpen = false; hideKb(); } break;
+    case 5: api_cmd(e.action, e.x[0], e.x[1]); break;
     }
 }
 
@@ -1913,3 +1938,4 @@ void eng_event(const EngEvent &e) { eng::api_event(e); }
 void eng_frame() { eng::api_frame(); }
 void eng_gl_lost() { eng::api_gl_lost(); }
 bool eng_dialog_open() { return eng::api_dialog_open(); }
+void eng_timeline(EngTimeline &t) { eng::api_timeline(t); }

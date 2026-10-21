@@ -5,6 +5,7 @@
 #include <QPointF>
 #include <QPointer>
 #include <QQuickItem>
+#include <QVariantList>
 #include <QtQml/qqml.h>
 #include <atomic>
 #include <string>
@@ -19,12 +20,42 @@ class QQuickWindow;
 class EngineView : public QQuickItem {
     Q_OBJECT
     QML_NAMED_ELEMENT(EngineView)
+    Q_PROPERTY(qreal frame READ frame NOTIFY timelineChanged)
+    Q_PROPERTY(int frameStart READ frameStart NOTIFY timelineChanged)
+    Q_PROPERTY(int frameEnd READ frameEnd NOTIFY timelineChanged)
+    Q_PROPERTY(int viewStart READ viewStart NOTIFY timelineChanged)
+    Q_PROPERTY(int viewEnd READ viewEnd NOTIFY timelineChanged)
+    Q_PROPERTY(bool playing READ playing NOTIFY timelineChanged)
+    Q_PROPERTY(int playDir READ playDir NOTIFY timelineChanged)
+    Q_PROPERTY(bool timelineVisible READ timelineVisible NOTIFY timelineChanged)
+    Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY timelineChanged)
+    Q_PROPERTY(QVariantList keyFrames READ keyFrames NOTIFY keysChanged)
 
 public:
     explicit EngineView(QQuickItem *parent = nullptr);
     static EngineView *instance();
     void showKeyboard();  // thread da interface
     void hideKeyboard();
+
+    qreal frame() const { return m_tl.frame; }
+    int frameStart() const { return m_tl.fs; }
+    int frameEnd() const { return m_tl.fe; }
+    int viewStart() const { return m_tl.vs; }
+    int viewEnd() const { return m_tl.ve; }
+    bool playing() const { return m_tl.playing; }
+    int playDir() const { return m_tl.dir; }
+    bool timelineVisible() const { return m_tl.visible; }
+    bool hasSelection() const { return m_tl.hasSel; }
+    QVariantList keyFrames() const { return m_keys; }
+
+    // Comandos da timeline (executados na thread de render):
+    // 0 ir ao inicio, 1 reproduzir ao contrario, 2 parar, 3 reproduzir, 4 ir ao fim,
+    // 5 key anterior, 6 proxima key, 7 inserir key, 8 apagar key, 9 ir ao frame a, 10 janela visivel a..b
+    Q_INVOKABLE void command(int cmd, qreal a = 0, qreal b = 0);
+
+signals:
+    void timelineChanged();
+    void keysChanged();
 
 protected:
     void touchEvent(QTouchEvent *ev) override;
@@ -39,10 +70,14 @@ private:
     void renderEngine();  // thread de render, antes do Qt Quick desenhar
     void glLost();
     void updateSize();
+    void applyTimeline(const EngTimeline &t);
     void push(const EngEvent &e);
     EngEvent makeTouch(int action) const;
 
     std::string m_dir;
+    EngTimeline m_tl;      // thread da interface
+    EngTimeline m_lastTl;  // thread de render
+    QVariantList m_keys;
     QMutex m_mutex;
     std::vector<EngEvent> m_queue;
     std::atomic<int> m_pw{0}, m_ph{0};

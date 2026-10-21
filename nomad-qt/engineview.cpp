@@ -17,6 +17,12 @@
 
 static QPointer<EngineView> s_instance;
 
+static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
+    return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
+           a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
+           a.keys == b.keys;
+}
+
 EngineView *EngineView::instance() { return s_instance.data(); }
 
 EngineView::EngineView(QQuickItem *parent) : QQuickItem(parent) {
@@ -91,6 +97,35 @@ void EngineView::renderEngine() {
     eng_frame();
     w->endExternalCommands();
     QQuickOpenGLUtils::resetOpenGLState();
+
+    // estado da timeline -> QML (so quando muda)
+    EngTimeline t;
+    eng_timeline(t);
+    if (!sameTl(t, m_lastTl)) {
+        m_lastTl = t;
+        QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
+    }
+}
+
+void EngineView::applyTimeline(const EngTimeline &t) {
+    const bool keysDiff = (t.keys != m_tl.keys);
+    m_tl = t;
+    emit timelineChanged();
+    if (keysDiff) {
+        m_keys.clear();
+        for (float k : t.keys) m_keys.append(double(k));
+        emit keysChanged();
+    }
+}
+
+void EngineView::command(int cmd, qreal a, qreal b) {
+    EngEvent e;
+    e.kind = 5;
+    e.action = cmd;
+    e.x[0] = float(a);
+    e.x[1] = float(b);
+    push(e);
+    if (window()) window()->update();
 }
 
 void EngineView::glLost() { eng_gl_lost(); }

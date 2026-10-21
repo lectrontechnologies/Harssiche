@@ -8,13 +8,19 @@ Window {
     title: "Nomad Animator"
     color: "black"
 
-    // O motor desenha o viewport e a interface atual. Os paineis em QML
-    // entram aqui por cima, um de cada vez.
+    // O motor desenha o viewport e a interface que ainda nao foi migrada.
     EngineView {
-        id: engine
+        id: engineView
         anchors.fill: parent
         focus: true
     }
 
-    Component.onCompleted: engine.forceActiveFocus()
+    // Timeline em QML (substitui a que o motor desenhava)
+    Timeline {
+        anchors.fill: parent
+        view: engineView
+        visible: engineView.timelineVisible
+    }
+
+    Component.onCompleted: engineView.forceActiveFocus()
 }

@@ -14,6 +14,9 @@ qt_add_qml_module(Nomad
     VERSION 1.0
     QML_FILES
         Main.qml
+        Timeline.qml
+        TlButton.qml
+        TlIcon.qml
     SOURCES
         engineview.h
         engineview.cpp
