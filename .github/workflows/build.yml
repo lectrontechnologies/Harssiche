@@ -36,6 +36,9 @@ jobs:
               VERSION 1.0
               QML_FILES
                   Main.qml
+                  Timeline.qml
+                  TlButton.qml
+                  TlIcon.qml
               SOURCES
                   engineview.h
                   engineview.cpp
@@ -99,29 +102,471 @@ jobs:
               title: "Nomad Animator"
               color: "black"
 
-              // O motor desenha o viewport e a interface atual. Os paineis em QML
-              // entram aqui por cima, um de cada vez.
+              // O motor desenha o viewport e a interface que ainda nao foi migrada.
               EngineView {
-                  id: engine
+                  id: engineView
                   anchors.fill: parent
                   focus: true
               }
 
-              Component.onCompleted: engine.forceActiveFocus()
+              // Timeline em QML (substitui a que o motor desenhava)
+              Timeline {
+                  anchors.fill: parent
+                  view: engineView
+                  visible: engineView.timelineVisible
+              }
+
+              Component.onCompleted: engineView.forceActiveFocus()
+          }
+          NOMADEOF
+          cat > nomad-qt/Timeline.qml <<'NOMADEOF'
+          import QtQuick
+          import QtQuick.Shapes
+
+          // Timeline no estilo do conceito: aba elevada com transporte, frame atual e keys,
+          // e uma regua com keyframes em verde e o indicador do frame.
+          // Todas as medidas partem de um desenho de 800x360 e escalam com a altura da tela.
+          Item {
+              id: tl
+              required property var view   // EngineView
+
+              readonly property real s: height > 0 ? height / 360 : 1
+              readonly property real barH: 70 * s
+              readonly property real tabH: 37 * s
+              readonly property real barTop: height - barH
+              readonly property real tabTop: barTop - tabH
+              readonly property real btnY: tabTop + 7.3 * s
+              readonly property real rulerX: 85 * s
+              readonly property real rulerW: Math.max(10, width - 158 * s)
+              readonly property real lineY: 38 * s          // linha da regua (relativa ao topo da barra)
+              readonly property real span: Math.max(1, view.viewEnd - view.viewStart)
+
+              property bool scrubbing: false
+              property real scrubFrame: 1
+              readonly property real shown: scrubbing ? scrubFrame : view.frame
+
+              function frameToX(f) {
+                  return rulerX + (f - view.viewStart) / span * rulerW
+              }
+
+              function scrubTo(xr) {
+                  var f = Math.round(view.viewStart + xr / rulerW * span)
+                  f = Math.max(view.frameStart, Math.min(view.frameEnd, f))
+                  scrubFrame = f
+                  view.command(9, f)
+              }
+
+              // ---- fundo: barra e aba ----
+              Rectangle {
+                  x: 0
+                  y: tl.barTop
+                  width: tl.width
+                  height: tl.barH
+                  color: "#2f2f2f"
+                  MouseArea { anchors.fill: parent }   // nao deixa o toque passar para o viewport
+              }
+
+              Shape {
+                  x: 0
+                  y: tl.tabTop
+                  width: 380
+                  height: 38
+                  scale: tl.s
+                  transformOrigin: Item.TopLeft
+                  preferredRendererType: Shape.CurveRenderer
+                  ShapePath {
+                      fillColor: "#2f2f2f"
+                      strokeColor: "transparent"
+                      PathSvg { path: "M 50 38 C 66 38 72 30 75 16 Q 76 0 92 0 L 328 0 Q 344 0 345 16 C 348 30 356 38 372 38 Z" }
+                  }
+              }
+              MouseArea {
+                  x: 60 * tl.s
+                  y: tl.tabTop
+                  width: 302 * tl.s
+                  height: tl.tabH
+              }
+
+              // ---- transporte ----
+              Row {
+                  x: 87 * tl.s
+                  y: tl.btnY
+                  spacing: 0
+                  TlButton { s: tl.s; icon: "start"; onClicked: tl.view.command(0) }
+                  TlButton { s: tl.s; icon: "rev"; active: tl.view.playing && tl.view.playDir < 0; onClicked: tl.view.command(1) }
+                  TlButton { s: tl.s; icon: "stop"; active: !tl.view.playing; onClicked: tl.view.command(2) }
+                  TlButton { s: tl.s; icon: "play"; active: tl.view.playing && tl.view.playDir > 0; onClicked: tl.view.command(3) }
+                  TlButton { s: tl.s; icon: "end"; onClicked: tl.view.command(4) }
+              }
+
+              // ---- frame atual (toque para digitar) ----
+              Rectangle {
+                  x: 227 * tl.s
+                  y: tl.btnY
+                  width: 46 * tl.s
+                  height: 27 * tl.s
+                  color: "#111111"
+                  border.color: "#222222"
+                  border.width: Math.max(1, tl.s * 0.6)
+
+                  TextInput {
+                      id: fld
+                      anchors.fill: parent
+                      anchors.leftMargin: 5 * tl.s
+                      verticalAlignment: TextInput.AlignVCenter
+                      color: "#f2f2f2"
+                      font.pixelSize: 11.5 * tl.s
+                      inputMethodHints: Qt.ImhDigitsOnly
+                      selectByMouse: true
+                      onAccepted: {
+                          var f = parseInt(text)
+                          if (!isNaN(f)) tl.view.command(9, f)
+                          Qt.inputMethod.hide()
+                          tl.view.forceActiveFocus()
+                      }
+                  }
+                  Binding {
+                      target: fld
+                      property: "text"
+                      value: String(Math.round(tl.shown))
+                      when: !fld.activeFocus
+                  }
+              }
+
+              // ---- key anterior / proxima ----
+              Row {
+                  x: 275 * tl.s
+                  y: tl.btnY
+                  spacing: 0
+                  TlButton { s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "prevkey"; onClicked: tl.view.command(5) }
+                  TlButton { s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "nextkey"; onClicked: tl.view.command(6) }
+              }
+
+              // ---- botao de key (toque insere, segurar apaga a key do frame) ----
+              Rectangle {
+                  x: 311.5 * tl.s
+                  y: tl.btnY
+                  width: 27 * tl.s
+                  height: 27 * tl.s
+                  radius: width / 2
+                  color: kma.pressed ? "#2d5559" : "#26474a"
+                  border.color: "#4aa6a6"
+                  border.width: Math.max(1, tl.s)
+                  TlIcon { anchors.centerIn: parent; name: "key"; size: 18 * tl.s }
+                  MouseArea {
+                      id: kma
+                      anchors.fill: parent
+                      onClicked: tl.view.command(7)
+                      onPressAndHold: tl.view.command(8)
+                  }
+              }
+
+              // ---- regua ----
+              Canvas {
+                  id: ruler
+                  x: tl.rulerX
+                  y: tl.barTop
+                  width: tl.rulerW
+                  height: tl.barH
+                  renderTarget: Canvas.Image
+                  property int vs: tl.view.viewStart
+                  property int ve: tl.view.viewEnd
+                  onVsChanged: requestPaint()
+                  onVeChanged: requestPaint()
+                  onWidthChanged: requestPaint()
+                  onHeightChanged: requestPaint()
+
+                  onPaint: {
+                      var ctx = getContext("2d")
+                      ctx.reset()
+                      var s = tl.s
+                      var sp = Math.max(1, ve - vs)
+                      var ppf = width / sp
+                      var steps = [1, 2, 3, 6, 12, 24, 48, 96, 192, 480, 960, 2400]
+                      var step = 2400
+                      for (var i = 0; i < steps.length; i++) {
+                          if (steps[i] * ppf >= 60 * s) { step = steps[i]; break }
+                      }
+                      var minor = step >= 6 ? step / 6 : 0
+                      var ly = tl.lineY
+                      ctx.lineWidth = Math.max(1, 1.1 * s)
+                      ctx.strokeStyle = "#cfcfcf"
+                      ctx.fillStyle = "#858585"
+                      ctx.font = Math.round(11 * s) + "px sans-serif"
+                      ctx.textBaseline = "middle"
+
+                      ctx.beginPath()
+                      ctx.moveTo(0, ly)
+                      ctx.lineTo(width, ly)
+                      ctx.stroke()
+
+                      ctx.textAlign = "center"
+                      for (var f = vs; f <= ve; f++) {
+                          var x = (f - vs) * ppf
+                          if (f % step === 0) {
+                              ctx.beginPath()
+                              ctx.moveTo(x, ly - 11 * s)
+                              ctx.lineTo(x, ly + 11 * s)
+                              ctx.stroke()
+                              ctx.fillText(String(f), x, 12 * s)
+                          } else if (minor > 0 && f % minor === 0) {
+                              ctx.beginPath()
+                              ctx.moveTo(x, ly - 6.5 * s)
+                              ctx.lineTo(x, ly + 6.5 * s)
+                              ctx.stroke()
+                          }
+                      }
+                      // primeiro frame visivel, quando nao e multiplo do passo (como no conceito)
+                      if (vs % step !== 0) {
+                          var nextMajor = Math.ceil(vs / step) * step
+                          if ((nextMajor - vs) * ppf > 45 * s) {
+                              ctx.beginPath()
+                              ctx.moveTo(0, ly - 11 * s)
+                              ctx.lineTo(0, ly + 11 * s)
+                              ctx.stroke()
+                              ctx.textAlign = "left"
+                              ctx.fillText(String(vs), 3 * s, 12 * s)
+                          }
+                      }
+                  }
+              }
+
+              // ---- keyframes (barras verdes) ----
+              Repeater {
+                  model: tl.view.keyFrames
+                  Rectangle {
+                      required property var modelData
+                      visible: modelData >= tl.view.viewStart - 0.5 && modelData <= tl.view.viewEnd + 0.5
+                      width: Math.max(3 * tl.s, Math.min(8 * tl.s, tl.rulerW / tl.span * 1.1))
+                      height: 35 * tl.s
+                      x: tl.frameToX(modelData) - width / 2
+                      y: tl.barTop + tl.lineY - height / 2
+                      color: "#3f8a06"
+                      opacity: 0.95
+                  }
+              }
+
+              // ---- indicador do frame ----
+              Item {
+                  visible: tl.shown >= tl.view.viewStart - 0.01 && tl.shown <= tl.view.viewEnd + 0.01
+                  x: tl.frameToX(tl.shown)
+                  y: tl.barTop
+
+                  Rectangle {   // ponta da seta (aparece so a metade de baixo)
+                      width: 9 * tl.s
+                      height: 9 * tl.s
+                      rotation: 45
+                      x: -width / 2
+                      y: 27 * tl.s
+                      color: "#050505"
+                      border.color: "#f2f2f2"
+                      border.width: Math.max(1, tl.s * 0.8)
+                  }
+                  Rectangle {
+                      width: Math.max(36 * tl.s, lbl.implicitWidth + 12 * tl.s)
+                      height: 25 * tl.s
+                      x: -width / 2
+                      y: 7 * tl.s
+                      radius: 2 * tl.s
+                      color: "#050505"
+                      border.color: "#f2f2f2"
+                      border.width: Math.max(1, tl.s * 0.8)
+                      Text {
+                          id: lbl
+                          anchors.centerIn: parent
+                          text: String(Math.round(tl.shown))
+                          color: "white"
+                          font.pixelSize: 15 * tl.s
+                      }
+                  }
+              }
+
+              // ---- toque na regua: 1 dedo move o frame, 2 dedos dao zoom e deslocam a janela ----
+              MultiPointTouchArea {
+                  id: touch
+                  x: tl.rulerX - 8 * tl.s
+                  y: tl.barTop
+                  width: tl.rulerW + 16 * tl.s
+                  height: tl.barH
+                  minimumTouchPoints: 1
+                  maximumTouchPoints: 2
+                  touchPoints: [ TouchPoint { id: tp1 }, TouchPoint { id: tp2 } ]
+
+                  property bool pinching: false
+                  property bool ignoreRest: false
+                  property real d0: 1
+                  property real mid0: 0
+                  property real vs0: 0
+                  property real ve0: 1
+
+                  onTouchUpdated: function (points) {
+                      var act = []
+                      for (var i = 0; i < points.length; i++) {
+                          if (points[i].pressed) act.push(points[i])
+                      }
+                      if (act.length === 0) {
+                          tl.scrubbing = false
+                          pinching = false
+                          ignoreRest = false
+                          return
+                      }
+                      var pad = 8 * tl.s
+                      if (act.length >= 2) {
+                          tl.scrubbing = false
+                          ignoreRest = true
+                          var a = act[0], b = act[1]
+                          var dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y))
+                          var mid = (a.x + b.x) / 2
+                          if (!pinching) {
+                              pinching = true
+                              d0 = dist
+                              mid0 = mid
+                              vs0 = tl.view.viewStart
+                              ve0 = tl.view.viewEnd
+                              return
+                          }
+                          var span0 = Math.max(1, ve0 - vs0)
+                          var full = Math.max(10, tl.view.frameEnd - tl.view.frameStart)
+                          var sp = Math.max(10, Math.min(full, span0 * d0 / dist))
+                          var w = tl.rulerW
+                          var c0 = vs0 + (mid0 - pad) / w * span0
+                          var nvs = c0 - (mid - pad) / w * sp
+                          nvs = Math.max(tl.view.frameStart, Math.min(tl.view.frameEnd - sp, nvs))
+                          tl.view.command(10, Math.round(nvs), Math.round(nvs + sp))
+                          return
+                      }
+                      if (ignoreRest) return
+                      if (!tl.scrubbing && tl.view.playing) tl.view.command(2)
+                      tl.scrubbing = true
+                      tl.scrubTo(act[0].x - pad)
+                  }
+              }
+
+              // mantem o indicador dentro da janela visivel (reproducao ou frame digitado)
+              Connections {
+                  target: tl.view
+                  function onTimelineChanged() {
+                      if (tl.scrubbing || touch.pinching) return
+                      var f = tl.view.frame
+                      if (f < tl.view.viewStart - 0.01 || f > tl.view.viewEnd + 0.01) {
+                          var sp = tl.view.viewEnd - tl.view.viewStart
+                          var ns = Math.max(tl.view.frameStart, Math.min(tl.view.frameEnd - sp, Math.round(f - sp / 2)))
+                          tl.view.command(10, ns, ns + sp)
+                      }
+                  }
+              }
+          }
+          NOMADEOF
+          cat > nomad-qt/TlButton.qml <<'NOMADEOF'
+          import QtQuick
+
+          // Botao cinza em degrade, como os da timeline do Maya.
+          Rectangle {
+              id: root
+              property real s: 1
+              property string icon: ""
+              property bool active: false
+              property real iconSize: 22 * s
+              signal clicked
+              signal pressAndHold
+
+              implicitWidth: 27.3 * s
+              implicitHeight: 27 * s
+              border.color: "#222222"
+              border.width: Math.max(1, s * 0.6)
+              gradient: Gradient {
+                  GradientStop { position: 0.0; color: root.active ? "#86a3c4" : (ma.pressed ? "#4a4a4a" : "#636363") }
+                  GradientStop { position: 1.0; color: root.active ? "#5e7d9f" : (ma.pressed ? "#323232" : "#3d3d3d") }
+              }
+
+              TlIcon {
+                  anchors.centerIn: parent
+                  name: root.icon
+                  size: root.iconSize
+              }
+
+              MouseArea {
+                  id: ma
+                  anchors.fill: parent
+                  onClicked: root.clicked()
+                  onPressAndHold: root.pressAndHold()
+              }
+          }
+          NOMADEOF
+          cat > nomad-qt/TlIcon.qml <<'NOMADEOF'
+          import QtQuick
+          import QtQuick.Shapes
+
+          // Icones da timeline (grade 24x24): triangulos e barras cheios, chave em tracos.
+          Item {
+              id: root
+              property string name: ""
+              property color color: "#ececec"
+              property real size: 24
+              width: size
+              height: size
+
+              readonly property var fills: ({
+                  "start":   "M2.5 5 H5 V19 H2.5 Z M14 5 L14 19 L6 12 Z M22 5 L22 19 L14 12 Z",
+                  "rev":     "M17 4 L17 20 L5 12 Z",
+                  "stop":    "M6.5 6.5 H17.5 V17.5 H6.5 Z",
+                  "play":    "M7 4 L7 20 L19 12 Z",
+                  "end":     "M2 5 L2 19 L10 12 Z M10 5 L10 19 L18 12 Z M19 5 H21.5 V19 H19 Z",
+                  "prevkey": "M5 5 H7.5 V19 H5 Z M19 5 L19 19 L9 12 Z",
+                  "nextkey": "M16.5 5 H19 V19 H16.5 Z M5 5 L5 19 L15 12 Z"
+              })
+              readonly property var strokes: ({
+                  "key": "M12 8 A4 4 0 1 1 4 8 A4 4 0 1 1 12 8 M11 11 L20 20 M16.5 16.5 L19 14 M18.5 18.5 L21 16"
+              })
+
+              Shape {
+                  width: 24
+                  height: 24
+                  scale: root.size / 24
+                  transformOrigin: Item.TopLeft
+                  preferredRendererType: Shape.CurveRenderer
+
+                  ShapePath {
+                      fillColor: root.color
+                      strokeColor: "transparent"
+                      PathSvg { path: root.fills[root.name] ? root.fills[root.name] : "M0 0" }
+                  }
+                  ShapePath {
+                      fillColor: "transparent"
+                      strokeColor: root.strokes[root.name] ? root.color : "transparent"
+                      strokeWidth: 1.8
+                      capStyle: ShapePath.RoundCap
+                      joinStyle: ShapePath.RoundJoin
+                      PathSvg { path: root.strokes[root.name] ? root.strokes[root.name] : "M0 0" }
+                  }
+              }
           }
           NOMADEOF
           cat > nomad-qt/engine_api.h <<'NOMADEOF'
           #pragma once
           #include <jni.h>
+          #include <vector>
 
           // Evento ja traduzido do Qt para o formato que o motor entende.
           struct EngEvent {
-              int kind = 0;    // 0 toque, 1 texto, 2 backspace, 3 enter, 4 voltar
+              int kind = 0;    // 0 toque, 1 texto, 2 backspace, 3 enter, 4 voltar, 5 comando da timeline (action = comando, x[0], x[1] = valores)
               int action = 0;  // acoes do Android: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL, 5 POINTER_DOWN, 6 POINTER_UP
               int n = 0;       // quantidade de dedos
               float x[2] = {0, 0};
               float y[2] = {0, 0};
               int cp = 0;      // caractere (kind == 1)
+          };
+
+          // Estado da timeline lido pelo QML (frames em unidades de frame, 24 fps)
+          struct EngTimeline {
+              float frame = 1;
+              int fs = 1, fe = 240;  // intervalo global
+              int vs = 1, ve = 120;  // janela visivel
+              bool playing = false;
+              int dir = 1;
+              bool visible = true;   // falso no modo Escultura
+              bool hasSel = false;
+              std::vector<float> keys;  // keyframes do objeto selecionado
           };
 
           // ---- motor (engine.cpp) - tudo isto roda na thread de render ----
@@ -133,6 +578,7 @@ jobs:
           void eng_frame();
           void eng_gl_lost();
           bool eng_dialog_open();
+          void eng_timeline(EngTimeline &t);
 
           // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
           void plat_show_keyboard();
@@ -191,6 +637,7 @@ jobs:
           #include <QPointF>
           #include <QPointer>
           #include <QQuickItem>
+          #include <QVariantList>
           #include <QtQml/qqml.h>
           #include <atomic>
           #include <string>
@@ -205,12 +652,42 @@ jobs:
           class EngineView : public QQuickItem {
               Q_OBJECT
               QML_NAMED_ELEMENT(EngineView)
+              Q_PROPERTY(qreal frame READ frame NOTIFY timelineChanged)
+              Q_PROPERTY(int frameStart READ frameStart NOTIFY timelineChanged)
+              Q_PROPERTY(int frameEnd READ frameEnd NOTIFY timelineChanged)
+              Q_PROPERTY(int viewStart READ viewStart NOTIFY timelineChanged)
+              Q_PROPERTY(int viewEnd READ viewEnd NOTIFY timelineChanged)
+              Q_PROPERTY(bool playing READ playing NOTIFY timelineChanged)
+              Q_PROPERTY(int playDir READ playDir NOTIFY timelineChanged)
+              Q_PROPERTY(bool timelineVisible READ timelineVisible NOTIFY timelineChanged)
+              Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY timelineChanged)
+              Q_PROPERTY(QVariantList keyFrames READ keyFrames NOTIFY keysChanged)
 
           public:
               explicit EngineView(QQuickItem *parent = nullptr);
               static EngineView *instance();
               void showKeyboard();  // thread da interface
               void hideKeyboard();
+
+              qreal frame() const { return m_tl.frame; }
+              int frameStart() const { return m_tl.fs; }
+              int frameEnd() const { return m_tl.fe; }
+              int viewStart() const { return m_tl.vs; }
+              int viewEnd() const { return m_tl.ve; }
+              bool playing() const { return m_tl.playing; }
+              int playDir() const { return m_tl.dir; }
+              bool timelineVisible() const { return m_tl.visible; }
+              bool hasSelection() const { return m_tl.hasSel; }
+              QVariantList keyFrames() const { return m_keys; }
+
+              // Comandos da timeline (executados na thread de render):
+              // 0 ir ao inicio, 1 reproduzir ao contrario, 2 parar, 3 reproduzir, 4 ir ao fim,
+              // 5 key anterior, 6 proxima key, 7 inserir key, 8 apagar key, 9 ir ao frame a, 10 janela visivel a..b
+              Q_INVOKABLE void command(int cmd, qreal a = 0, qreal b = 0);
+
+          signals:
+              void timelineChanged();
+              void keysChanged();
 
           protected:
               void touchEvent(QTouchEvent *ev) override;
@@ -225,10 +702,14 @@ jobs:
               void renderEngine();  // thread de render, antes do Qt Quick desenhar
               void glLost();
               void updateSize();
+              void applyTimeline(const EngTimeline &t);
               void push(const EngEvent &e);
               EngEvent makeTouch(int action) const;
 
               std::string m_dir;
+              EngTimeline m_tl;      // thread da interface
+              EngTimeline m_lastTl;  // thread de render
+              QVariantList m_keys;
               QMutex m_mutex;
               std::vector<EngEvent> m_queue;
               std::atomic<int> m_pw{0}, m_ph{0};
@@ -257,6 +738,12 @@ jobs:
           #endif
 
           static QPointer<EngineView> s_instance;
+
+          static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
+              return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
+                     a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
+                     a.keys == b.keys;
+          }
 
           EngineView *EngineView::instance() { return s_instance.data(); }
 
@@ -332,6 +819,35 @@ jobs:
               eng_frame();
               w->endExternalCommands();
               QQuickOpenGLUtils::resetOpenGLState();
+
+              // estado da timeline -> QML (so quando muda)
+              EngTimeline t;
+              eng_timeline(t);
+              if (!sameTl(t, m_lastTl)) {
+                  m_lastTl = t;
+                  QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
+              }
+          }
+
+          void EngineView::applyTimeline(const EngTimeline &t) {
+              const bool keysDiff = (t.keys != m_tl.keys);
+              m_tl = t;
+              emit timelineChanged();
+              if (keysDiff) {
+                  m_keys.clear();
+                  for (float k : t.keys) m_keys.append(double(k));
+                  emit keysChanged();
+              }
+          }
+
+          void EngineView::command(int cmd, qreal a, qreal b) {
+              EngEvent e;
+              e.kind = 5;
+              e.action = cmd;
+              e.x[0] = float(a);
+              e.x[1] = float(b);
+              push(e);
+              if (window()) window()->update();
           }
 
           void EngineView::glLost() { eng_gl_lost(); }
@@ -1041,7 +1557,7 @@ jobs:
            fwrite(js.data(),1,js.size(),f);fclose(f);saved(path,fb);}
           // ---------- icones, importacao glTF ----------
           Rc gListR={0,0,0,0};float gScrollPx=0,gSY0=0,gSS0=0,gRowH=1;
-          float gFlash[64]={};bool gFileMenu=false,gRenderOpen=false,gRigOpen=false,gTlOpen=false,gToolFan=false,gAddFan=false;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
+          float gFlash[64]={};bool gTlQml=true;bool gFileMenu=false,gRenderOpen=false,gRigOpen=false,gTlOpen=false,gToolFan=false,gAddFan=false;bool gImportOpen=false;int gPick=0;std::vector<std::string> gFiles;
           void icon2(int id,float cx,float cy,float s,bool on){
            if(id>=3&&id<=6){icon(id,cx,cy,s,on);return;}
            const float c=.93f;
@@ -2128,7 +2644,7 @@ jobs:
              float rng=(float)std::max(gFE-gFS,1),b0=gTrX0+(gVS-gFS)/rng*gTrW,b1=gTrX0+(gVE-gFS)/rng*gTrW,cy=ry3+h3/2;
              rect(gTrX0,cy-.2f*u,gTrW,.4f*u,.07f,.07f,.08f,1,.2f*u);rect(b0,cy-.35f*u,std::max(b1-b0,.5f*u),.7f*u,.55f,.55f,.58f,1,.3f*u);
              rect(b0-.5f*u,ry3+.3f*u,1.0f*u,h3-.6f*u,.75f,.75f,.78f,1,.3f*u);rect(b1-.5f*u,ry3+.3f*u,1.0f*u,h3-.6f*u,.75f,.75f,.78f,1,.3f*u);}}
-          else if(!gSculpt){ // faixa fina: play + linha do tempo
+          else if(!gSculpt&&!gTlQml){ // faixa fina: play + linha do tempo
            float sh=9*u,y0=H-sh;rect(0,y0,(float)W,sh,0,0,0,.5f);gBlock.push_back({0,y0,(float)W,sh});
            float pb=6.6f*u,px0=ML_+.2f*u,py0=y0+(sh-pb)/2;bool pon=playing||gFlash[8]>0;
            rect(px0,py0,pb,pb,pon?.28f:.2f,pon?.45f:.2f,pon?.7f:.22f,.95f,pb/2);icon2(8,px0+pb/2,py0+pb/2,pb*.28f,pon);gBtn.push_back({{px0,py0,pb,pb},8});
@@ -2141,7 +2657,7 @@ jobs:
            {float cf=tm*24;if(cf>=gVS-.01f&&cf<=gVE+.01f){float pxh=tx(tm);rect(pxh-.07f*u,ty0+2.2f*u,.14f*u,th-2.2f*u,1,1,1);dia(pxh,ty0+2.4f*u,1.5f*u,.95f,.95f,.95f);}}
            pill(W-ML_-13.5f*u,y0+(sh-6.2f*u)/2,13.5f*u,6.2f*u,62,"Timeline",false,.27f,.27f,.29f);}
           else{gTrack={0,0,0,0};}
-          {float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-9*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
+          {float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-(gTlQml?20.5f:9.f)*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
            if(gImportOpen){float pw2=82*u,rh2=5.8f*u,tp2=.46f*u;int n=(int)gFiles.size();float lh=6*rh2,ph2=6.5f*u+lh+1.5f*u,px2=(W-pw2)/2,py2=(H-ph2)/2;
                        float tot=n*rh2,maxs=std::max(0.f,tot-lh);gScrollPx=std::clamp(gScrollPx,0.f,maxs);gRowH=rh2;gListR={px2+1*u,py2+6.5f*u,pw2-2*u,lh};
                        panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
@@ -2186,7 +2702,7 @@ jobs:
            {float y5=fy+fh+1.8f*u,bw=(pw2-2*pad-.8f*u)/2;pill(px+pad,y5,bw,bh,2004,"Cancelar",false,.3f,.3f,.33f);pill(px+pad+bw+.8f*u,y5,bw,bh,2003,"OK",true,.2f,.38f,.55f);
             text("Toque no campo para abrir o teclado",px+pad,y5+bh+1.2f*u,.32f*u,.55f,.55f,.6f);}
            gBtn.push_back({{0,0,(float)W,(float)H},299});}
-           if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:(float)H-9.5f*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
+           if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:(float)H-(gTlQml?21.f:9.5f)*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
            if(!gFileMenu)drawNav();
           }
 
@@ -2365,6 +2881,30 @@ jobs:
               initPost();
           }
 
+          void api_timeline(EngTimeline &t) {
+              t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
+              t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
+              t.hasSel = sel >= 0 && sel < (int)objs.size();
+              t.keys.clear();
+              if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
+          }
+
+          void api_cmd(int c, float a, float b) {
+              switch (c) {
+              case 0: tm = gFS / 24.f; applyAnim(); break;
+              case 1: playing = true; gPlayDir = -1; break;
+              case 2: playing = false; break;
+              case 3: playing = true; gPlayDir = 1; break;
+              case 4: tm = gFE / 24.f; applyAnim(); break;
+              case 5: jumpKey(-1); break;
+              case 6: jumpKey(1); break;
+              case 7: insertKey(); break;
+              case 8: delKey(); break;
+              case 9: { int f = std::clamp((int)roundf(a), gFS, gFE); tm = f / 24.f; applyAnim(); break; }
+              case 10: { int e = std::clamp((int)roundf(b), gFS + 5, gFE); int st = std::clamp((int)roundf(a), gFS, e - 5); gVS = st; gVE = e; break; }
+              }
+          }
+
           void api_event(const EngEvent &e) {
               switch (e.kind) {
               case 0: {
@@ -2378,6 +2918,7 @@ jobs:
               case 2: if (gNameOpen) nameBack(); else if (gSizeOpen) sizeBack(); break;
               case 3: if (gNameOpen) nameConfirm(); else if (gSizeOpen) sizeApply(); break;
               case 4: if (gNameOpen || gSizeOpen) { gNameOpen = false; gSizeOpen = false; hideKb(); } break;
+              case 5: api_cmd(e.action, e.x[0], e.x[1]); break;
               }
           }
 
@@ -2422,6 +2963,7 @@ jobs:
           void eng_frame() { eng::api_frame(); }
           void eng_gl_lost() { eng::api_gl_lost(); }
           bool eng_dialog_open() { return eng::api_dialog_open(); }
+          void eng_timeline(EngTimeline &t) { eng::api_timeline(t); }
           NOMADEOF
 
       - name: Baixar bibliotecas (stb, cgltf)
