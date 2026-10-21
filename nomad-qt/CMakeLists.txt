@@ -17,6 +17,8 @@ qt_add_qml_module(Nomad
         Timeline.qml
         TlButton.qml
         TlIcon.qml
+        TbCell.qml
+        TopBars.qml
     SOURCES
         engineview.h
         engineview.cpp

@@ -22,5 +22,11 @@ Window {
         visible: engineView.timelineVisible
     }
 
+    // Botoes do conceito (ferramentas, cubo, desfazer/refazer, menu)
+    TopBars {
+        anchors.fill: parent
+        view: engineView
+    }
+
     Component.onCompleted: engineView.forceActiveFocus()
 }

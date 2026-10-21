@@ -30,6 +30,10 @@ class EngineView : public QQuickItem {
     Q_PROPERTY(bool timelineVisible READ timelineVisible NOTIFY timelineChanged)
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY timelineChanged)
     Q_PROPERTY(QVariantList keyFrames READ keyFrames NOTIFY keysChanged)
+    Q_PROPERTY(int toolIndex READ toolIndex NOTIFY timelineChanged)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY timelineChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY timelineChanged)
+    Q_PROPERTY(bool sculptMode READ sculptMode NOTIFY timelineChanged)
 
 public:
     explicit EngineView(QQuickItem *parent = nullptr);
@@ -47,10 +51,15 @@ public:
     bool timelineVisible() const { return m_tl.visible; }
     bool hasSelection() const { return m_tl.hasSel; }
     QVariantList keyFrames() const { return m_keys; }
+    int toolIndex() const { return m_tl.tool; }
+    bool canUndo() const { return m_tl.canUndo; }
+    bool canRedo() const { return m_tl.canRedo; }
+    bool sculptMode() const { return m_tl.sculpt; }
 
     // Comandos da timeline (executados na thread de render):
     // 0 ir ao inicio, 1 reproduzir ao contrario, 2 parar, 3 reproduzir, 4 ir ao fim,
-    // 5 key anterior, 6 proxima key, 7 inserir key, 8 apagar key, 9 ir ao frame a, 10 janela visivel a..b
+    // 5 key anterior, 6 proxima key, 7 inserir key, 8 apagar key, 9 ir ao frame a, 10 janela visivel a..b,
+    // 11 aperta o botao do motor com id a (ferramentas 3..6, adicionar 0/1/2/10/18, desfazer 91, refazer 92, menu 60)
     Q_INVOKABLE void command(int cmd, qreal a = 0, qreal b = 0);
 
 signals:
