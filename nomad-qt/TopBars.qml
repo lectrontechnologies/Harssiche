@@ -3,17 +3,19 @@ import QtQuick.Shapes
 
 // Barras de botoes do conceito: ferramentas + cubo (canto superior esquerdo)
 // e desfazer / refazer / menu (canto superior direito).
-// Medidas partem de um desenho de 800x360 e escalam com a altura da tela.
+// Os icones sao os do proprio conceito (PNG recortado) e ficam nas mesmas posicoes dele.
+// Medidas em pixels do conceito (2400x1080) convertidas por "k".
 Item {
     id: bars
     required property var view   // EngineView
 
-    readonly property real s: height > 0 ? height / 360 : 1
+    readonly property real s: height > 0 ? height / 360 : 1   // unidade de projeto (800x360)
+    readonly property real k: s / 3                            // pixel do conceito -> tela
     property bool addOpen: false
 
-    function pickTool(k) {
+    function pickTool(n) {
         // tocar na ferramenta ativa volta para "selecionar" (ferramenta 3)
-        view.command(11, view.toolIndex === k ? 6 : 3 + k)
+        view.command(11, view.toolIndex === n ? 6 : 3 + n)
     }
 
     // fecha o menu de adicionar ao tocar fora
@@ -23,7 +25,7 @@ Item {
         onClicked: bars.addOpen = false
     }
 
-    // ---------------- ferramentas ----------------
+    // ---------------- fundos ----------------
     Shape {
         width: 138
         height: 45
@@ -36,15 +38,6 @@ Item {
             PathSvg { path: "M0 0 H138 V35 Q138 45 128 45 H0 Z" }
         }
     }
-    Row {
-        x: 0
-        y: 0
-        TbCell { s: bars.s; icon: "tmove"; active: bars.view.toolIndex === 0; onClicked: bars.pickTool(0) }
-        TbCell { s: bars.s; icon: "trotate"; active: bars.view.toolIndex === 1; onClicked: bars.pickTool(1) }
-        TbCell { s: bars.s; icon: "tscale"; active: bars.view.toolIndex === 2; onClicked: bars.pickTool(2) }
-    }
-
-    // ---------------- botao de cubo (adicionar) ----------------
     Shape {
         y: 44.5 * bars.s
         width: 52
@@ -58,18 +51,70 @@ Item {
             PathSvg { path: "M0 0 H52 V46.5 Q52 51.5 47 51.5 H0 Z" }
         }
     }
+    Shape {
+        x: bars.width - 123 * bars.s
+        width: 123
+        height: 36
+        scale: bars.s
+        transformOrigin: Item.TopLeft
+        preferredRendererType: Shape.CurveRenderer
+        ShapePath {
+            fillColor: "#282828"
+            strokeColor: "transparent"
+            PathSvg { path: "M0 0 H123 V36 H3 Q0 36 0 33 Z" }
+        }
+    }
+
+    // ---------------- ferramenta ativa (quadrado azul atras do icone) ----------------
+    Rectangle { visible: bars.view.toolIndex === 0; x: (76.5 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.view.toolIndex === 1; x: (199.5 - 54) * bars.k; y: (72.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.view.toolIndex === 2; x: (338.5 - 54) * bars.k; y: (67 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.addOpen; x: (79.5 - 54) * bars.k; y: (212.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+
+    // ---------------- icones (recortes do conceito) ----------------
+    Image { source: "icons/tb_move.png";   x: 40 * bars.k;   y: 32 * bars.k;  width: 73 * bars.k; height: 58 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_rotate.png"; x: 157 * bars.k;  y: 45 * bars.k;  width: 85 * bars.k; height: 55 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_scale.png";  x: 295 * bars.k;  y: 31 * bars.k;  width: 87 * bars.k; height: 72 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_cube.png";   x: 35 * bars.k;   y: 169 * bars.k; width: 89 * bars.k; height: 87 * bars.k; smooth: true; mipmap: true }
+    Image {
+        source: "icons/tb_undo.png"
+        x: bars.width + (2066 - 2400) * bars.k; y: 36 * bars.k; width: 85 * bars.k; height: 39 * bars.k
+        smooth: true; mipmap: true
+        opacity: bars.view.canUndo ? 1.0 : 0.35
+    }
+    Image {
+        source: "icons/tb_redo.png"
+        x: bars.width + (2181 - 2400) * bars.k; y: 35 * bars.k; width: 85 * bars.k; height: 39 * bars.k
+        smooth: true; mipmap: true
+        opacity: bars.view.canRedo ? 1.0 : 0.35
+    }
+    Image { source: "icons/tb_menu.png"; x: bars.width + (2293 - 2400) * bars.k; y: 25 * bars.k; width: 85 * bars.k; height: 60 * bars.k; smooth: true; mipmap: true }
+
+    // ---------------- areas de toque ----------------
+    Row {
+        x: 0
+        y: 0
+        TbCell { s: bars.s; onClicked: bars.pickTool(0) }
+        TbCell { s: bars.s; onClicked: bars.pickTool(1) }
+        TbCell { s: bars.s; onClicked: bars.pickTool(2) }
+    }
     TbCell {
         x: 0
         y: 45 * bars.s
         width: 52 * bars.s
         height: 51 * bars.s
         s: bars.s
-        icon: "tcube"
-        active: bars.addOpen
         onClicked: bars.addOpen = !bars.addOpen
     }
+    Row {
+        x: bars.width - 123 * bars.s
+        y: 0
+        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 91) }
+        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 92) }
+        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 60) }
+    }
 
-    // menu de objetos
+    // ---------------- menu de objetos ----------------
     Rectangle {
         visible: bars.addOpen
         x: 58 * bars.s
@@ -111,27 +156,5 @@ Item {
                 }
             }
         }
-    }
-
-    // ---------------- desfazer / refazer / menu ----------------
-    Shape {
-        x: bars.width - 123 * bars.s
-        width: 123
-        height: 36
-        scale: bars.s
-        transformOrigin: Item.TopLeft
-        preferredRendererType: Shape.CurveRenderer
-        ShapePath {
-            fillColor: "#282828"
-            strokeColor: "transparent"
-            PathSvg { path: "M0 0 H123 V36 H3 Q0 36 0 33 Z" }
-        }
-    }
-    Row {
-        x: bars.width - 123 * bars.s
-        y: 0
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; icon: "undo"; dimmed: !bars.view.canUndo; onClicked: bars.view.command(11, 91) }
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; icon: "redo"; dimmed: !bars.view.canRedo; onClicked: bars.view.command(11, 92) }
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; icon: "menu"; onClicked: bars.view.command(11, 60) }
     }
 }

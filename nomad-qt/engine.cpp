@@ -1921,6 +1921,14 @@ void api_frame() {
         applyAnim();
     }
     frame();
+    // O motor desenha direto na tela e deixa profundidade/stencil preenchidos: limpa para o Qt Quick
+    // desenhar a interface (timeline, botoes) por cima, sem o 3D "vencer" no teste de profundidade.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glDepthMask(GL_TRUE);
+    glClearDepthf(1.f);
+    glClearStencil(0);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 }
 
 void api_gl_lost() {

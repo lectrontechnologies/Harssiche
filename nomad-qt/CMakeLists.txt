@@ -19,6 +19,14 @@ qt_add_qml_module(Nomad
         TlIcon.qml
         TbCell.qml
         TopBars.qml
+    RESOURCES
+        icons/tb_move.png
+        icons/tb_rotate.png
+        icons/tb_scale.png
+        icons/tb_cube.png
+        icons/tb_undo.png
+        icons/tb_redo.png
+        icons/tb_menu.png
     SOURCES
         engineview.h
         engineview.cpp
