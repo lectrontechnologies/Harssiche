@@ -94,11 +94,12 @@ Item {
     Row {
         x: 0
         y: 0
-        TbCell { s: bars.s; onClicked: bars.pickTool(0) }
-        TbCell { s: bars.s; onClicked: bars.pickTool(1) }
-        TbCell { s: bars.s; onClicked: bars.pickTool(2) }
+        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(0) }
+        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(1) }
+        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(2) }
     }
     TbCell {
+        view: bars.view
         x: 0
         y: 45 * bars.s
         width: 52 * bars.s
@@ -109,9 +110,9 @@ Item {
     Row {
         x: bars.width - 123 * bars.s
         y: 0
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 91) }
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 92) }
-        TbCell { s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 60) }
+        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 91) }
+        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 92) }
+        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 60) }
     }
 
     // ---------------- menu de objetos ----------------
@@ -123,7 +124,11 @@ Item {
         height: addCol.height
         color: "#282828"
         radius: 6 * bars.s
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+            id: addPanelMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: addPanelMa; view: bars.view }
+        }
 
         Column {
             id: addCol
@@ -131,7 +136,8 @@ Item {
             Repeater {
                 model: [
                     { n: "Cubo", i: 0 }, { n: "Esfera", i: 1 }, { n: "Plano", i: 2 },
-                    { n: "Osso", i: 10 }, { n: "Câmera", i: 18 }
+                    { n: "Osso", i: 10 }, { n: "Câmera", i: 18 },
+                    { n: "Sol", i: 45 }, { n: "Ponto", i: 46 }, { n: "Spot", i: 47 }
                 ]
                 Rectangle {
                     required property var modelData
@@ -148,6 +154,7 @@ Item {
                     MouseArea {
                         id: rowMa
                         anchors.fill: parent
+                        containmentMask: HitMask { target: rowMa; view: bars.view }
                         onClicked: {
                             bars.view.command(11, parent.modelData.i)
                             bars.addOpen = false

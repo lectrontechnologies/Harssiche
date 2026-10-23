@@ -4,6 +4,7 @@ import QtQuick
 Rectangle {
     id: root
     property real s: 1
+    property var view
     property string icon: ""
     property bool active: false
     property real iconSize: 22 * s
@@ -28,6 +29,7 @@ Rectangle {
     MouseArea {
         id: ma
         anchors.fill: parent
+        containmentMask: HitMask { target: ma; view: root.view }
         onClicked: root.clicked()
         onPressAndHold: root.pressAndHold()
     }

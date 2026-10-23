@@ -41,7 +41,11 @@ Item {
         width: tl.width
         height: tl.barH
         color: "#2f2f2f"
-        MouseArea { anchors.fill: parent }   // nao deixa o toque passar para o viewport
+        MouseArea {   // nao deixa o toque passar para o viewport
+            id: barMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: barMa; view: tl.view }
+        }
     }
 
     Shape {
@@ -59,10 +63,12 @@ Item {
         }
     }
     MouseArea {
+        id: tabMa
         x: 60 * tl.s
         y: tl.tabTop
         width: 302 * tl.s
         height: tl.tabH
+        containmentMask: HitMask { target: tabMa; view: tl.view }
     }
 
     // ---- transporte ----
@@ -70,11 +76,11 @@ Item {
         x: 87 * tl.s
         y: tl.btnY
         spacing: 0
-        TlButton { s: tl.s; icon: "start"; onClicked: tl.view.command(0) }
-        TlButton { s: tl.s; icon: "rev"; active: tl.view.playing && tl.view.playDir < 0; onClicked: tl.view.command(1) }
-        TlButton { s: tl.s; icon: "stop"; active: !tl.view.playing; onClicked: tl.view.command(2) }
-        TlButton { s: tl.s; icon: "play"; active: tl.view.playing && tl.view.playDir > 0; onClicked: tl.view.command(3) }
-        TlButton { s: tl.s; icon: "end"; onClicked: tl.view.command(4) }
+        TlButton { view: tl.view; s: tl.s; icon: "start"; onClicked: tl.view.command(0) }
+        TlButton { view: tl.view; s: tl.s; icon: "rev"; active: tl.view.playing && tl.view.playDir < 0; onClicked: tl.view.command(1) }
+        TlButton { view: tl.view; s: tl.s; icon: "stop"; active: !tl.view.playing; onClicked: tl.view.command(2) }
+        TlButton { view: tl.view; s: tl.s; icon: "play"; active: tl.view.playing && tl.view.playDir > 0; onClicked: tl.view.command(3) }
+        TlButton { view: tl.view; s: tl.s; icon: "end"; onClicked: tl.view.command(4) }
     }
 
     // ---- frame atual (toque para digitar) ----
@@ -96,6 +102,7 @@ Item {
             font.pixelSize: 11.5 * tl.s
             inputMethodHints: Qt.ImhDigitsOnly
             selectByMouse: true
+            containmentMask: HitMask { target: fld; view: tl.view }
             onAccepted: {
                 var f = parseInt(text)
                 if (!isNaN(f)) tl.view.command(9, f)
@@ -116,8 +123,8 @@ Item {
         x: 275 * tl.s
         y: tl.btnY
         spacing: 0
-        TlButton { s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "prevkey"; onClicked: tl.view.command(5) }
-        TlButton { s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "nextkey"; onClicked: tl.view.command(6) }
+        TlButton { view: tl.view; s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "prevkey"; onClicked: tl.view.command(5) }
+        TlButton { view: tl.view; s: tl.s; width: 13 * tl.s; iconSize: 14 * tl.s; icon: "nextkey"; onClicked: tl.view.command(6) }
     }
 
     // ---- botao de key (toque insere, segurar apaga a key do frame) ----
@@ -134,6 +141,7 @@ Item {
         MouseArea {
             id: kma
             anchors.fill: parent
+            containmentMask: HitMask { target: kma; view: tl.view }
             onClicked: tl.view.command(7)
             onPressAndHold: tl.view.command(8)
         }
@@ -268,6 +276,7 @@ Item {
         height: tl.barH
         minimumTouchPoints: 1
         maximumTouchPoints: 2
+        containmentMask: HitMask { target: touch; view: tl.view }
         touchPoints: [ TouchPoint { id: tp1 }, TouchPoint { id: tp2 } ]
 
         property bool pinching: false

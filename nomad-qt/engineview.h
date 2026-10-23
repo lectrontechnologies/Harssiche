@@ -61,6 +61,8 @@ public:
     // 5 key anterior, 6 proxima key, 7 inserir key, 8 apagar key, 9 ir ao frame a, 10 janela visivel a..b,
     // 11 aperta o botao do motor com id a (ferramentas 3..6, adicionar 0/1/2/10/18, desfazer 91, refazer 92, menu 60)
     Q_INVOKABLE void command(int cmd, qreal a = 0, qreal b = 0);
+    // true se (x, y), em px logicos da janela, esta sobre uma janela/botao desenhado pelo motor
+    Q_INVOKABLE bool uiHit(qreal x, qreal y) const;
 
 signals:
     void timelineChanged();
@@ -76,7 +78,8 @@ protected:
 
 private:
     void onWindowChanged(QQuickWindow *w);
-    void renderEngine();  // thread de render, antes do Qt Quick desenhar
+    void renderEngine();    // thread de render, antes do Qt Quick desenhar (cena 3D)
+    void renderEngineUi();  // thread de render, depois do Qt Quick (interface do motor)
     void glLost();
     void updateSize();
     void applyTimeline(const EngTimeline &t);
@@ -87,6 +90,8 @@ private:
     EngTimeline m_tl;      // thread da interface
     EngTimeline m_lastTl;  // thread de render
     QVariantList m_keys;
+    mutable QMutex m_rectMutex;
+    std::vector<float> m_rects;
     QMutex m_mutex;
     std::vector<EngEvent> m_queue;
     std::atomic<int> m_pw{0}, m_ph{0};

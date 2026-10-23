@@ -37,6 +37,8 @@ void eng_frame();
 void eng_gl_lost();
 bool eng_dialog_open();
 void eng_timeline(EngTimeline &t);
+void eng_frame_ui();                       // fase da interface do motor (depois do Qt Quick)
+void eng_ui_rects(std::vector<float> &out);  // retangulos x,y,w,h (px) ocupados pela interface do motor
 
 // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
 void plat_show_keyboard();

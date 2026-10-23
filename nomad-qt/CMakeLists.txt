@@ -17,6 +17,7 @@ qt_add_qml_module(Nomad
         Timeline.qml
         TlButton.qml
         TlIcon.qml
+        HitMask.qml
         TbCell.qml
         TopBars.qml
     RESOURCES

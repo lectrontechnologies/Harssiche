@@ -54,6 +54,7 @@ EngineView::EngineView(QQuickItem *parent) : QQuickItem(parent) {
 void EngineView::onWindowChanged(QQuickWindow *w) {
     if (!w) return;
     connect(w, &QQuickWindow::beforeRenderPassRecording, this, &EngineView::renderEngine, Qt::DirectConnection);
+    connect(w, &QQuickWindow::afterRenderPassRecording, this, &EngineView::renderEngineUi, Qt::DirectConnection);
     connect(w, &QQuickWindow::sceneGraphInvalidated, this, &EngineView::glLost, Qt::DirectConnection);
     // renderizacao continua: pede outro quadro a cada quadro apresentado
     connect(
@@ -106,6 +107,33 @@ void EngineView::renderEngine() {
         m_lastTl = t;
         QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
     }
+}
+
+// Interface do proprio motor (janelas, paineis, dialogos): desenhada depois do Qt Quick,
+// por isso aparece por cima da timeline e das barras em QML.
+void EngineView::renderEngineUi() {
+    QQuickWindow *w = window();
+    if (!w || !eng_ready()) return;
+    w->beginExternalCommands();
+    eng_frame_ui();
+    w->endExternalCommands();
+    QQuickOpenGLUtils::resetOpenGLState();
+
+    std::vector<float> r;
+    eng_ui_rects(r);
+    QMutexLocker l(&m_rectMutex);
+    m_rects.swap(r);
+}
+
+bool EngineView::uiHit(qreal x, qreal y) const {
+    const qreal dpr = window() ? window()->devicePixelRatio() : 1.0;
+    const float px = float(x * dpr), py = float(y * dpr);
+    QMutexLocker l(&m_rectMutex);
+    for (size_t i = 0; i + 3 < m_rects.size(); i += 4) {
+        const float rx = m_rects[i], ry = m_rects[i + 1], rw = m_rects[i + 2], rh = m_rects[i + 3];
+        if (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh) return true;
+    }
+    return false;
 }
 
 void EngineView::applyTimeline(const EngTimeline &t) {

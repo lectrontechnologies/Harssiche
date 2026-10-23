@@ -4,6 +4,7 @@ import QtQuick
 Item {
     id: root
     property real s: 1
+    property var view
     signal clicked
 
     implicitWidth: 46 * s
@@ -21,6 +22,7 @@ Item {
     MouseArea {
         id: ma
         anchors.fill: parent
+        containmentMask: HitMask { target: ma; view: root.view }
         onClicked: root.clicked()
     }
 }
