@@ -2008,6 +2008,9 @@ void api_resize(int w, int h) {
     initPost();
 }
 
+static bool tDiff(const T &a, const T &b);
+static bool animRange(float &t0, float &t1);
+
 void api_timeline(EngTimeline &t) {
     t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
     t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
