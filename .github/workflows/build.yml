@@ -40,6 +40,9 @@ jobs:
                   TlButton.qml
                   TlIcon.qml
                   HitMask.qml
+                  RdField.qml
+                  RdSeg.qml
+                  RenderDialog.qml
                   TbCell.qml
                   TopBars.qml
               RESOURCES
@@ -50,6 +53,11 @@ jobs:
                   icons/tb_undo.png
                   icons/tb_redo.png
                   icons/tb_menu.png
+                  icons/rd_camera.png
+                  icons/rd_video.png
+                  icons/rd_link.png
+                  icons/rd_close.png
+                  icons/rd_check.png
               SOURCES
                   engineview.h
                   engineview.cpp
@@ -129,6 +137,12 @@ jobs:
 
               // Botoes do conceito (ferramentas, cubo, desfazer/refazer, menu)
               TopBars {
+                  anchors.fill: parent
+                  view: engineView
+              }
+
+              // Tela de render (aberta pelo menu > Renderizar)
+              RenderDialog {
                   anchors.fill: parent
                   view: engineView
               }
@@ -803,9 +817,363 @@ jobs:
               }
           }
           NOMADEOF
+          cat > nomad-qt/RdField.qml <<'NOMADEOF'
+          import QtQuick
+
+          // Campo numerico da tela de render (fundo cinza escuro, texto claro).
+          Rectangle {
+              id: root
+              property real s: 1
+              property string text: ""
+              property bool dimmed: false
+              property var view
+              signal committed(string t)
+
+              color: "#363636"
+              radius: 3 * s
+              opacity: dimmed ? 0.4 : 1.0
+
+              TextInput {
+                  id: ti
+                  anchors.fill: parent
+                  anchors.leftMargin: 8 * root.s
+                  verticalAlignment: TextInput.AlignVCenter
+                  color: "#eeeeee"
+                  font.pixelSize: 13 * root.s
+                  inputMethodHints: Qt.ImhDigitsOnly
+                  selectByMouse: true
+                  enabled: !root.dimmed
+                  onAccepted: {
+                      root.committed(text)
+                      Qt.inputMethod.hide()
+                      if (root.view) root.view.forceActiveFocus()
+                  }
+                  onActiveFocusChanged: if (!activeFocus) root.committed(text)
+              }
+              Binding {
+                  target: ti
+                  property: "text"
+                  value: root.text
+                  when: !ti.activeFocus
+              }
+          }
+          NOMADEOF
+          cat > nomad-qt/RdSeg.qml <<'NOMADEOF'
+          import QtQuick
+
+          // Controle segmentado (ex.: 480p | 720p | 1080p, Day | Night).
+          Rectangle {
+              id: root
+              property real s: 1
+              property var labels: []
+              property int index: -1
+              signal picked(int i)
+
+              color: "#222222"
+              radius: 4 * s
+              height: 24 * s
+
+              Row {
+                  anchors.fill: parent
+                  anchors.margins: 2 * root.s
+                  spacing: 0
+                  Repeater {
+                      model: root.labels
+                      Rectangle {
+                          required property var modelData
+                          required property int index
+                          width: (root.width - 4 * root.s) / Math.max(1, root.labels.length)
+                          height: parent.height
+                          radius: 3 * root.s
+                          color: root.index === index ? "#4a4a4a" : (ma.pressed ? "#333333" : "transparent")
+                          Text {
+                              anchors.centerIn: parent
+                              text: parent.modelData
+                              color: "#eeeeee"
+                              font.pixelSize: 13 * root.s
+                          }
+                          MouseArea {
+                              id: ma
+                              anchors.fill: parent
+                              onClicked: root.picked(parent.index)
+                          }
+                      }
+                  }
+              }
+          }
+          NOMADEOF
+          cat > nomad-qt/RenderDialog.qml <<'NOMADEOF'
+          import QtQuick
+
+          // Tela de render (conceito do usuario): configuracoes a esquerda, previa e botoes a direita.
+          // Se a cena tem keyframes, "Renderizar" faz um video (do primeiro ao ultimo key, em 30 fps por padrao);
+          // se nao tem nenhum, renderiza uma imagem. A camera exporta a imagem e o botao de video exporta o video.
+          Item {
+              id: dlg
+              required property var view   // EngineView
+              visible: false
+
+              readonly property real s: height > 0 ? height / 360 : 1
+              property int resW: 1280
+              property int resH: 720
+              property real ratio: 16 / 9
+              property bool linked: true
+              property int fps: 30
+              property int fromF: 1
+              property int toF: 120
+              property bool night: false
+              property bool edge: true
+
+              function open() {
+                  fromF = view.anyKeys ? view.keyFirst : view.frameStart
+                  toF = view.anyKeys ? view.keyLast : view.frameEnd
+                  visible = true
+              }
+              function close() {
+                  visible = false
+                  view.forceActiveFocus()
+              }
+              function preset(i) {
+                  var w = [854, 1280, 1920][i]
+                  resW = w
+                  resH = Math.round(w / ratio / 2) * 2
+              }
+              function setW(t) {
+                  var v = parseInt(t)
+                  if (isNaN(v)) return
+                  resW = Math.max(64, Math.min(4096, v))
+                  if (linked) resH = Math.max(64, Math.round(resW / ratio / 2) * 2)
+              }
+              function setH(t) {
+                  var v = parseInt(t)
+                  if (isNaN(v)) return
+                  resH = Math.max(64, Math.min(4096, v))
+                  if (linked) resW = Math.max(64, Math.round(resH * ratio / 2) * 2)
+              }
+              function apply() {
+                  view.command(12, resW, resH)
+                  view.command(13, fps)
+                  view.command(14, fromF, toF)
+                  view.command(15, night ? 1 : 0)
+                  view.command(16, edge ? 1 : 0)
+              }
+
+              Connections {
+                  target: dlg.view
+                  function onRenderRequested() { dlg.open() }
+              }
+
+              // bloqueia toques no viewport enquanto a tela esta aberta
+              MouseArea { anchors.fill: parent }
+
+              Rectangle {
+                  id: panel
+                  width: 455 * dlg.s
+                  height: 259 * dlg.s
+                  anchors.centerIn: parent
+                  color: "#2a2a2a"
+                  MouseArea { anchors.fill: parent }
+
+                  // ================= coluna esquerda (configuracoes) =================
+                  Flickable {
+                      id: left
+                      x: 0
+                      y: 0
+                      width: 184 * dlg.s
+                      height: parent.height
+                      contentWidth: width
+                      contentHeight: col.height + 20 * dlg.s
+                      clip: true
+                      boundsBehavior: Flickable.StopAtBounds
+
+                      Column {
+                          id: col
+                          x: 18 * dlg.s
+                          width: 152 * dlg.s
+                          spacing: 8 * dlg.s
+                          topPadding: 12 * dlg.s
+
+                          Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
+                          RdSeg {
+                              s: dlg.s; width: parent.width
+                              labels: ["480p", "720p", "1080p"]
+                              index: dlg.resW === 854 ? 0 : (dlg.resW === 1280 ? 1 : (dlg.resW === 1920 ? 2 : -1))
+                              onPicked: function (i) { dlg.preset(i) }
+                          }
+
+                          // largura / altura com o botao de vinculo
+                          Item {
+                              width: parent.width
+                              height: 58 * dlg.s
+                              Text { x: 0; y: 6 * dlg.s; text: "Largura"; color: "#eeeeee"; font.pixelSize: 13 * dlg.s }
+                              RdField { s: dlg.s; view: dlg.view; x: 62 * dlg.s; y: 0; width: 64 * dlg.s; height: 26 * dlg.s; text: String(dlg.resW); onCommitted: function (t) { dlg.setW(t) } }
+                              Text { x: 0; y: 38 * dlg.s; text: "Altura"; color: "#eeeeee"; font.pixelSize: 13 * dlg.s }
+                              RdField { s: dlg.s; view: dlg.view; x: 62 * dlg.s; y: 32 * dlg.s; width: 64 * dlg.s; height: 26 * dlg.s; text: String(dlg.resH); onCommitted: function (t) { dlg.setH(t) } }
+                              Rectangle {
+                                  x: 132 * dlg.s; y: 12 * dlg.s; width: 20 * dlg.s; height: 34 * dlg.s
+                                  radius: 4 * dlg.s
+                                  color: dlg.linked ? "#3d3d3d" : "transparent"
+                                  Image {
+                                      anchors.centerIn: parent
+                                      source: "icons/rd_link.png"
+                                      width: 8 * dlg.s; height: 20 * dlg.s
+                                      smooth: true; mipmap: true
+                                      opacity: dlg.linked ? 1.0 : 0.45
+                                  }
+                                  MouseArea {
+                                      anchors.fill: parent
+                                      onClicked: { dlg.linked = !dlg.linked; if (dlg.linked) dlg.ratio = dlg.resW / Math.max(1, dlg.resH) }
+                                  }
+                              }
+                          }
+
+                          Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; topPadding: 6 * dlg.s; text: "Tempo"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
+                          Text {
+                              visible: !dlg.view.anyKeys
+                              width: parent.width; wrapMode: Text.WordWrap
+                              text: "Sem keyframes: será renderizada uma imagem."
+                              color: "#9a9a9a"; font.pixelSize: 11 * dlg.s
+                          }
+                          Item {
+                              width: parent.width; height: 26 * dlg.s
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Taxa de Quadros"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              RdField { s: dlg.s; view: dlg.view; x: 96 * dlg.s; width: 56 * dlg.s; height: 26 * dlg.s; dimmed: !dlg.view.anyKeys; text: String(dlg.fps)
+                                  onCommitted: function (t) { var v = parseInt(t); if (!isNaN(v)) dlg.fps = Math.max(1, Math.min(120, v)) } }
+                          }
+                          Item {
+                              width: parent.width; height: 26 * dlg.s
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "A Partir De"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              RdField { s: dlg.s; view: dlg.view; x: 96 * dlg.s; width: 56 * dlg.s; height: 26 * dlg.s; dimmed: !dlg.view.anyKeys; text: String(dlg.fromF)
+                                  onCommitted: function (t) { var v = parseInt(t); if (!isNaN(v)) dlg.fromF = Math.max(0, Math.min(v, dlg.toF)) } }
+                          }
+                          Item {
+                              width: parent.width; height: 26 * dlg.s
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Para"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              RdField { s: dlg.s; view: dlg.view; x: 96 * dlg.s; width: 56 * dlg.s; height: 26 * dlg.s; dimmed: !dlg.view.anyKeys; text: String(dlg.toF)
+                                  onCommitted: function (t) { var v = parseInt(t); if (!isNaN(v)) dlg.toF = Math.max(dlg.fromF, Math.min(v, 100000)) } }
+                          }
+
+                          Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; topPadding: 6 * dlg.s; text: "Iluminação"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
+                          RdSeg { s: dlg.s; width: 110 * dlg.s; x: 21 * dlg.s; labels: ["Day", "Night"]; index: dlg.night ? 1 : 0; onPicked: function (i) { dlg.night = (i === 1) } }
+                          Item {
+                              width: parent.width; height: 28 * dlg.s
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Sombras de borda"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              Rectangle {
+                                  x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                                  Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.edge }
+                                  MouseArea { anchors.fill: parent; onClicked: dlg.edge = !dlg.edge }
+                              }
+                          }
+
+                          Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; topPadding: 6 * dlg.s; text: "Outro"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
+                          Item {
+                              width: parent.width; height: 26 * dlg.s
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Taxa de Bits"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              Rectangle {
+                                  x: 82 * dlg.s; width: 70 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                                  Text { anchors.centerIn: parent; text: "Automático"; color: "#eeeeee"; font.pixelSize: 11 * dlg.s }
+                              }
+                          }
+                          Text { text: "Formato: MP4"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                      }
+                  }
+
+                  // ================= coluna direita (previa e botoes) =================
+                  Rectangle {
+                      x: 184 * dlg.s
+                      y: 0
+                      width: parent.width - 184 * dlg.s
+                      height: parent.height
+                      color: "#1f1f1f"
+                      MouseArea { anchors.fill: parent }
+
+                      // fechar
+                      Item {
+                          x: parent.width - 34 * dlg.s; y: 6 * dlg.s; width: 28 * dlg.s; height: 28 * dlg.s
+                          Image { anchors.centerIn: parent; source: "icons/rd_close.png"; width: 14 * dlg.s; height: 14 * dlg.s; smooth: true; mipmap: true }
+                          MouseArea { anchors.fill: parent; onClicked: dlg.close() }
+                      }
+
+                      // previa
+                      Rectangle {
+                          id: prev
+                          x: 30 * dlg.s; y: 21 * dlg.s
+                          width: 211 * dlg.s; height: 120 * dlg.s
+                          color: "black"
+                          Image {
+                              anchors.fill: parent
+                              fillMode: Image.PreserveAspectFit
+                              source: dlg.view.previewUrl
+                              cache: false
+                              smooth: true
+                              visible: dlg.view.previewUrl !== ""
+                          }
+                          Text {
+                              anchors.centerIn: parent
+                              visible: dlg.view.previewUrl === ""
+                              text: "Prévia"
+                              color: "#555555"
+                              font.pixelSize: 13 * dlg.s
+                          }
+                          Rectangle {   // progresso do render
+                              anchors.bottom: parent.bottom
+                              width: parent.width
+                              height: 2 * dlg.s
+                              color: "#555555"
+                              Rectangle { width: parent.width * Math.max(0, Math.min(1, dlg.view.renderProgress)); height: parent.height; color: "#e8e8e8" }
+                          }
+                      }
+
+                      // botoes
+                      Row {
+                          x: 30 * dlg.s; y: 156 * dlg.s
+                          spacing: 5 * dlg.s
+                          Rectangle {   // camera: exporta a imagem
+                              width: 34 * dlg.s; height: 32 * dlg.s; radius: 3 * dlg.s
+                              color: capMa.pressed ? "#444444" : "#333333"; opacity: dlg.view.rendering ? 0.4 : 1
+                              Image { anchors.centerIn: parent; source: "icons/rd_camera.png"; width: 15 * dlg.s; height: 15 * dlg.s; smooth: true; mipmap: true }
+                              MouseArea { id: capMa; anchors.fill: parent; enabled: !dlg.view.rendering; onClicked: { dlg.apply(); dlg.view.command(18, 2) } }
+                          }
+                          Rectangle {   // video: exporta o video
+                              width: 34 * dlg.s; height: 32 * dlg.s; radius: 3 * dlg.s
+                              color: vidMa.pressed ? "#444444" : "#333333"; opacity: dlg.view.rendering ? 0.4 : 1
+                              Image { anchors.centerIn: parent; source: "icons/rd_video.png"; width: 13 * dlg.s; height: 15 * dlg.s; smooth: true; mipmap: true }
+                              MouseArea { id: vidMa; anchors.fill: parent; enabled: !dlg.view.rendering; onClicked: { dlg.apply(); dlg.view.command(19) } }
+                          }
+                          Rectangle {   // renderizar (video se houver keyframes, senao imagem) / cancelar
+                              width: 77 * dlg.s; height: 32 * dlg.s; radius: 3 * dlg.s
+                              color: rndMa.pressed ? "#444444" : "#333333"
+                              Text {
+                                  anchors.centerIn: parent
+                                  text: dlg.view.rendering ? "Cancelar" : "Renderizar"
+                                  color: "#eeeeee"; font.pixelSize: 12 * dlg.s
+                              }
+                              MouseArea {
+                                  id: rndMa
+                                  anchors.fill: parent
+                                  onClicked: {
+                                      if (dlg.view.rendering) { dlg.view.command(20) }
+                                      else { dlg.apply(); dlg.view.command(dlg.view.anyKeys ? 19 : 18, 1) }
+                                  }
+                              }
+                          }
+                      }
+
+                      // modo de render (ja pronto no conceito)
+                      Rectangle {
+                          x: 30 * dlg.s; y: 200 * dlg.s
+                          width: 77 * dlg.s; height: 32 * dlg.s; radius: 3 * dlg.s
+                          color: "#333333"
+                          Text { anchors.centerIn: parent; text: "Foundry"; color: "#eeeeee"; font.pixelSize: 13 * dlg.s }
+                      }
+                  }
+              }
+          }
+          NOMADEOF
           cat > nomad-qt/engine_api.h <<'NOMADEOF'
           #pragma once
           #include <jni.h>
+          #include <string>
           #include <vector>
 
           // Evento ja traduzido do Qt para o formato que o motor entende.
@@ -830,6 +1198,14 @@ jobs:
               int tool = 3;          // 0 mover, 1 rotacionar, 2 escalar, 3 selecionar
               bool canUndo = false, canRedo = false;
               bool sculpt = false;
+              // tela de render
+              bool anyKeys = false;          // algum objeto da cena tem keyframes
+              int keyFirst = 0, keyLast = 0; // primeiro e ultimo key (frames da timeline, 24/s)
+              bool rendering = false;
+              float progress = 0;
+              bool openRender = false;       // o menu pediu para abrir a tela de render
+              int previewSeq = 0;
+              std::string previewPath;
               std::vector<float> keys;  // keyframes do objeto selecionado
           };
 
@@ -932,6 +1308,12 @@ jobs:
               Q_PROPERTY(bool canUndo READ canUndo NOTIFY timelineChanged)
               Q_PROPERTY(bool canRedo READ canRedo NOTIFY timelineChanged)
               Q_PROPERTY(bool sculptMode READ sculptMode NOTIFY timelineChanged)
+              Q_PROPERTY(bool anyKeys READ anyKeys NOTIFY timelineChanged)
+              Q_PROPERTY(int keyFirst READ keyFirst NOTIFY timelineChanged)
+              Q_PROPERTY(int keyLast READ keyLast NOTIFY timelineChanged)
+              Q_PROPERTY(bool rendering READ rendering NOTIFY timelineChanged)
+              Q_PROPERTY(qreal renderProgress READ renderProgress NOTIFY timelineChanged)
+              Q_PROPERTY(QString previewUrl READ previewUrl NOTIFY timelineChanged)
 
           public:
               explicit EngineView(QQuickItem *parent = nullptr);
@@ -953,6 +1335,15 @@ jobs:
               bool canUndo() const { return m_tl.canUndo; }
               bool canRedo() const { return m_tl.canRedo; }
               bool sculptMode() const { return m_tl.sculpt; }
+              bool anyKeys() const { return m_tl.anyKeys; }
+              int keyFirst() const { return m_tl.keyFirst; }
+              int keyLast() const { return m_tl.keyLast; }
+              bool rendering() const { return m_tl.rendering; }
+              qreal renderProgress() const { return m_tl.progress; }
+              QString previewUrl() const {
+                  if (m_tl.previewPath.empty()) return QString();
+                  return QStringLiteral("file://") + QString::fromStdString(m_tl.previewPath) + QStringLiteral("?") + QString::number(m_tl.previewSeq);
+              }
 
               // Comandos da timeline (executados na thread de render):
               // 0 ir ao inicio, 1 reproduzir ao contrario, 2 parar, 3 reproduzir, 4 ir ao fim,
@@ -965,6 +1356,7 @@ jobs:
           signals:
               void timelineChanged();
               void keysChanged();
+              void renderRequested();
 
           protected:
               void touchEvent(QTouchEvent *ev) override;
@@ -1023,6 +1415,8 @@ jobs:
               return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
                      a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
                      a.tool == b.tool && a.canUndo == b.canUndo && a.canRedo == b.canRedo && a.sculpt == b.sculpt &&
+                     a.anyKeys == b.anyKeys && a.keyFirst == b.keyFirst && a.keyLast == b.keyLast && a.rendering == b.rendering &&
+                     a.progress == b.progress && a.openRender == b.openRender && a.previewSeq == b.previewSeq &&
                      a.keys == b.keys;
           }
 
@@ -1142,6 +1536,7 @@ jobs:
               const bool keysDiff = (t.keys != m_tl.keys);
               m_tl = t;
               emit timelineChanged();
+              if (t.openRender) emit renderRequested();
               if (keysDiff) {
                   m_keys.clear();
                   for (float k : t.keys) m_keys.append(double(k));
@@ -2148,7 +2543,8 @@ jobs:
           uint pcg(uint v){uint s=v*747796405u+2891336453u;uint w=((s>>((s>>28u)+4u))^s)*277803737u;return (w>>22u)^w;}
           float rnd(){rs=pcg(rs);return float(rs)*(1.0/4294967296.0);}
           const float PI=3.14159265;const float SHTOL=0.012;
-          vec3 sky(vec3 d){return mix(vec3(.30,.28,.26),vec3(.42,.52,.78),clamp(d.y*.5+.5,0.,1.))*.9;}
+          uniform float uSky;
+          vec3 sky(vec3 d){return mix(vec3(.30,.28,.26),vec3(.42,.52,.78),clamp(d.y*.5+.5,0.,1.))*.9*uSky;}
           bool hit(vec3 o,vec3 d,bool any,float tm,bool cull,out float th,out int ti,out vec2 buv){
            th=1e30;ti=-1;buv=vec2(0.0);vec3 id=1.0/mix(d,vec3(1e-9),lessThan(abs(d),vec3(1e-9)));
            int st[32];int sp=0;st[sp++]=0;
@@ -2354,7 +2750,8 @@ jobs:
           GLuint gMcTex[2]={0,0},gMcProg=0,gMcTm=0,gMcNB=0,gMcTB=0,gMcOutF=0,gMcOutT=0;
           GLuint gMcAov[2]={0,0},gMcAlb[2]={0,0},gMcDnT[2]={0,0},gDnProg=0;bool gMcDn=true,gMcDnOK=false,gDnDirty=false;int gMcDnRes=0;GLint dnSrc,dnAov,dnSz,dnStep,dnI0,dnPhi,mcAovPrev,mcN,dnAlb,dnLast,mcAlbPrev,mcTexA;
           GLint mcLeak,mcSz,mcOff,mcFirst,mcFr,mcBn,mcCam,mcF,mcR,mcU,mcTH,mcSD,mcSC,mcSCos,mcPrv,tmAcc,tmSz;
-          GLint mcNL=-1,mcLP=-1,mcLD=-1,mcLC=-1;
+          GLint mcNL=-1,mcLP=-1,mcLD=-1,mcLC=-1,mcSky=-1;
+          int gVidFps=30,gRA=-1,gRB=-1,gAutoPng=0,gPrevSeq=0;bool gMcNight=false,gRenderReq=false;std::string gPrevPath;
           double gSigS=-1,gSigC=-1,gMcLast=0;float gDt=.016f;V gCE,gCF,gCR,gCU;float gCFov=1.f;
           double nowSec(){timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
           V vmin(V a,V b){return V{std::min(a.x,b.x),std::min(a.y,b.y),std::min(a.z,b.z)};}
@@ -2510,7 +2907,7 @@ jobs:
            if(!ok){char b[512];glGetProgramInfoLog(p,512,0,b);__android_log_print(ANDROID_LOG_ERROR,"NA","MC: %s",b);return;}
            gMcProg=p;mcSz=glGetUniformLocation(p,"uSize");mcOff=glGetUniformLocation(p,"uOffY");mcFirst=glGetUniformLocation(p,"uFirst");mcFr=glGetUniformLocation(p,"uFrame");
            mcBn=glGetUniformLocation(p,"uBounces");mcLeak=glGetUniformLocation(p,"uLeak");mcCam=glGetUniformLocation(p,"uCam");mcF=glGetUniformLocation(p,"uF");mcR=glGetUniformLocation(p,"uR");mcU=glGetUniformLocation(p,"uU");
-           mcTH=glGetUniformLocation(p,"uTH");mcSD=glGetUniformLocation(p,"uSunD");mcSC=glGetUniformLocation(p,"uSunC");mcSCos=glGetUniformLocation(p,"uSunCos");mcNL=glGetUniformLocation(p,"uNL");mcLP=glGetUniformLocation(p,"uLP");mcLD=glGetUniformLocation(p,"uLD");mcLC=glGetUniformLocation(p,"uLC");mcPrv=glGetUniformLocation(p,"uPrev");
+           mcTH=glGetUniformLocation(p,"uTH");mcSD=glGetUniformLocation(p,"uSunD");mcSC=glGetUniformLocation(p,"uSunC");mcSCos=glGetUniformLocation(p,"uSunCos");mcNL=glGetUniformLocation(p,"uNL");mcLP=glGetUniformLocation(p,"uLP");mcLD=glGetUniformLocation(p,"uLD");mcLC=glGetUniformLocation(p,"uLC");mcSky=glGetUniformLocation(p,"uSky");mcPrv=glGetUniformLocation(p,"uPrev");
            const char*qv="#version 300 es\nlayout(location=0) in vec3 aP; out vec2 vUV; void main(){vUV=aP.xy;gl_Position=vec4(aP.xy*2.0-1.0,0.0,1.0);}";
            gMcTm=mkProg(qv,MCTM);tmAcc=glGetUniformLocation(gMcTm,"uAcc");tmSz=glGetUniformLocation(gMcTm,"uSz");mcAovPrev=glGetUniformLocation(p,"uAovPrev");mcN=glGetUniformLocation(p,"uN");mcAlbPrev=glGetUniformLocation(p,"uAlbPrev");mcTexA=glGetUniformLocation(p,"uTexA");
            {GLuint dp=glCreateProgram();glAttachShader(dp,sh(GL_COMPUTE_SHADER,DNCS));glLinkProgram(dp);GLint ok2=0;glGetProgramiv(dp,GL_LINK_STATUS,&ok2);
@@ -2561,7 +2958,7 @@ jobs:
             for(int i=0;i<(int)objs.size()&&nl<8;i++){Obj&o=objs[i];if(o.kind!=4)continue;M w=worldM(i);V dr=norm(V{-w.m[4],-w.m[5],-w.m[6]});int ty=std::clamp(o.shape,0,2);
              float*pp=&LP[nl*4],*dd=&LD[nl*4],*cc=&LC[nl*4];pp[0]=w.m[12];pp[1]=w.m[13];pp[2]=w.m[14];pp[3]=(float)ty;dd[0]=dr.x;dd[1]=dr.y;dd[2]=dr.z;dd[3]=cosf(o.fov);
              cc[0]=powf(o.col.x,2.2f)*o.len;cc[1]=powf(o.col.y,2.2f)*o.len;cc[2]=powf(o.col.z,2.2f)*o.len;cc[3]=0;if(ty==0)hs=true;nl++;}
-            if(hs)glUniform3f(mcSC,0.f,0.f,0.f);else glUniform3f(mcSC,3.2f,3.0f,2.8f);
+            if(hs)glUniform3f(mcSC,0.f,0.f,0.f);else if(gMcNight)glUniform3f(mcSC,.35f,.45f,.75f);else glUniform3f(mcSC,3.2f,3.0f,2.8f);glUniform1f(mcSky,gMcNight?.06f:1.f);
             glUniform1i(mcNL,nl);if(nl>0){glUniform4fv(mcLP,nl,LP);glUniform4fv(mcLD,nl,LD);glUniform4fv(mcLC,nl,LC);}}
            glUniform1f(mcSCos,.9995f);
            glDispatchCompute((gMcW+7)/8,(rows+7)/8,1);
@@ -2582,6 +2979,12 @@ jobs:
             if(vw!=W||vh!=H){glClearColor(.08f,.08f,.09f,1);glClear(GL_COLOR_BUFFER_BIT);}
             glViewport(vx,vy,vw,vh);mcDraw();glViewport(0,0,W,H);}}
           static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
+          void mcSaveTo(const std::string&path){if(!mcShow())return;
+           glBindFramebuffer(GL_FRAMEBUFFER,gMcOutF);glViewport(0,0,gMcW,gMcH);mcDraw();
+           std::vector<unsigned char> px((size_t)gMcW*gMcH*4);glReadPixels(0,0,gMcW,gMcH,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
+           glBindFramebuffer(GL_FRAMEBUFFER,0);glViewport(0,0,W,H);
+           for(int y=0;y<gMcH/2;y++)for(int x=0;x<gMcW*4;x++)std::swap(px[(size_t)y*gMcW*4+x],px[(size_t)(gMcH-1-y)*gMcW*4+x]);
+           FILE*f=fopen(path.c_str(),"wb");if(!f)return;stbi_write_png_to_func(mcWrite,f,gMcW,gMcH,4,px.data(),gMcW*4);fclose(f);}
           void mcSave(){if(!mcShow()){toast("Nada para salvar");return;}
            glBindFramebuffer(GL_FRAMEBUFFER,gMcOutF);glViewport(0,0,gMcW,gMcH);mcDraw();
            std::vector<unsigned char> px((size_t)gMcW*gMcH*4);glReadPixels(0,0,gMcW,gMcH,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
@@ -2590,7 +2993,7 @@ jobs:
            std::string path;bool fb;FILE*f=openOut("png",path,fb);if(!f){toast("Erro ao salvar");return;}
            stbi_write_png_to_func(mcWrite,f,gMcW,gMcH,4,px.data(),gMcW*4);fclose(f);saved(path,fb);}
           // ---------- render de video (MP4 via MediaCodec; plano B: sequencia de PNG) ----------
-          struct Vid{bool on=false,png=false,mxOn=false,fb=false;int f0=1,f1=1,f=1,done=0,total=1,vw=0,vh=0,cf=21,stage=0,fd=-1,trk=-1;float tm0=0;int spp0=64,fw0=1920,bn0=6;AMediaCodec*cd=nullptr;AMediaMuxer*mx=nullptr;std::string path,dir;};
+          struct Vid{bool on=false,png=false,mxOn=false,fb=false;int fps=24;float t0=0;int f0=1,f1=1,f=1,done=0,total=1,vw=0,vh=0,cf=21,stage=0,fd=-1,trk=-1;float tm0=0;int spp0=64,fw0=1920,bn0=6;AMediaCodec*cd=nullptr;AMediaMuxer*mx=nullptr;std::string path,dir;};
           Vid gVid;
           bool vidDrain(bool eos){ // esvazia a saida do codec; true quando chegou o fim do stream
            AMediaCodecBufferInfo info;
@@ -2609,7 +3012,7 @@ jobs:
           void vidEncClose(bool flush){
            if(gVid.cd){
             if(flush){ssize_t ii=-1;for(int k=0;k<50&&ii<0;k++){ii=AMediaCodec_dequeueInputBuffer(gVid.cd,10000);if(ii<0)vidDrain(false);}
-             if(ii>=0){AMediaCodec_queueInputBuffer(gVid.cd,(size_t)ii,0,0,(uint64_t)gVid.done*1000000/24,4);for(int k=0;k<20;k++)if(vidDrain(true))break;}}
+             if(ii>=0){AMediaCodec_queueInputBuffer(gVid.cd,(size_t)ii,0,0,(uint64_t)gVid.done*1000000/gVid.fps,4);for(int k=0;k<20;k++)if(vidDrain(true))break;}}
             AMediaCodec_stop(gVid.cd);AMediaCodec_delete(gVid.cd);gVid.cd=nullptr;}
            if(gVid.mx){if(gVid.mxOn)AMediaMuxer_stop(gVid.mx);AMediaMuxer_delete(gVid.mx);gVid.mx=nullptr;gVid.mxOn=false;}
            if(gVid.fd>=0){close(gVid.fd);gVid.fd=-1;}}
@@ -2641,7 +3044,7 @@ jobs:
              ssize_t ii=AMediaCodec_dequeueInputBuffer(gVid.cd,10000);
              if(ii>=0){size_t cap=0;uint8_t*b=AMediaCodec_getInputBuffer(gVid.cd,(size_t)ii,&cap);
               if(!b||cap<need){if(gVid.done==0){vidToPng();break;}return false;}
-              rgbaToYuv(px,sw,sh,b);AMediaCodec_queueInputBuffer(gVid.cd,(size_t)ii,0,need,(uint64_t)gVid.done*1000000/24,0);fed=true;}
+              rgbaToYuv(px,sw,sh,b);AMediaCodec_queueInputBuffer(gVid.cd,(size_t)ii,0,need,(uint64_t)gVid.done*1000000/gVid.fps,0);fed=true;}
              else vidDrain(false);}
             if(fed){vidDrain(false);return true;}
             if(!gVid.png)return false;}
@@ -2652,7 +3055,7 @@ jobs:
           void vidStart(){
            if(!gMcOK){toast("Render de video precisa de ES 3.1");return;}
            if(!filesGranted()){needFiles();return;}
-           gVid=Vid();gVid.f0=std::min(gFS,gFE);gVid.f1=std::max(gFS,gFE);gVid.total=gVid.f1-gVid.f0+1;gVid.f=gVid.f0;gVid.tm0=tm;
+           gVid=Vid();{int ra=gRA>=0?gRA:std::min(gFS,gFE),rb=gRB>=0?gRB:std::max(gFS,gFE);if(rb<ra)std::swap(ra,rb);gVid.fps=std::clamp(gVidFps,1,120);gVid.t0=ra/24.f;gVid.f0=0;gVid.total=std::max(1,(int)floorf((rb-ra)/24.f*gVid.fps+1e-3f)+1);gVid.f1=gVid.total-1;gVid.f=0;gVid.tm0=tm;}
            static const int PW[3]={1024,1280,1920},PB[3]={3,4,6},PS[3]={8,16,0};
            gVid.spp0=gMcSpp;gVid.fw0=gMcFinW;gVid.bn0=gMcBn;gMcFinW=PW[gVidQ];gMcBn=PB[gVidQ];if(PS[gVidQ])gMcSpp=PS[gVidQ];gVidBusy=true;
            float sc=std::min(1.f,(float)gMcFinW/W);int sw=(int)(W*sc),sh=(int)(H*sc);
@@ -2662,8 +3065,8 @@ jobs:
            for(int cf:{21,19}){if(ok)break;
             AMediaFormat*f_=AMediaFormat_new();
             AMediaFormat_setString(f_,"mime","video/avc");AMediaFormat_setInt32(f_,"width",gVid.vw);AMediaFormat_setInt32(f_,"height",gVid.vh);
-            AMediaFormat_setInt32(f_,"bitrate",std::clamp((int)((double)gVid.vw*gVid.vh*24*.25),2000000,40000000));
-            AMediaFormat_setInt32(f_,"frame-rate",24);AMediaFormat_setInt32(f_,"i-frame-interval",1);AMediaFormat_setInt32(f_,"color-format",cf);
+            AMediaFormat_setInt32(f_,"bitrate",std::clamp((int)((double)gVid.vw*gVid.vh*gVid.fps*.25),2000000,40000000));
+            AMediaFormat_setInt32(f_,"frame-rate",gVid.fps);AMediaFormat_setInt32(f_,"i-frame-interval",1);AMediaFormat_setInt32(f_,"color-format",cf);
             AMediaFormat_setInt32(f_,"color-standard",1);AMediaFormat_setInt32(f_,"color-range",2);AMediaFormat_setInt32(f_,"color-transfer",3);
             AMediaCodec*c=AMediaCodec_createEncoderByType("video/avc");
             if(c){if(AMediaCodec_configure(c,f_,nullptr,nullptr,1)==AMEDIA_OK&&AMediaCodec_start(c)==AMEDIA_OK){gVid.cd=c;gVid.cf=cf;ok=true;}else AMediaCodec_delete(c);}
@@ -2678,7 +3081,7 @@ jobs:
            toast(gVid.png?"MP4 indisponivel: salvando sequencia de PNG":"Renderizando video... mantenha o app aberto");}
           void vidStep(){
            if(!gVid.on)return;
-           if(gVid.stage==0){tm=gVid.f/24.f;applyAnim();gMcFinal=true;gMcPrev=false;gMcHaveCam=false;gSigS=-1;mcReset();gVid.stage=1;return;}
+           if(gVid.stage==0){tm=gVid.t0+gVid.f/(float)gVid.fps;applyAnim();gMcFinal=true;gMcPrev=false;gMcHaveCam=false;gSigS=-1;mcReset();gVid.stage=1;return;}
            if(!(gMcFinal&&gMcSamples>=gMcSpp&&!gDnDirty&&mcShow()))return;
            glBindFramebuffer(GL_FRAMEBUFFER,gMcOutF);glViewport(0,0,gMcW,gMcH);mcDraw();
            std::vector<unsigned char> px((size_t)gMcW*gMcH*4);glReadPixels(0,0,gMcW,gMcH,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
@@ -3162,7 +3565,7 @@ jobs:
            if(i==44){gAddFan=!gAddFan;return;}
            if(i>=3&&i<=6)gToolFan=false;if(i<3||i==10||i==18)gAddFan=false;
            if(i>=0&&i<64)gFlash[i]=.35f;
-           if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gFileMenu=false;gRenderOpen=!gRenderOpen;if(gRenderOpen)gRigOpen=false;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
+           if(i==60){gFileMenu=!gFileMenu;return;}if(i==61){gFileMenu=false;gRenderReq=true;return;}if(i==63){gRigOpen=!gRigOpen;if(gRigOpen)gRenderOpen=false;return;}if(i==62){gTlOpen=!gTlOpen;return;}
            if(i>=2000&&i<2200){kbKey(i-2000);return;}
            if(i>=200){int k=i-200;if(i!=299){gImportOpen=false;if(k<(int)gFiles.size())pickPath(gFiles[k]);}return;}
            if(i<3)addObj(i);else if(i<7)tool=i-3;
@@ -3338,8 +3741,24 @@ jobs:
               t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
               t.hasSel = sel >= 0 && sel < (int)objs.size();
               t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt;
+              {   // tela de render: keyframes da cena, andamento, previa
+                  float kmin = 1e9f, kmax = -1e9f;
+                  for (auto &o : objs) for (auto &k : o.k) { kmin = std::min(kmin, k.t); kmax = std::max(kmax, k.t); }
+                  t.anyKeys = kmax >= kmin;
+                  t.keyFirst = t.anyKeys ? (int)roundf(kmin * 24.f) : 0;
+                  t.keyLast = t.anyKeys ? (int)roundf(kmax * 24.f) : 0;
+                  t.rendering = gVid.on || gAutoPng > 0;
+                  t.progress = gVid.on ? (float)gVid.done / std::max(gVid.total, 1) : (gAutoPng > 0 ? std::min(1.f, (float)gMcSamples / std::max(gMcSpp, 1)) : 0.f);
+                  t.openRender = gRenderReq; gRenderReq = false;
+                  t.previewSeq = gPrevSeq; t.previewPath = gPrevPath;
+              }
               t.keys.clear();
               if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
+          }
+
+          static void startImage(int mode) {
+              if (!gMcOK) { toast("Render precisa de ES 3.1"); return; }
+              gAutoPng = mode; gMcFinal = true; gMcPrev = false; gMcHaveCam = false; gSigS = -1;
           }
 
           void api_cmd(int c, float a, float b) {
@@ -3356,6 +3775,14 @@ jobs:
               case 9: { int f = std::clamp((int)roundf(a), gFS, gFE); tm = f / 24.f; applyAnim(); break; }
               case 10: { int e = std::clamp((int)roundf(b), gFS + 5, gFE); int st = std::clamp((int)roundf(a), gFS, e - 5); gVS = st; gVE = e; break; }
               case 11: press((int)roundf(a)); break;
+              case 12: gMcCW = std::clamp((int)roundf(a), 64, 4096); gMcCH = std::clamp((int)roundf(b), 64, 4096); gMcHaveCam = false; gSigS = -1; break;
+              case 13: gVidFps = std::clamp((int)roundf(a), 1, 120); break;
+              case 14: gRA = (int)roundf(a); gRB = (int)roundf(b); break;
+              case 15: gMcNight = a > .5f; gMcHaveCam = false; gSigS = -1; break;
+              case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
+              case 18: startImage((int)roundf(a)); break;
+              case 19: if (!gVid.on) vidStart(); break;
+              case 20: if (gVid.on) vidFinish(true); gAutoPng = 0; gMcFinal = false; gMcHaveCam = false; break;
               }
           }
 
@@ -3397,6 +3824,13 @@ jobs:
                   applyAnim();
               }
               frame();
+              if (gAutoPng && gMcFinal && gMcSamples >= gMcSpp && !gDnDirty && mcShow()) {   // imagem pronta
+                  int mode = gAutoPng; gAutoPng = 0;
+                  gPrevPath = std::string(gDir) + "/preview.png";
+                  mcSaveTo(gPrevPath); gPrevSeq++;
+                  if (mode == 2) { if (!filesGranted()) needFiles(); else mcSave(); }
+                  gMcFinal = false; gMcHaveCam = false;
+              }
               // O motor desenha direto na tela e deixa profundidade/stencil preenchidos: limpa para o Qt Quick
               // desenhar a interface (timeline, botoes) por cima, sem o 3D "vencer" no teste de profundidade.
               glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -3449,6 +3883,101 @@ jobs:
           void eng_ui_rects(std::vector<float> &o) { eng::api_ui_rects(o); }
           NOMADEOF
           mkdir -p nomad-qt/icons
+          base64 -d > nomad-qt/icons/rd_camera.png <<'B64EOF'
+          iVBORw0KGgoAAAANSUhEUgAAACwAAAArCAYAAAADgWq5AAAD8UlEQVR42u2Z22tVRxTGf7nZtEpV
+          DCVilZAgGCuCRoJai6Uo1Vp60Zei0LQPbamCf4AoWkqxoPVFKa2CSB9EXyyxRBTR0lTbeikSFa+t
+          YvShakQNKsfLydeXdWAcZ/bZ55CTRPGDBXvPXjPznZk1a61Zp0wSTxPKecpQGWhrAGq9tv+Af533
+          CcDQQN97wEngob2PBsYE9LqAf4CsvVcBUwILeALofqxFkivjJe3Tk/jB0/tDYVySVOPoLYvotUtq
+          cvRqJGUCeiskVbtzu79oPLAWeCvFzoyMtI+K7JqP5pTzrALqYzbcBLwd6HQK2Oa1fQtc9tpuWLu7
+          hXuA3z29a8D39i2HO8B3kTP2udtQ5niJFmCL820JcMUm+MsbqAqYBgzz7PfwEzYHE4E6j9xJG9fF
+          UGCmPX8CfGjPx4DJoUPXY5Jb9V+B05Gtegi0pzzYx03y4Taw055nOO3ZmJe4BPwJjLPVetCP3qvL
+          TOwu8HHMJACGA++ZCZztZ5fbYvZ/IYnw80hXasLlZhbVA4BbAzAkiXAd8A3QCrRFQmpf4TNgK/AL
+          MCLmJZqBpcBL9j64HwmPNT4APwHzQiv8okN2IOHVZ+rQDURkY4SPFxBu+wo9wOZY4KiwxPw1e2+z
+          +F4MhgMfeTlBCJtskXq89klAoz3vADKxBL435BVJByRdVX6c8xL5vFKK0NxkaWba89EFzAH+TqPs
+          Ex5hAeQCcDOhX5URKwvcEX/2nX0K3AQ+cO6COVy0vLknZBJjJK2VdF3SakkvJ2zNQkkPVHpslFTr
+          zu2SWOSRaEwgfLHAidtsMdZL6iiw70p37kpvO6t62SXtBXbZ/e08MAiYbt7oncgd0sd84KukukRv
+          4DzwNXDUu2ZlgP0me4ENKW/PJY103UZkq0O2AnjBJIfTwKfAwYAfTkW4O49nSIszwI9OSK0Bllv7
+          Qasz1Ni3TsvEOlOP7h2mRVb52Wdeo9BD90hSvaNXJ6k1oLdJUrmj1yopGxmzI+YlCpEkwrUpSlUH
+          JE3xSmSZNIT7K1t7HZjrVYMGdHp5wyqibuQsivBCYDcwtZeIbTc/7KPd7ms5rEtN2rGP9y0sS9IV
+          SQ1FRrrfPN3RknZJumWy27Pz6jzjdcQi3TDH3YyyqFTsBbLeqdhctmiVm+vRY/ktrEko3xZkw28C
+          75p5VBRAeKSVCiZ5Ee6OSY7sEBv7DS+gpDaJuZI6A1tyStLsIpKfQ5K+NJfl9i2XNFHSKklnUowT
+          NYkjdkC+8H5TI7DAYn8haDbZ4yXnlVbvnZVynFtJkW5C4D+Oq5IWe3otFiRKjaw5g8Qr0ljvEGTs
+          AHV5fnNq4MZRChwC7j8vt/YV/gedaSGgfozZTgAAAABJRU5ErkJggg==
+          B64EOF
+          base64 -d > nomad-qt/icons/rd_check.png <<'B64EOF'
+          iVBORw0KGgoAAAANSUhEUgAAACgAAAAmCAYAAAC29NkdAAADUklEQVR42s2YyWtTURTGf01aGqq0
+          zliKoFgEXVQUEUScqiJCEYSKE4q6EcG1W/8KUVSKIHUWcUAFN1qHqgttUZyom1LFAa3RajM0+Vx4
+          AvX57jNJm9ccCOG9nHC/e+53vvvdWyGJco4IZR6VYzh2DdAAZID3QKKcANYBG4AdwCTgGnAC6AWy
+          f2VKCvtTLWm9pA5JKf2Jn5JuSmqWVCcpkssPG1xU0nxJZw3U8MhIeiFpl6RY7j9hN8kEoAVYbhz0
+          Nmwj0AxUj0UXVwGLjXvTHDnfgXeAwgYYAWYCrUCTY9wM0A3cAAbDBlgHrAXWADFHznugHegC0mEC
+          jNnSbgLqHTlp4KpVbyDMnaQKmGt6t9Ce/Zb2MXAS+OjVwUiJeTfNmmI1UOuTkwV6gOPA839EusQA
+          xwNLTFamOnLiwHWgA/gVplmIArONd/Ps2RsJoNO2uXd+1SslwMm2tCt9BDnHuzfARZOWdJh2KyfI
+          m4EpjpxvwC3gDtDvql6Qm4kYh8YZNwZs1vk0RiOwF5jjKMAv49xloC8InAtgxPSq1QjeZwL60KtR
+          jsbYbUsbdXTta+AU8BRI/nfKPm5jpqQD5iyGJP0wK9QiqTbAqVRZzlu547Okg5Km5+uAKj2VawC2
+          ADttqaJWlWXDKtDhqGQTsA+Y4ahFErgLXAI+FWP5a4BVwHbjT9Tz21IDmLaBEp6u3Wo5VY6xeoFz
+          tsTZYgDGgFlWxaiDXyvMqyWB+9Y4UWAdsNFMgV98MUG+kxfvHByskdQqqUvBkZL0QFKTWfMFxtGE
+          Iz9hvy8yjhfkwr0vJkraYyBTASCHJN2zs8VRSYMBed028VgxxwS/l7WStkl69B+QKUm91uV+kZHU
+          V2jX5gMwB3K7pCdWhWIiLqndqFD0QSsScDa4BhwGXgbtlQEG9BVwwbq2JFcfcdOsY0WA7LcJ3i64
+          aws0C1+B80CbVSIfkDkJOmNARxZ58CAiqV7S/jy6O3f4XleMpBTCQe8G/9Eqcsj8WzJgadtNkDOM
+          RhQ4o4mSdkjq9BHmQUmnJc0YzeuSQg1rP3AFOAI8G7YfJ+082wZ8GOv7wbiBHLL9t8HcyTk7PqZH
+          E2DFCK6Aa+06Y4qB7rFvygVgTqai1hBZShAV5X6J/husLkLqMa6oJAAAAABJRU5ErkJggg==
+          B64EOF
+          base64 -d > nomad-qt/icons/rd_close.png <<'B64EOF'
+          iVBORw0KGgoAAAANSUhEUgAAACsAAAAqCAYAAAAqAaJlAAADf0lEQVR42u2Z20sUcRTHz6bRirZr
+          KoK9VEQ30i4U3SS6/AVBjwUVEXaxlIgsi+qtp/6JigoLddnshlFPPUX+A0GldC+7GLml7aeHzsI0
+          zJyZ3dkRgg7M28xvvnOu3++ZBCD/ik2Tf8j8wCZFZLuINE0hlioR2SQiLb53AO6rAjgKvAAuAXOB
+          hMd95byqgF3AU6APaPZ6p/uhGuA48J4/lgN69OGKmIBWA23AJ33nBHAPWO4G7HyoATgDvONvmwT6
+          gVVAZQwebVOnOC0P3Ada/MBuAp7gbZManuVl9HA1sNsRRbdNACf9wDYCp4G3Pg/n1cMLygC0BtgH
+          jOBvgxpN35xtBLqBz8Yh14CmiED3A88NpzwANrqj6HVYHXBWw+BlP4CLwOwIQIcDgG4Bpgd1Ayfg
+          c8C4z6E54Cowv4i2NhM45FHAzhy9C7R6AbXAFgB3Ax+NousFloXoEjOBTuCb8fFZYCUwze+cIG/U
+          ad99ZeTwALDWAFwDtBtR+qkfvSQoOmHC1wCcAF4aeZZVwO62lgYOAB+Mj80Ci8OkUtjCaFAPW21t
+          wNXEa4HDAe3proZeygm2kBJHgTGjQPqAherRI8ov8gbQ9cUMmWJbTxroMgDkgFvABSNt0NnvW/Xl
+          AusE/NXw8HejmG4Cq0vhGaVOoRTQAbwmvI1r1TeXOv2izPe0Ah4JAbSQz0ujcIqohKRWyc/7ALCP
+          lbFFel9UDZYoQsf9iix8Inq1M2QahJ5ScaRBWnvu2xILLDFVYGuV4HwxiumbQS+zU9W6Ugp0MoA9
+          nQ/gEoXpVRkX2Fmao2MGZewHFulHteu49bPbPuQnMtg64FiRRCatZNsqwDvKh8sGtsBpXwYAXePh
+          pZRKbasPhxahYUJ/PGCsDgDrjPyrVg9b5Pu6srWSwc5S3T5qVH1G+WgYWdMRIGsyQXsJv8PrVeHm
+          jMN7tJiKEYztIQTjhmIEY70qW0uKXwHmlSjFDxikPK/Ljc1hpHgjcCpgyXEDmBNhbKaAg8Azo2AH
+          g5YchfXRGwNoJup8d6REm9HW8kHro63AkAG0N4bF3M6AAj5hrTzPecjmwkJuRQwrzxnAXp/6eOhW
+          FV4F0O2xTF4a4zK5CtjjqJMJTQFzmexc03dpPl3WNb3EfCWBHbqmz/jRyITPr6WkiGwTkUciMjxF
+          P0CSItIqIqMiMuQpS/7/B4vJfgNh2JdxyJScbgAAAABJRU5ErkJggg==
+          B64EOF
+          base64 -d > nomad-qt/icons/rd_link.png <<'B64EOF'
+          iVBORw0KGgoAAAANSUhEUgAAABQAAAAvCAYAAADjNOpjAAAD+ElEQVR42q2X22scZRjGf7ObzW43
+          hzbG1tRTirWCVSuCLIpUSwUPvfBGsFeCt+K/498gInghiFDEAxSLikHUiATroR7SVDc9JNvmsNkZ
+          b34jb4aZzV50YNjd+b55vvfwvO/zbpJlWY3beN1WMICxIWsN7xlgChgAq8AmsOXvkQAT4ADwEPAI
+          cAy4R5Bfgd+AReCi4EMBE+A+4GXgeeAJYBZoa9FN4DLwLfA+8DmwXgWYAHcDrwGvAw/4fA244Xob
+          eBC434MHwPkIGgEngKeBV3RzoCVfA38DTZ93PKwDvKrFi0C/CHgH8JQvIdjbwAJwzQQdBF4C3tDS
+          DvCY8dwFmABzLu4HrgIfAJ+a2cx9/wAbIVGHgePAx0AP+J/UNakx6yErutELYPj9T+AH4BawDzgE
+          tIrErmvZpNau6ma/hFbbwLKfOU8nc6xo4bQn1bQk3aMoUg+f1tLasNJrejpD1usBuLSWU92gbGPF
+          lVlBaRlgLVgVa7UupaZ0EUsuC1yuFYmdCpKUdKPjwEkTdV6SJyGGmLw0AmaWT8+FKYO938o5C1yR
+          KuvSqynQv+G9XRZel9B9SXtUehwF5s1kTuYTlupmOGhXDFNdWQC6ltgJOTZjHNtaPW9rG/fARZtH
+          VkxK11L7GdjR7WbgZkOQttauAV8B31iOFGPYc/Ejwa4KPNCDNBB+zS70HvB77N5jBU6t2Di3dCNv
+          93nJbViSnwBLwAWbbmXHzoBLwLvB3SxQY9Pm8IvAt0bRlMx45tqy5bO81K57Z6PKaGLwp6VGw2c1
+          QVse1BhF9RJp0gmZbxQMmAMeB76XMtvDLDwAvAC8pRw0w56Gv2eAM8CbcnW8ysJxTz4LPGnw64GH
+          dfe0tPKkiVkF/sipUytY96xaPClAGtrTIPBtYIxPub9ZdDkB7gWeUSO2JOzNUFZbkv+y08MOcCQY
+          kFCIz7zi3dDdRTvJFWnStXqWgR/l4ITDwUQxhrnqtf3eFagLnAsSuiDoJUl+J3BXEKlB1fSVN8w+
+          8BnwkwCrIZZp8G5fGWAWOBVFaNssFkUqV8d+FQ/rgcT1PYbRRmj/Y1WAtWBV5UDptaF1SQF8F+BG
+          aFV7Cf0g9MeNKFK1sCFvR6lZaw1pHjPGcUeerhcBUx9eE/ywutEukdZDSmtbj7pVIrViF+750hnH
+          u3wknvKg0w6mLcGWBMyKmtJVJzoO66eMzQXgrzDBngYe9b3vvHtl3aYHfAE8bOHPAS/agW6YzVmr
+          Ay370M+dMsCBWvGOG55zlj4iWBbE66Jidq4w4ZKU/DVrCNLxPmZM+w4DS4bmS+t7l7YkFf/1Eqkz
+          aSIOCrgsE9YDuRkFsOwAqpRu1P96RWkd6foP+jA/9/aT/EkAAAAASUVORK5CYII=
+          B64EOF
+          base64 -d > nomad-qt/icons/rd_video.png <<'B64EOF'
+          iVBORw0KGgoAAAANSUhEUgAAACYAAAAtCAYAAADC+hltAAACwklEQVR42u2ZO2gUURSGv93NkhBi
+          IE1EXMVCDZGYIGkUEUVBUFQQbHw0gthopYhCfIBaWNgICqKgaCGoheAjItqIINgowSQ+Ct+SqIUv
+          lH2w+1t4xGHYnZ3N7Mws6IELc+funfvveZ9zE5JoRErSoNTksdYGTKrDGUXgM1AICqwNmAtsAtYD
+          6YDA3gC7gTtA1vcuSc7RLGmLpE+qL41IWiup1XVexeF+0S3ptcKhIUnr/IJzi3IlMN2enwBXgLEJ
+          inAxsBpotnkvcMCer1cVqwNlUtINxz88KandL+vLjO2Svpfh3FNJaySlvPa73UWH4/kr8K1O1p+1
+          7wF0AceApV7uyr2QCMkt3QR2AeNACZgBnAKWVbL6ZEQONwecBgaAdw5wJ4AVQEvcnv8McAj4YPNZ
+          Nl/uBtcUEaBuE+Uf+gJMNsb0AvuNi7eNu5EB6wEOunTZKa1+4DDwHngUJbCUDS/qAzqjEGXWgneu
+          SqxucTjhSHTsLHChym+mmIg3RAmsCPz0wdVivRJFP/oSSwY7G9gBLAwT4ESAZYDNFu/OObKRyFLr
+          avv6gXnAHGAI2Fpr+hxmMZI0cBuB58BR42Bro1RJaQvKO4HHwB5gfhCAYQTxdmAfMAhsAxaVc6Bx
+          1pUdwBGLgZmolN8PFYBLliT+aARgBRPjZeCe1ZXEBawE5IG7wHFLXcYrhZuogI0BI6bwoya2YtCP
+          BgH2AngF7AUeGNdi9fwfgaumP7dq6keEDGzUqp1cXG0oL6v7dxt3yTJm35DAFMP5KT869hJY4CgU
+          ppoVhgUqY8WwJ7AScM1RsawyRzkcYq3ZZ/kc/O4s/bV0V1+qU9J9RU9FSeclTavU6kxLWiJpMEJQ
+          eUkXJXVZ8xBJJMpcQKQtPe4xNs8keOe6UmtqGHgIPAPeOhcTHjcjKcs80yH5u5KBy5dzU4n/VzY1
+          0i9tMCOac8oSNwAAAABJRU5ErkJggg==
+          B64EOF
           base64 -d > nomad-qt/icons/tb_cube.png <<'B64EOF'
           iVBORw0KGgoAAAANSUhEUgAAAFkAAABXCAYAAABvAenfAAAFQElEQVR42u2dW4jcZBTHf8lOp+32
           groVlFq8QAuLNxCr+OB6wQevoCIiXqjV1uKDqOiDBX0pCvrkFXxRUUSheN1WKvXB20N9KkUtVLsg
