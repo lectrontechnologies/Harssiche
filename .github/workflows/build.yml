@@ -3748,26 +3748,7 @@ jobs:
               initPost();
           }
 
-          void api_timeline(EngTimeline &t) {
-              t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
-              t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
-              t.hasSel = sel >= 0 && sel < (int)objs.size();
-              t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt;
-              {   // tela de render: keyframes da cena, andamento, previa
-                  float kmin = 0.f, kmax = 0.f;
-                  t.anyKeys = animRange(kmin, kmax);   // so conta keys que realmente mudam alguma coisa
-                  t.keyFirst = t.anyKeys ? (int)roundf(kmin * 24.f) : 0;
-                  t.keyLast = t.anyKeys ? (int)roundf(kmax * 24.f) : 0;
-                  t.rendering = gVid.on || gAutoPng > 0;
-                  t.progress = gVid.on ? (float)gVid.done / std::max(gVid.total, 1) : (gAutoPng > 0 ? std::min(1.f, (float)gMcSamples / std::max(gMcSpp, 1)) : 0.f);
-                  t.openRender = gRenderReq; gRenderReq = false;
-                  t.previewSeq = gPrevSeq; t.previewPath = gPrevPath;
-              }
-              t.keys.clear();
-              if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
-          }
-
-          static bool tDiff(const T &a, const T &b) {
+static bool tDiff(const T &a, const T &b) {
               auto d = [](V x, V y) { return fabsf(x.x - y.x) + fabsf(x.y - y.y) + fabsf(x.z - y.z); };
               return d(a.p, b.p) > 1e-4f || d(a.r, b.r) > 1e-4f || d(a.s, b.s) > 1e-4f;
           }
@@ -3787,6 +3768,26 @@ jobs:
               }
               return any;
           }
+
+          void api_timeline(EngTimeline &t) {
+              t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
+              t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
+              t.hasSel = sel >= 0 && sel < (int)objs.size();
+              t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt;
+              {   // tela de render: keyframes da cena, andamento, previa
+                  float kmin = 0.f, kmax = 0.f;
+                  t.anyKeys = animRange(kmin, kmax);   // so conta keys que realmente mudam alguma coisa
+                  t.keyFirst = t.anyKeys ? (int)roundf(kmin * 24.f) : 0;
+                  t.keyLast = t.anyKeys ? (int)roundf(kmax * 24.f) : 0;
+                  t.rendering = gVid.on || gAutoPng > 0;
+                  t.progress = gVid.on ? (float)gVid.done / std::max(gVid.total, 1) : (gAutoPng > 0 ? std::min(1.f, (float)gMcSamples / std::max(gMcSpp, 1)) : 0.f);
+                  t.openRender = gRenderReq; gRenderReq = false;
+                  t.previewSeq = gPrevSeq; t.previewPath = gPrevPath;
+              }
+              t.keys.clear();
+              if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
+          }
+
 
           // Previa: copia o que o viewport mostra agora (mesma camera), recortado na proporcao do render.
           static void capturePreview(int rw, int rh) {
