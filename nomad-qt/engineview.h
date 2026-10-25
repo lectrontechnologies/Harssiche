@@ -34,6 +34,12 @@ class EngineView : public QQuickItem {
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY timelineChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY timelineChanged)
     Q_PROPERTY(bool sculptMode READ sculptMode NOTIFY timelineChanged)
+    Q_PROPERTY(bool anyKeys READ anyKeys NOTIFY timelineChanged)
+    Q_PROPERTY(int keyFirst READ keyFirst NOTIFY timelineChanged)
+    Q_PROPERTY(int keyLast READ keyLast NOTIFY timelineChanged)
+    Q_PROPERTY(bool rendering READ rendering NOTIFY timelineChanged)
+    Q_PROPERTY(qreal renderProgress READ renderProgress NOTIFY timelineChanged)
+    Q_PROPERTY(QString previewUrl READ previewUrl NOTIFY timelineChanged)
 
 public:
     explicit EngineView(QQuickItem *parent = nullptr);
@@ -55,6 +61,15 @@ public:
     bool canUndo() const { return m_tl.canUndo; }
     bool canRedo() const { return m_tl.canRedo; }
     bool sculptMode() const { return m_tl.sculpt; }
+    bool anyKeys() const { return m_tl.anyKeys; }
+    int keyFirst() const { return m_tl.keyFirst; }
+    int keyLast() const { return m_tl.keyLast; }
+    bool rendering() const { return m_tl.rendering; }
+    qreal renderProgress() const { return m_tl.progress; }
+    QString previewUrl() const {
+        if (m_tl.previewPath.empty()) return QString();
+        return QStringLiteral("file://") + QString::fromStdString(m_tl.previewPath) + QStringLiteral("?") + QString::number(m_tl.previewSeq);
+    }
 
     // Comandos da timeline (executados na thread de render):
     // 0 ir ao inicio, 1 reproduzir ao contrario, 2 parar, 3 reproduzir, 4 ir ao fim,
@@ -67,6 +82,7 @@ public:
 signals:
     void timelineChanged();
     void keysChanged();
+    void renderRequested();
 
 protected:
     void touchEvent(QTouchEvent *ev) override;

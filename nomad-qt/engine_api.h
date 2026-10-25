@@ -1,5 +1,6 @@
 #pragma once
 #include <jni.h>
+#include <string>
 #include <vector>
 
 // Evento ja traduzido do Qt para o formato que o motor entende.
@@ -24,6 +25,14 @@ struct EngTimeline {
     int tool = 3;          // 0 mover, 1 rotacionar, 2 escalar, 3 selecionar
     bool canUndo = false, canRedo = false;
     bool sculpt = false;
+    // tela de render
+    bool anyKeys = false;          // algum objeto da cena tem keyframes
+    int keyFirst = 0, keyLast = 0; // primeiro e ultimo key (frames da timeline, 24/s)
+    bool rendering = false;
+    float progress = 0;
+    bool openRender = false;       // o menu pediu para abrir a tela de render
+    int previewSeq = 0;
+    std::string previewPath;
     std::vector<float> keys;  // keyframes do objeto selecionado
 };
 

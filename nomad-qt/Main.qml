@@ -28,5 +28,11 @@ Window {
         view: engineView
     }
 
+    // Tela de render (aberta pelo menu > Renderizar)
+    RenderDialog {
+        anchors.fill: parent
+        view: engineView
+    }
+
     Component.onCompleted: engineView.forceActiveFocus()
 }

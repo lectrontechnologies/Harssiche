@@ -18,6 +18,9 @@ qt_add_qml_module(Nomad
         TlButton.qml
         TlIcon.qml
         HitMask.qml
+        RdField.qml
+        RdSeg.qml
+        RenderDialog.qml
         TbCell.qml
         TopBars.qml
     RESOURCES
@@ -28,6 +31,11 @@ qt_add_qml_module(Nomad
         icons/tb_undo.png
         icons/tb_redo.png
         icons/tb_menu.png
+        icons/rd_camera.png
+        icons/rd_video.png
+        icons/rd_link.png
+        icons/rd_close.png
+        icons/rd_check.png
     SOURCES
         engineview.h
         engineview.cpp
