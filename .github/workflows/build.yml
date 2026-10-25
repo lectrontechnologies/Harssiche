@@ -928,6 +928,7 @@ jobs:
                   fromF = view.anyKeys ? view.keyFirst : view.frameStart
                   toF = view.anyKeys ? view.keyLast : view.frameEnd
                   visible = true
+                  capTimer.restart()
               }
               function close() {
                   visible = false
@@ -937,18 +938,21 @@ jobs:
                   var w = [854, 1280, 1920][i]
                   resW = w
                   resH = Math.round(w / ratio / 2) * 2
+                  capTimer.restart()
               }
               function setW(t) {
                   var v = parseInt(t)
                   if (isNaN(v)) return
                   resW = Math.max(64, Math.min(4096, v))
                   if (linked) resH = Math.max(64, Math.round(resW / ratio / 2) * 2)
+                  capTimer.restart()
               }
               function setH(t) {
                   var v = parseInt(t)
                   if (isNaN(v)) return
                   resH = Math.max(64, Math.min(4096, v))
                   if (linked) resW = Math.max(64, Math.round(resH * ratio / 2) * 2)
+                  capTimer.restart()
               }
               function apply() {
                   view.command(12, resW, resH)
@@ -956,6 +960,13 @@ jobs:
                   view.command(14, fromF, toF)
                   view.command(15, night ? 1 : 0)
                   view.command(16, edge ? 1 : 0)
+              }
+
+              // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
+              Timer {
+                  id: capTimer
+                  interval: 250
+                  onTriggered: if (dlg.visible && !dlg.view.rendering) dlg.view.command(21, dlg.resW, dlg.resH)
               }
 
               Connections {
@@ -2746,11 +2757,12 @@ jobs:
           std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
           bool gMcOK=false,gMcPrev=false,gMcFinal=false,gMcGround=true,gMcHaveCam=false;
           int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcRows=24,gMcW=0,gMcH=0,gMcCur=0,gMcFrame=0;
-          bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=6,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
+          bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
           GLuint gMcTex[2]={0,0},gMcProg=0,gMcTm=0,gMcNB=0,gMcTB=0,gMcOutF=0,gMcOutT=0;
           GLuint gMcAov[2]={0,0},gMcAlb[2]={0,0},gMcDnT[2]={0,0},gDnProg=0;bool gMcDn=true,gMcDnOK=false,gDnDirty=false;int gMcDnRes=0;GLint dnSrc,dnAov,dnSz,dnStep,dnI0,dnPhi,mcAovPrev,mcN,dnAlb,dnLast,mcAlbPrev,mcTexA;
           GLint mcLeak,mcSz,mcOff,mcFirst,mcFr,mcBn,mcCam,mcF,mcR,mcU,mcTH,mcSD,mcSC,mcSCos,mcPrv,tmAcc,tmSz;
           GLint mcNL=-1,mcLP=-1,mcLD=-1,mcLC=-1,mcSky=-1;
+          bool gCapReq=false,gCapNow=false;int gCapW=1280,gCapH=720;
           int gVidFps=30,gRA=-1,gRB=-1,gAutoPng=0,gPrevSeq=0;bool gMcNight=false,gRenderReq=false;std::string gPrevPath;
           double gSigS=-1,gSigC=-1,gMcLast=0;float gDt=.016f;V gCE,gCF,gCR,gCU;float gCFov=1.f;
           double nowSec(){timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
@@ -3056,7 +3068,7 @@ jobs:
            if(!gMcOK){toast("Render de video precisa de ES 3.1");return;}
            if(!filesGranted()){needFiles();return;}
            gVid=Vid();{int ra=gRA>=0?gRA:std::min(gFS,gFE),rb=gRB>=0?gRB:std::max(gFS,gFE);if(rb<ra)std::swap(ra,rb);gVid.fps=std::clamp(gVidFps,1,120);gVid.t0=ra/24.f;gVid.f0=0;gVid.total=std::max(1,(int)floorf((rb-ra)/24.f*gVid.fps+1e-3f)+1);gVid.f1=gVid.total-1;gVid.f=0;gVid.tm0=tm;}
-           static const int PW[3]={1024,1280,1920},PB[3]={3,4,6},PS[3]={8,16,0};
+           static const int PW[3]={1024,1280,1920},PB[3]={6,8,12},PS[3]={8,16,0};
            gVid.spp0=gMcSpp;gVid.fw0=gMcFinW;gVid.bn0=gMcBn;gMcFinW=PW[gVidQ];gMcBn=PB[gVidQ];if(PS[gVidQ])gMcSpp=PS[gVidQ];gVidBusy=true;
            float sc=std::min(1.f,(float)gMcFinW/W);int sw=(int)(W*sc),sh=(int)(H*sc);
            gVid.vw=gMcFinW;gVid.vh=std::max(16,(int)(gVid.vw*(double)sh/std::max(sw,1)+8)/16*16);
@@ -3343,7 +3355,7 @@ jobs:
            glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);drawBg();
            glEnable(GL_DEPTH_TEST);
            gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);}
-           draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
+           if(!gCapNow)draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
            auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
            ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
            glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glActiveTexture(GL_TEXTURE0);
@@ -3351,9 +3363,9 @@ jobs:
             draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
            gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
            glDisable(GL_DEPTH_TEST);
-           if(gBones)drawBones();
-           if(!gMcFinal)drawCtrls();
-           if(sel>=0&&tool<3)drawGizmo();
+           if(gBones&&!gCapNow)drawBones();
+           if(!gMcFinal&&!gCapNow)drawCtrls();
+           if(sel>=0&&tool<3&&!gCapNow)drawGizmo();
            }
           void frameUI(){
            gBtn.clear();gBlock.clear();float u=U(),ML_=ML(),hH=8.6f*u;
@@ -3742,9 +3754,8 @@ jobs:
               t.hasSel = sel >= 0 && sel < (int)objs.size();
               t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt;
               {   // tela de render: keyframes da cena, andamento, previa
-                  float kmin = 1e9f, kmax = -1e9f;
-                  for (auto &o : objs) for (auto &k : o.k) { kmin = std::min(kmin, k.t); kmax = std::max(kmax, k.t); }
-                  t.anyKeys = kmax >= kmin;
+                  float kmin = 0.f, kmax = 0.f;
+                  t.anyKeys = animRange(kmin, kmax);   // so conta keys que realmente mudam alguma coisa
                   t.keyFirst = t.anyKeys ? (int)roundf(kmin * 24.f) : 0;
                   t.keyLast = t.anyKeys ? (int)roundf(kmax * 24.f) : 0;
                   t.rendering = gVid.on || gAutoPng > 0;
@@ -3754,6 +3765,57 @@ jobs:
               }
               t.keys.clear();
               if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
+          }
+
+          static bool tDiff(const T &a, const T &b) {
+              auto d = [](V x, V y) { return fabsf(x.x - y.x) + fabsf(x.y - y.y) + fabsf(x.z - y.z); };
+              return d(a.p, b.p) > 1e-4f || d(a.r, b.r) > 1e-4f || d(a.s, b.s) > 1e-4f;
+          }
+
+          // Intervalo animado da cena (em segundos): do key anterior a primeira mudanca ate o ultimo key que muda algo.
+          static bool animRange(float &t0, float &t1) {
+              bool any = false;
+              t0 = 1e9f; t1 = -1e9f;
+              for (auto &o : objs) {
+                  if (o.k.size() < 2) continue;
+                  std::vector<Key> k = o.k;
+                  std::sort(k.begin(), k.end(), [](const Key &a, const Key &b) { return a.t < b.t; });
+                  int first = -1, last = -1;
+                  for (size_t i = 1; i < k.size(); i++)
+                      if (tDiff(k[i].x, k[i - 1].x)) { if (first < 0) first = (int)i - 1; last = (int)i; }
+                  if (first >= 0) { any = true; t0 = std::min(t0, k[first].t); t1 = std::max(t1, k[last].t); }
+              }
+              return any;
+          }
+
+          // Previa: copia o que o viewport mostra agora (mesma camera), recortado na proporcao do render.
+          static void capturePreview(int rw, int rh) {
+              if (W < 8 || H < 8 || rw < 1 || rh < 1) return;
+              std::vector<unsigned char> px((size_t)W * H * 4);
+              glBindFramebuffer(GL_FRAMEBUFFER, 0);
+              glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+              float ar = (float)rw / rh;
+              int cw = std::min(W, (int)(H * ar)), ch = std::min(H, (int)(W / ar));
+              int cx = (W - cw) / 2, cy = (H - ch) / 2;
+              int ow = std::min(640, cw), oh = std::max(1, (int)(ow / ar));
+              std::vector<unsigned char> out((size_t)ow * oh * 4);
+              for (int y = 0; y < oh; y++)
+                  for (int x = 0; x < ow; x++) {
+                      int ix = std::clamp((int)(cx + (x + .5f) * cw / ow), 0, W - 1);
+                      int iy = std::clamp((int)(cy + (oh - 1 - y + .5f) * ch / oh), 0, H - 1);
+                      int x2 = std::min(ix + 1, W - 1), y2 = std::min(iy + 1, H - 1);
+                      for (int c = 0; c < 3; c++) {
+                          int v = px[((size_t)iy * W + ix) * 4 + c] + px[((size_t)iy * W + x2) * 4 + c] + px[((size_t)y2 * W + ix) * 4 + c] + px[((size_t)y2 * W + x2) * 4 + c];
+                          out[((size_t)y * ow + x) * 4 + c] = (unsigned char)(v / 4);
+                      }
+                      out[((size_t)y * ow + x) * 4 + 3] = 255;
+                  }
+              gPrevPath = std::string(gDir) + "/preview.png";
+              FILE *f = fopen(gPrevPath.c_str(), "wb");
+              if (!f) return;
+              stbi_write_png_to_func(mcWrite, f, ow, oh, 4, out.data(), ow * 4);
+              fclose(f);
+              gPrevSeq++;
           }
 
           static void startImage(int mode) {
@@ -3783,6 +3845,7 @@ jobs:
               case 18: startImage((int)roundf(a)); break;
               case 19: if (!gVid.on) vidStart(); break;
               case 20: if (gVid.on) vidFinish(true); gAutoPng = 0; gMcFinal = false; gMcHaveCam = false; break;
+              case 21: gCapReq = true; gCapW = std::clamp((int)roundf(a), 16, 8192); gCapH = std::clamp((int)roundf(b), 16, 8192); break;
               }
           }
 
@@ -3813,6 +3876,7 @@ jobs:
               glActiveTexture(GL_TEXTURE0);
               glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
               glUseProgram(gProg);
+              gCapNow = gCapReq && !gVid.on && gAutoPng == 0;   // este quadro sai sem overlays do viewport
               double t = engNow(); float dt = (float)(t - gLastT); gLastT = t;
               gDt = dt; gToastT -= dt; gFAcc += dt; gFN++;
               if (gFAcc >= .5f) { gFps = gFN / gFAcc; gFAcc = 0; gFN = 0; }
@@ -3824,6 +3888,7 @@ jobs:
                   applyAnim();
               }
               frame();
+              if (gCapNow) { gCapNow = false; gCapReq = false; capturePreview(gCapW, gCapH); }
               if (gAutoPng && gMcFinal && gMcSamples >= gMcSpp && !gDnDirty && mcShow()) {   // imagem pronta
                   int mode = gAutoPng; gAutoPng = 0;
                   gPrevPath = std::string(gDir) + "/preview.png";
