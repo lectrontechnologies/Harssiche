@@ -23,6 +23,7 @@ Item {
         fromF = view.anyKeys ? view.keyFirst : view.frameStart
         toF = view.anyKeys ? view.keyLast : view.frameEnd
         visible = true
+        capTimer.restart()
     }
     function close() {
         visible = false
@@ -32,18 +33,21 @@ Item {
         var w = [854, 1280, 1920][i]
         resW = w
         resH = Math.round(w / ratio / 2) * 2
+        capTimer.restart()
     }
     function setW(t) {
         var v = parseInt(t)
         if (isNaN(v)) return
         resW = Math.max(64, Math.min(4096, v))
         if (linked) resH = Math.max(64, Math.round(resW / ratio / 2) * 2)
+        capTimer.restart()
     }
     function setH(t) {
         var v = parseInt(t)
         if (isNaN(v)) return
         resH = Math.max(64, Math.min(4096, v))
         if (linked) resW = Math.max(64, Math.round(resH * ratio / 2) * 2)
+        capTimer.restart()
     }
     function apply() {
         view.command(12, resW, resH)
@@ -51,6 +55,13 @@ Item {
         view.command(14, fromF, toF)
         view.command(15, night ? 1 : 0)
         view.command(16, edge ? 1 : 0)
+    }
+
+    // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
+    Timer {
+        id: capTimer
+        interval: 250
+        onTriggered: if (dlg.visible && !dlg.view.rendering) dlg.view.command(21, dlg.resW, dlg.resH)
     }
 
     Connections {
