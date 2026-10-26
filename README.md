@@ -1,7 +1,7 @@
-# Nomad Animator
+# Harssiche iFX
 Android 3D Animation Software
 
-# Nomad Animator Future Updates/Features
+# Harssiche iFX Future Updates/Features
 
 - Basic Rigging (Added)
 - IK & FK Rigging (Added)
