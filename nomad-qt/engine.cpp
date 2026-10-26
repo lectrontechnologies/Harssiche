@@ -2008,24 +2008,6 @@ void api_resize(int w, int h) {
     initPost();
 }
 
-static bool tDiff(const T &a, const T &b);
-
-// Declarada e definida antes de api_timeline para ficar visivel no ponto de uso.
-static bool animRange(float &t0, float &t1) {
-    bool any = false;
-    t0 = 1e9f; t1 = -1e9f;
-    for (auto &o : objs) {
-        if (o.k.size() < 2) continue;
-        std::vector<Key> k = o.k;
-        std::sort(k.begin(), k.end(), [](const Key &a, const Key &b) { return a.t < b.t; });
-        int first = -1, last = -1;
-        for (size_t i = 1; i < k.size(); i++)
-            if (tDiff(k[i].x, k[i - 1].x)) { if (first < 0) first = (int)i - 1; last = (int)i; }
-        if (first >= 0) { any = true; t0 = std::min(t0, k[first].t); t1 = std::max(t1, k[last].t); }
-    }
-    return any;
-}
-
 void api_timeline(EngTimeline &t) {
     t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
     t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
@@ -2048,6 +2030,22 @@ void api_timeline(EngTimeline &t) {
 static bool tDiff(const T &a, const T &b) {
     auto d = [](V x, V y) { return fabsf(x.x - y.x) + fabsf(x.y - y.y) + fabsf(x.z - y.z); };
     return d(a.p, b.p) > 1e-4f || d(a.r, b.r) > 1e-4f || d(a.s, b.s) > 1e-4f;
+}
+
+// Intervalo animado da cena (em segundos): do key anterior a primeira mudanca ate o ultimo key que muda algo.
+static bool animRange(float &t0, float &t1) {
+    bool any = false;
+    t0 = 1e9f; t1 = -1e9f;
+    for (auto &o : objs) {
+        if (o.k.size() < 2) continue;
+        std::vector<Key> k = o.k;
+        std::sort(k.begin(), k.end(), [](const Key &a, const Key &b) { return a.t < b.t; });
+        int first = -1, last = -1;
+        for (size_t i = 1; i < k.size(); i++)
+            if (tDiff(k[i].x, k[i - 1].x)) { if (first < 0) first = (int)i - 1; last = (int)i; }
+        if (first >= 0) { any = true; t0 = std::min(t0, k[first].t); t1 = std::max(t1, k[last].t); }
+    }
+    return any;
 }
 
 // Previa: copia o que o viewport mostra agora (mesma camera), recortado na proporcao do render.
@@ -2139,6 +2137,8 @@ void api_frame() {
     glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(gProg);
     gCapNow = gCapReq && !gVid.on && gAutoPng == 0;   // este quadro sai sem overlays do viewport
+    bool matcapWas = gMatcap;
+    if (gCapNow) gMatcap = false;   // a previa usa materiais e texturas (PBR), nao o visual cinza do viewport
     double t = engNow(); float dt = (float)(t - gLastT); gLastT = t;
     gDt = dt; gToastT -= dt; gFAcc += dt; gFN++;
     if (gFAcc >= .5f) { gFps = gFN / gFAcc; gFAcc = 0; gFN = 0; }
@@ -2151,6 +2151,7 @@ void api_frame() {
     }
     frame();
     if (gCapNow) { gCapNow = false; gCapReq = false; capturePreview(gCapW, gCapH); }
+    gMatcap = matcapWas;
     if (gAutoPng && gMcFinal && gMcSamples >= gMcSpp && !gDnDirty && mcShow()) {   // imagem pronta
         int mode = gAutoPng; gAutoPng = 0;
         gPrevPath = std::string(gDir) + "/preview.png";
