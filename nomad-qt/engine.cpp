@@ -1873,10 +1873,15 @@ void gzRun(bool draw){
  if(use&&draw)gzApply(mat);
  ImGui::End();ImGui::PopStyleVar(2);
  if(draw){ImGui::Render();ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());}else ImGui::EndFrame();}
-bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();io.AddMousePosEvent(x,y);gzRun(true);
- bool over=ImGuizmo::IsOver();if(!over){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);}return over;}
+float gGzOX=0,gGzOY=0; // deslocamento do dedo ate o ponto que acertou o gizmo (tolerancia de toque)
+bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();
+ float r=16.f*std::max(1.f,H/540.f);static const float ox[9]={0,1,-1,0,0,.7f,-.7f,.7f,-.7f},oy[9]={0,0,0,1,-1,.7f,.7f,-.7f,-.7f};
+ for(int i=0;i<9;i++){float px=x+ox[i]*r,py=y+oy[i]*r;io.AddMousePosEvent(px,py);
+  gzRun(false);gzRun(false); // IsOver() do ImGuizmo e' do quadro anterior: precisa de 2 quadros
+  if(ImGuizmo::IsOver()){gGzOX=px-x;gGzOY=py-y;return true;}}
+ io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);return false;}
 void gzDown(){ImGui::GetIO().AddMouseButtonEvent(0,true);}
-void gzMove(float x,float y){ImGui::GetIO().AddMousePosEvent(x,y);}
+void gzMove(float x,float y){ImGui::GetIO().AddMousePosEvent(x+gGzOX,y+gGzOY);}
 void gzUp(){ImGui::GetIO().AddMouseButtonEvent(0,false);gGzClear=true;}
 // ---------- input ----------
 void pressInner(int i){

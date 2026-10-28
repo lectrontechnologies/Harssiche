@@ -1450,7 +1450,7 @@ namespace IMGUIZMO_NAMESPACE
 #endif
          }
 
-         float radiusAxis = sqrtf((ImLengthSqr(worldToPos(gContext.mModel.v.position, gContext.mViewProjection) - circlePos[0])));
+         float radiusAxis = 0.f; { const ImVec2 c0_ = worldToPos(gContext.mModel.v.position, gContext.mViewProjection); for (int i_ = 0; i_ < circleMul * halfCircleSegmentCount + 1; i_++) { float d_ = sqrtf(ImLengthSqr(c0_ - circlePos[i_])); if (d_ > radiusAxis) radiusAxis = d_; } }
          if (radiusAxis > gContext.mRadiusSquareCenter)
          {
             gContext.mRadiusSquareCenter = radiusAxis;
