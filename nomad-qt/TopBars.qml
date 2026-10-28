@@ -26,29 +26,16 @@ Item {
     }
 
     // ---------------- fundos ----------------
-    Shape {
-        width: 138
-        height: 45
-        scale: bars.s
+    Shape {   // painel de ferramentas do conceito (forma recortada)
+        width: 460
+        height: 350
+        scale: bars.k
         transformOrigin: Item.TopLeft
         preferredRendererType: Shape.CurveRenderer
         ShapePath {
-            fillColor: "#282828"
+            fillColor: "#050505"
             strokeColor: "transparent"
-            PathSvg { path: "M0 0 H138 V35 Q138 45 128 45 H0 Z" }
-        }
-    }
-    Shape {
-        y: 44.5 * bars.s
-        width: 52
-        height: 51.5
-        scale: bars.s
-        transformOrigin: Item.TopLeft
-        preferredRendererType: Shape.CurveRenderer
-        ShapePath {
-            fillColor: "#282828"
-            strokeColor: "transparent"
-            PathSvg { path: "M0 0 H52 V46.5 Q52 51.5 47 51.5 H0 Z" }
+            PathSvg { path: "M13 13 H444 V84 L384 136 H271 L132 314 V338 H13 Z" }
         }
     }
     Shape {
@@ -65,17 +52,12 @@ Item {
         }
     }
 
-    // ---------------- ferramenta ativa (quadrado azul atras do icone) ----------------
-    Rectangle { visible: bars.view.toolIndex === 0; x: (71 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-    Rectangle { visible: bars.view.toolIndex === 1; x: (199.5 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-    Rectangle { visible: bars.view.toolIndex === 2; x: (339 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-    Rectangle { visible: bars.addOpen; x: (79.5 - 54) * bars.k; y: (212.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-
-    // ---------------- icones (recortes do conceito) ----------------
-    Glyph { name: "move";   x: (71 - 36) * bars.k;    y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
-    Glyph { name: "rotate"; x: (199.5 - 36) * bars.k; y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
-    Glyph { name: "scale";  x: (339 - 36) * bars.k;   y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
-    Image { source: "icons/tb_cube.png";   x: 35 * bars.k;   y: 169 * bars.k; width: 89 * bars.k; height: 87 * bars.k; smooth: true; mipmap: true }
+    // ---------------- icones (vetor; a ferramenta ativa fica em ciano) ----------------
+    Glyph { name: "cube";   fg: bars.addOpen ? "#00e5ff" : "#c8c8c8"; x: (72 - 52) * bars.k;  y: (76 - 52) * bars.k;  width: 104 * bars.k; height: 104 * bars.k }
+    Glyph { name: "scale";  fg: bars.view.toolIndex === 2 ? "#00e5ff" : "#b4b4b4"; x: (234 - 34) * bars.k; y: (66 - 34) * bars.k; width: 68 * bars.k; height: 68 * bars.k }
+    Glyph { name: "cursor"; fg: bars.view.toolIndex === 3 ? "#00e5ff" : "#8c8c8c"; x: (384 - 34) * bars.k; y: (68 - 34) * bars.k; width: 68 * bars.k; height: 68 * bars.k }
+    Glyph { name: "rotate"; fg: bars.view.toolIndex === 1 ? "#00e5ff" : "#a8a8a8"; x: (166 - 32) * bars.k; y: (156 - 32) * bars.k; width: 64 * bars.k; height: 64 * bars.k }
+    Glyph { name: "move";   fg: bars.view.toolIndex === 0 ? "#00e5ff" : "#c8c8c8"; x: (90 - 40) * bars.k;  y: (230 - 40) * bars.k; width: 80 * bars.k; height: 80 * bars.k }
     Image {
         source: "icons/tb_undo.png"
         x: bars.width + (2066 - 2400) * bars.k; y: 36 * bars.k; width: 85 * bars.k; height: 39 * bars.k
@@ -91,21 +73,35 @@ Item {
     Image { source: "icons/tb_menu.png"; x: bars.width + (2293 - 2400) * bars.k; y: 25 * bars.k; width: 85 * bars.k; height: 60 * bars.k; smooth: true; mipmap: true }
 
     // ---------------- areas de toque ----------------
-    Row {
-        x: 0
-        y: 0
-        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(0) }
-        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(1) }
-        TbCell { view: bars.view; s: bars.s; onClicked: bars.pickTool(2) }
-    }
-    TbCell {
-        view: bars.view
-        x: 0
-        y: 45 * bars.s
-        width: 52 * bars.s
-        height: 51 * bars.s
-        s: bars.s
-        onClicked: bars.addOpen = !bars.addOpen
+    Repeater {
+        // [x0, y0, x1, y1, acao]  em pixels do conceito: 0 mover, 1 rotacionar, 2 escalar, 3 cursor, 9 adicionar
+        model: [
+            { x0: 13,  y0: 13,  x1: 150, y1: 136, a: 9 },
+            { x0: 150, y0: 13,  x1: 309, y1: 136, a: 2 },
+            { x0: 309, y0: 13,  x1: 444, y1: 136, a: 3 },
+            { x0: 125, y0: 136, x1: 225, y1: 205, a: 1 },
+            { x0: 13,  y0: 205, x1: 140, y1: 338, a: 0 }
+        ]
+        Item {
+            id: tcell
+            required property var modelData
+            x: modelData.x0 * bars.k
+            y: modelData.y0 * bars.k
+            width: (modelData.x1 - modelData.x0) * bars.k
+            height: (modelData.y1 - modelData.y0) * bars.k
+            Rectangle { visible: tma.pressed; anchors.fill: parent; color: "white"; opacity: 0.12 }
+            MouseArea {
+                id: tma
+                anchors.fill: parent
+                containmentMask: HitMask { target: tma; view: bars.view }
+                onClicked: {
+                    var a = tcell.modelData.a
+                    if (a === 9) bars.addOpen = !bars.addOpen
+                    else if (a === 3) bars.view.command(11, 6)   // cursor: navegar (arrastar gira a vista)
+                    else bars.pickTool(a)
+                }
+            }
+        }
     }
     Row {
         x: bars.width - 123 * bars.s
@@ -118,8 +114,8 @@ Item {
     // ---------------- menu de objetos ----------------
     Rectangle {
         visible: bars.addOpen
-        x: 58 * bars.s
-        y: 48 * bars.s
+        x: 460 * bars.k
+        y: 20 * bars.k
         width: 112 * bars.s
         height: addCol.height
         color: "#282828"

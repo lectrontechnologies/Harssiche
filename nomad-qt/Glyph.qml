@@ -41,27 +41,53 @@ Canvas {
             tri(ctx, c - e, c, c - e + hl, c - hw, c - e + hl, c + hw)
             tri(ctx, c + e, c, c + e - hl, c - hw, c + e - hl, c + hw)
         } else if (n === "rotate") {
-            var cx = s * 0.5, cy = s * 0.54, r = s * 0.30
-            var a0 = 0.18 * Math.PI, a1 = 1.72 * Math.PI
-            ctx.lineWidth = s * 0.11
-            ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1, false); ctx.stroke()
-            var ex = cx + r * Math.cos(a1), ey = cy + r * Math.sin(a1)
-            var tx = -Math.sin(a1), ty = Math.cos(a1), nx = Math.cos(a1), ny = Math.sin(a1)
-            var hh = s * 0.20, ww = s * 0.17
-            tri(ctx, ex + tx * hh, ey + ty * hh, ex + nx * ww, ey + ny * ww, ex - nx * ww, ey - ny * ww)
-        } else if (n === "scale") {
-            ctx.strokeStyle = accent
+            // duas setas circulares (estilo "sincronizar")
+            var cx = s * 0.5, cy = s * 0.5, r = s * 0.31
             ctx.lineWidth = s * 0.07
-            ctx.setLineDash([s * 0.12, s * 0.07])
+            var arcs = [[1.08 * Math.PI, 1.86 * Math.PI], [0.08 * Math.PI, 0.86 * Math.PI]]
+            for (var q = 0; q < 2; q++) {
+                var b0 = arcs[q][0], b1 = arcs[q][1]
+                ctx.beginPath(); ctx.arc(cx, cy, r, b0, b1, false); ctx.stroke()
+                var ex = cx + r * Math.cos(b1), ey = cy + r * Math.sin(b1)
+                var tx = -Math.sin(b1), ty = Math.cos(b1), nx = Math.cos(b1), ny = Math.sin(b1)
+                var hh = s * 0.15, ww = s * 0.10
+                tri(ctx, ex + tx * hh, ey + ty * hh, ex + nx * ww, ey + ny * ww, ex - nx * ww, ey - ny * ww)
+            }
+        } else if (n === "scale") {
+            // quadrado com um menor preenchido no canto e a diagonal do redimensionar
+            ctx.lineWidth = s * 0.07
             ctx.strokeRect(s * 0.14, s * 0.14, s * 0.72, s * 0.72)
-            ctx.setLineDash([])
-            ctx.fillStyle = fg
-            ctx.fillRect(s * 0.14, s * 0.50, s * 0.36, s * 0.36)
-            ctx.strokeStyle = accent
+            ctx.fillRect(s * 0.14, s * 0.46, s * 0.40, s * 0.40)
             ctx.lineWidth = s * 0.07
             ctx.beginPath()
-            ctx.moveTo(s * 0.52, s * 0.34); ctx.lineTo(s * 0.66, s * 0.34); ctx.lineTo(s * 0.66, s * 0.48)
-            ctx.moveTo(s * 0.66, s * 0.34); ctx.lineTo(s * 0.50, s * 0.50)
+            ctx.moveTo(s * 0.46, s * 0.54); ctx.lineTo(s * 0.86, s * 0.14)
+            ctx.stroke()
+        } else if (n === "cursor") {
+            ctx.lineWidth = s * 0.07
+            ctx.beginPath()
+            ctx.moveTo(s * 0.18, s * 0.10)
+            ctx.lineTo(s * 0.86, s * 0.50)
+            ctx.lineTo(s * 0.54, s * 0.58)
+            ctx.lineTo(s * 0.40, s * 0.90)
+            ctx.closePath()
+            ctx.stroke()
+        } else if (n === "cube") {
+            var P = function (x, y) { return [x * s, y * s] }
+            var top = P(0.5, 0.07), ur = P(0.88, 0.29), lr = P(0.88, 0.71), bt = P(0.5, 0.93), ll = P(0.12, 0.71), ul = P(0.12, 0.29), cc = P(0.5, 0.50)
+            var face = function (pts, col) {
+                ctx.fillStyle = col
+                ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1])
+                for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1])
+                ctx.closePath(); ctx.fill()
+            }
+            face([top, ur, cc, ul], Qt.lighter(fg, 1.12).toString())
+            face([ul, cc, bt, ll], Qt.darker(fg, 1.25).toString())
+            face([cc, ur, lr, bt], Qt.darker(fg, 1.7).toString())
+            ctx.strokeStyle = "#000000"
+            ctx.lineWidth = s * 0.025
+            ctx.beginPath()
+            ctx.moveTo(ul[0], ul[1]); ctx.lineTo(cc[0], cc[1]); ctx.lineTo(ur[0], ur[1])
+            ctx.moveTo(cc[0], cc[1]); ctx.lineTo(bt[0], bt[1])
             ctx.stroke()
         } else if (n === "first" || n === "last") {
             var m = (n === "last")
