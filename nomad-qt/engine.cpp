@@ -2017,7 +2017,7 @@ int32_t onInput(ShimEvt*e){
   else if(mode==1||mode==4||mode==5){
    if(rl){rl=false;lx=x;ly=y;}
    else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>20)moved=true;
-    if(mode==5)gzMove(x,y);else if(moved){orbit(dx,dy);   // um dedo gira a vista (sem navigation gizmo); dois dedos: zoom e pan}}}
+    if(mode==5)gzMove(x,y);else if(moved){orbit(dx,dy);}}}
  }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
   if(mode==40)sculptEnd();
   if(mode==30&&!moved&&gImportOpen){int k=(int)floorf((y-gListR.y+gScrollPx)/gRowH);if(k>=0&&k<(int)gFiles.size()){gImportOpen=false;pickPath(gFiles[k]);}}
