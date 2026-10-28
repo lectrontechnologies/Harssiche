@@ -25,6 +25,7 @@ struct EngTimeline {
     int tool = 3;          // 0 mover, 1 rotacionar, 2 escalar, 3 selecionar
     bool canUndo = false, canRedo = false;
     bool sculpt = false;
+    bool autoKey = false;  // Auto Key ligado
     // tela de render
     bool anyKeys = false;          // algum objeto da cena tem keyframes
     int keyFirst = 0, keyLast = 0; // primeiro e ultimo key (frames da timeline, 24/s)

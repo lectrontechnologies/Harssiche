@@ -72,6 +72,7 @@ struct Key{float t;T x;};
 struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;};
 std::vector<Obj> objs;
 int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
+bool gAutoKey=false;
 bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
 void syncRange(){DUR=gFE/24.f;if(gVE>gFE)gVE=gFE;if(gVS<gFS)gVS=gFS;if(gVE-gVS<5)gVE=std::min(gFE,gVS+5);}
 float yaw=.6f,pitch=.4f,cd=8;V tgt{0,.5f,0};float FOV=1.047f;
@@ -1835,7 +1836,7 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
 
 // ---------- gizmos (ImGuizmo) ----------
 // So os gizmos de mover/girar/escalar usam o ImGuizmo. O resto da interface continua como estava.
-bool gGzOK=false,gGzBackend=false,gGzUsing=false,gGzClear=false;float gGzLen0=1;
+bool gGzEdited=false;bool gGzOK=false,gGzBackend=false,gGzUsing=false,gGzClear=false;float gGzLen0=1;
 void gzInit(){
  if(ImGui::GetCurrentContext()){if(gGzBackend)ImGui_ImplOpenGL3_Shutdown();ImGui::DestroyContext();gGzBackend=false;} // GL novo: recria tudo
  ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;
@@ -1844,7 +1845,7 @@ bool gzActive(){return gGzOK&&sel>=0&&sel<(int)objs.size()&&tool<3&&!gSculpt&&!g
 M gzObjM(int i){M w=worldM(i);
  if(objs[i].mesh==5)for(int c=0;c<3;c++){float l=sqrtf(w.m[c*4]*w.m[c*4]+w.m[c*4+1]*w.m[c*4+1]+w.m[c*4+2]*w.m[c*4+2]);if(l>1e-8f)for(int r=0;r<3;r++)w.m[c*4+r]/=l;} // osso: gizmo em escala 1 (o tamanho e o "len")
  return w;}
-void gzApply(const M&res){Obj&ob=objs[sel];M P=ob.parent>=0?worldM(ob.parent):id();T d=decomp(mul(invAff(P),res));
+void gzApply(const M&res){gGzEdited=true;Obj&ob=objs[sel];M P=ob.parent>=0?worldM(ob.parent):id();T d=decomp(mul(invAff(P),res));
  if(tool==0)ob.cur.p=d.p;
  else if(tool==1)ob.cur.r=d.r;
  else if(ob.mesh==5){float f[3];for(int c=0;c<3;c++)f[c]=sqrtf(res.m[c*4]*res.m[c*4]+res.m[c*4+1]*res.m[c*4+1]+res.m[c*4+2]*res.m[c*4+2]);
@@ -2017,7 +2018,7 @@ int32_t onInput(ShimEvt*e){
  }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
   if(mode==40)sculptEnd();
   if(mode==30&&!moved&&gImportOpen){int k=(int)floorf((y-gListR.y+gScrollPx)/gRowH);if(k>=0&&k<(int)gFiles.size()){gImportOpen=false;pickPath(gFiles[k]);}}
-  if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);if(mode==5)gzUp();undoCommit();mode=0;gDrag=false;}
+  if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);if(mode==5){gzUp();if(gGzEdited&&gAutoKey&&sel>=0&&sel<(int)objs.size())insertKey();gGzEdited=false;}undoCommit();mode=0;gDrag=false;}
  return 1;}
 
 // ---- API publica (implementada dentro do namespace para manter os mesmos nomes do motor) ----
@@ -2066,7 +2067,7 @@ void api_timeline(EngTimeline &t) {
     t.frame = tm * 24.f; t.fs = gFS; t.fe = gFE; t.vs = gVS; t.ve = gVE;
     t.playing = playing; t.dir = gPlayDir; t.visible = !gSculpt;
     t.hasSel = sel >= 0 && sel < (int)objs.size();
-    t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt;
+    t.tool = tool; t.canUndo = gCanUndo; t.canRedo = gCanRedo; t.sculpt = gSculpt; t.autoKey = gAutoKey;
     {   // tela de render: keyframes da cena, andamento, previa
         float kmin = 0.f, kmax = 0.f;
         t.anyKeys = animRange(kmin, kmax);   // so conta keys que realmente mudam alguma coisa
@@ -2159,6 +2160,7 @@ void api_cmd(int c, float a, float b) {
     case 18: startImage((int)roundf(a)); break;
     case 19: if (!gVid.on) vidStart(); break;
     case 20: if (gVid.on) vidFinish(true); gAutoPng = 0; gMcFinal = false; gMcHaveCam = false; break;
+    case 22: gAutoKey = !gAutoKey; toast(gAutoKey ? "Auto Key ligado" : "Auto Key desligado"); break;
     case 21: gCapReq = true; gCapW = std::clamp((int)roundf(a), 16, 8192); gCapH = std::clamp((int)roundf(b), 16, 8192); break;
     }
 }

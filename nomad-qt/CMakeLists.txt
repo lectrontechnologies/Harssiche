@@ -31,6 +31,8 @@ qt_add_qml_module(Nomad
         icons/tb_undo.png
         icons/tb_redo.png
         icons/tb_menu.png
+        icons/tl_transport.png
+        icons/tl_keypanel.png
         icons/rd_camera.png
         icons/rd_video.png
         icons/rd_link.png

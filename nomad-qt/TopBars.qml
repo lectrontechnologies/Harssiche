@@ -66,15 +66,15 @@ Item {
     }
 
     // ---------------- ferramenta ativa (quadrado azul atras do icone) ----------------
-    Rectangle { visible: bars.view.toolIndex === 0; x: (76.5 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-    Rectangle { visible: bars.view.toolIndex === 1; x: (199.5 - 54) * bars.k; y: (72.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
-    Rectangle { visible: bars.view.toolIndex === 2; x: (338.5 - 54) * bars.k; y: (67 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.view.toolIndex === 0; x: (71 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.view.toolIndex === 1; x: (199.5 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
+    Rectangle { visible: bars.view.toolIndex === 2; x: (339 - 54) * bars.k; y: (61 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
     Rectangle { visible: bars.addOpen; x: (79.5 - 54) * bars.k; y: (212.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
 
     // ---------------- icones (recortes do conceito) ----------------
-    Image { source: "icons/tb_move.png";   x: 40 * bars.k;   y: 32 * bars.k;  width: 73 * bars.k; height: 58 * bars.k; smooth: true; mipmap: true }
-    Image { source: "icons/tb_rotate.png"; x: 157 * bars.k;  y: 45 * bars.k;  width: 85 * bars.k; height: 55 * bars.k; smooth: true; mipmap: true }
-    Image { source: "icons/tb_scale.png";  x: 295 * bars.k;  y: 31 * bars.k;  width: 87 * bars.k; height: 72 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_move.png";   x: 32 * bars.k;   y: 26 * bars.k;  width: 78 * bars.k; height: 77 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_rotate.png"; x: 168 * bars.k;  y: 26 * bars.k;  width: 67 * bars.k; height: 77 * bars.k; smooth: true; mipmap: true }
+    Image { source: "icons/tb_scale.png";  x: 297 * bars.k;  y: 22 * bars.k;  width: 84 * bars.k; height: 82 * bars.k; smooth: true; mipmap: true }
     Image { source: "icons/tb_cube.png";   x: 35 * bars.k;   y: 169 * bars.k; width: 89 * bars.k; height: 87 * bars.k; smooth: true; mipmap: true }
     Image {
         source: "icons/tb_undo.png"

@@ -20,7 +20,7 @@ static QPointer<EngineView> s_instance;
 static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
     return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
            a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
-           a.tool == b.tool && a.canUndo == b.canUndo && a.canRedo == b.canRedo && a.sculpt == b.sculpt &&
+           a.tool == b.tool && a.canUndo == b.canUndo && a.canRedo == b.canRedo && a.sculpt == b.sculpt && a.autoKey == b.autoKey &&
            a.anyKeys == b.anyKeys && a.keyFirst == b.keyFirst && a.keyLast == b.keyLast && a.rendering == b.rendering &&
            a.progress == b.progress && a.openRender == b.openRender && a.previewSeq == b.previewSeq &&
            a.keys == b.keys;

@@ -34,6 +34,7 @@ class EngineView : public QQuickItem {
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY timelineChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY timelineChanged)
     Q_PROPERTY(bool sculptMode READ sculptMode NOTIFY timelineChanged)
+    Q_PROPERTY(bool autoKey READ autoKey NOTIFY timelineChanged)
     Q_PROPERTY(bool anyKeys READ anyKeys NOTIFY timelineChanged)
     Q_PROPERTY(int keyFirst READ keyFirst NOTIFY timelineChanged)
     Q_PROPERTY(int keyLast READ keyLast NOTIFY timelineChanged)
@@ -61,6 +62,7 @@ public:
     bool canUndo() const { return m_tl.canUndo; }
     bool canRedo() const { return m_tl.canRedo; }
     bool sculptMode() const { return m_tl.sculpt; }
+    bool autoKey() const { return m_tl.autoKey; }
     bool anyKeys() const { return m_tl.anyKeys; }
     int keyFirst() const { return m_tl.keyFirst; }
     int keyLast() const { return m_tl.keyLast; }
