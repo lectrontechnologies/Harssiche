@@ -3442,8 +3442,8 @@ jobs:
            glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
           // ---------- controles do rig: formas personalizadas (custom shapes) ----------
           const char*gShapeN[6]={"Cubo","Circulo","Esfera","Diamante","Cruz","Quadrado"};
-          static void ctrlSeg(V a,V b,float tk,float r,float g,float bl,float al){V d=b-a;float sl=vlen(d);if(sl<1e-7f)return;V e1=d*(1/sl),r0=fabsf(e1.y)<.9f?V{0,1,0}:V{1,0,0},e2=norm(cross(e1,r0)),e3=cross(e1,e2),mid=(a+b)*.5f;
-           M m={};float*q=m.m;q[0]=e1.x*sl*1.15f;q[1]=e1.y*sl*1.15f;q[2]=e1.z*sl*1.15f;q[4]=e2.x*tk;q[5]=e2.y*tk;q[6]=e2.z*tk;q[8]=e3.x*tk;q[9]=e3.y*tk;q[10]=e3.z*tk;q[12]=mid.x;q[13]=mid.y;q[14]=mid.z;q[15]=1;
+          static void ctrlSeg(V a,V b,float tk,float r,float g,float bl,float al,float ext=-1.f){V d=b-a;float sl=vlen(d);if(sl<1e-7f)return;float ll=ext<0?sl*1.15f:sl+ext;V e1=d*(1/sl),r0=fabsf(e1.y)<.9f?V{0,1,0}:V{1,0,0},e2=norm(cross(e1,r0)),e3=cross(e1,e2),mid=(a+b)*.5f;
+           M m={};float*q=m.m;q[0]=e1.x*ll;q[1]=e1.y*ll;q[2]=e1.z*ll;q[4]=e2.x*tk;q[5]=e2.y*tk;q[6]=e2.z*tk;q[8]=e3.x*tk;q[9]=e3.y*tk;q[10]=e3.z*tk;q[12]=mid.x;q[13]=mid.y;q[14]=mid.z;q[15]=1;
            gMR[0]=0;gMR[1]=.5f;gSk=0;draw(meshes[0],mul(gVP,m),m,r,g,bl,al,0);}
           static void ctrlQuad(V c,V rv,V uv,V nv,float w,float h,float tk,float r,float g,float bl){ // retangulo preenchido (caixa fina)
            M m={};float*q=m.m;q[0]=rv.x*w;q[1]=rv.y*w;q[2]=rv.z*w;q[4]=uv.x*h;q[5]=uv.y*h;q[6]=uv.z*h;q[8]=nv.x*tk;q[9]=nv.y*tk;q[10]=nv.z*tk;q[12]=c.x;q[13]=c.y;q[14]=c.z;q[15]=1;
@@ -3481,8 +3481,8 @@ jobs:
            float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/std::max(H,1);float hh=d*tanf(objs[i].fov/2),hw=hh*ra;
            V c=e+f*d,p0=c+r*hw+u*hh,p1=c-r*hw+u*hh,p2=c-r*hw-u*hh,p3=c+r*hw-u*hh;
            float cr=.03f,cg=.03f,cb=.03f;if(selc){cr=1;cg=.85f;cb=.2f;}float tk=d*.012f; // preto; amarelo quando selecionada
-           ctrlSeg(e,p0,tk,cr,cg,cb,1);ctrlSeg(e,p1,tk,cr,cg,cb,1);ctrlSeg(e,p2,tk,cr,cg,cb,1);ctrlSeg(e,p3,tk,cr,cg,cb,1);
-           ctrlSeg(p0,p1,tk,cr,cg,cb,1);ctrlSeg(p1,p2,tk,cr,cg,cb,1);ctrlSeg(p2,p3,tk,cr,cg,cb,1);ctrlSeg(p3,p0,tk,cr,cg,cb,1);
+           ctrlSeg(e,p0,tk,cr,cg,cb,1,tk);ctrlSeg(e,p1,tk,cr,cg,cb,1,tk);ctrlSeg(e,p2,tk,cr,cg,cb,1,tk);ctrlSeg(e,p3,tk,cr,cg,cb,1,tk);
+           ctrlSeg(p0,p1,tk,cr,cg,cb,1,tk);ctrlSeg(p1,p2,tk,cr,cg,cb,1,tk);ctrlSeg(p2,p3,tk,cr,cg,cb,1,tk);ctrlSeg(p3,p0,tk,cr,cg,cb,1,tk);
            ctrlQuad(c+u*(hh*1.65f),r,u,f,hw*2.f,hh*.70f,tk*.8f,cr,cg,cb);} // barra de "cima" preenchida, separada da moldura
           void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!any)return;
            V e=camEye();float th=tanf(FOV/2);
