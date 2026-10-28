@@ -15,6 +15,7 @@ qt_add_qml_module(Nomad
     QML_FILES
         Main.qml
         Timeline.qml
+        Glyph.qml
         TlButton.qml
         TlIcon.qml
         HitMask.qml
@@ -24,15 +25,10 @@ qt_add_qml_module(Nomad
         TbCell.qml
         TopBars.qml
     RESOURCES
-        icons/tb_move.png
-        icons/tb_rotate.png
-        icons/tb_scale.png
         icons/tb_cube.png
         icons/tb_undo.png
         icons/tb_redo.png
         icons/tb_menu.png
-        icons/tl_transport.png
-        icons/tl_keypanel.png
         icons/rd_camera.png
         icons/rd_video.png
         icons/rd_link.png

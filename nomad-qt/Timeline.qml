@@ -237,19 +237,22 @@ Item {
         }
     }
 
-    // ---- painel de transporte (arte do conceito) ----
-    Image {
-        id: transport
-        source: "icons/tl_transport.png"
+    // ---- painel de transporte ----
+    Rectangle {
         x: 109 * tl.k
         y: 767 * tl.k
         width: 456 * tl.k
         height: 91 * tl.k
-        smooth: true
-        mipmap: true
+        color: "#454545"
+        MouseArea {   // nao deixa o toque cair no viewport entre os botoes
+            id: tpMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: tpMa; view: tl.view }
+        }
     }
-    // play ativo
-    Rectangle {
+    Rectangle { x: 213 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#2b2b2b" }
+    Rectangle { x: 462 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#2b2b2b" }
+    Rectangle {   // play ativo
         visible: tl.view.playing
         x: 298 * tl.k
         y: 771 * tl.k
@@ -257,8 +260,14 @@ Item {
         height: 83 * tl.k
         radius: 6 * tl.k
         color: "#4773b3"
-        opacity: 0.5
+        opacity: 0.55
     }
+    Glyph { name: "first"; x: (164 - 30) * tl.k; y: (812 - 30) * tl.k; width: 60 * tl.k; height: 60 * tl.k }
+    Glyph { name: "prev";  x: (257 - 30) * tl.k; y: (812 - 30) * tl.k; width: 60 * tl.k; height: 60 * tl.k }
+    Glyph { name: tl.view.playing ? "pause" : "play"; x: (334 - 32) * tl.k; y: (812 - 32) * tl.k; width: 64 * tl.k; height: 64 * tl.k }
+    Glyph { name: "corner"; x: 356 * tl.k; y: 832 * tl.k; width: 12 * tl.k; height: 12 * tl.k }
+    Glyph { name: "next";  x: (414 - 30) * tl.k; y: (812 - 30) * tl.k; width: 60 * tl.k; height: 60 * tl.k }
+    Glyph { name: "last";  x: (505 - 30) * tl.k; y: (812 - 30) * tl.k; width: 60 * tl.k; height: 60 * tl.k }
     Repeater {
         // [x0, x1, comando]  (x em pixels do conceito)
         model: [
@@ -304,34 +313,29 @@ Item {
         }
     }
 
-    // ---- painel de keys (arte do conceito): botao de key, Auto Key, Set Key ----
-    Image {
+    // ---- painel de keys: botao de key, Auto Key, Set Key ----
+    Rectangle {
         id: keyPanel
-        source: "icons/tl_keypanel.png"
         x: tl.width - 365 * tl.k
         y: 747 * tl.k
         width: 242 * tl.k
         height: 111 * tl.k
-        smooth: true
-        mipmap: true
-    }
-    Rectangle {   // Auto Key ligado
-        visible: tl.view.autoKey
-        x: tl.width - (2400 - 2158) * tl.k
-        y: 754 * tl.k
-        width: 115 * tl.k
-        height: 55 * tl.k
-        radius: 4 * tl.k
-        color: "#4773b3"
-        opacity: 0.6
+        color: "#454545"
+        MouseArea {
+            id: kpMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: kpMa; view: tl.view }
+        }
     }
     // botao de key: toque insere, segurar apaga a key do frame
-    Item {
-        x: tl.width - (2400 - 2035) * tl.k
-        y: 747 * tl.k
-        width: 120 * tl.k
-        height: 111 * tl.k
-        Rectangle { visible: kma.pressed; anchors.fill: parent; color: "white"; opacity: 0.14 }
+    Rectangle {
+        x: tl.width - (2400 - 2045) * tl.k
+        y: 757 * tl.k
+        width: 104 * tl.k
+        height: 92 * tl.k
+        radius: 6 * tl.k
+        color: kma.pressed ? "#767676" : "#636363"
+        Glyph { anchors.centerIn: parent; name: "key"; fg: "#f0f0f0"; width: 72 * tl.k; height: 72 * tl.k }
         MouseArea {
             id: kma
             anchors.fill: parent
@@ -340,13 +344,15 @@ Item {
             onPressAndHold: tl.view.command(8)
         }
     }
-    // Auto Key
-    Item {
-        x: tl.width - (2400 - 2155) * tl.k
-        y: 747 * tl.k
-        width: 122 * tl.k
-        height: 62 * tl.k
-        Rectangle { visible: ama.pressed; anchors.fill: parent; color: "white"; opacity: 0.14 }
+    // Auto Key (liga / desliga)
+    Rectangle {
+        x: tl.width - (2400 - 2158) * tl.k
+        y: 755 * tl.k
+        width: 115 * tl.k
+        height: 50 * tl.k
+        radius: 5 * tl.k
+        color: tl.view.autoKey ? "#4773b3" : (ama.pressed ? "#767676" : "#616161")
+        Text { anchors.centerIn: parent; text: "Auto Key"; color: "#f0f0f0"; font.pixelSize: 30 * tl.k }
         MouseArea {
             id: ama
             anchors.fill: parent
@@ -355,12 +361,14 @@ Item {
         }
     }
     // Set Key
-    Item {
-        x: tl.width - (2400 - 2155) * tl.k
-        y: 809 * tl.k
-        width: 122 * tl.k
-        height: 49 * tl.k
-        Rectangle { visible: sma.pressed; anchors.fill: parent; color: "white"; opacity: 0.14 }
+    Rectangle {
+        x: tl.width - (2400 - 2158) * tl.k
+        y: 808 * tl.k
+        width: 115 * tl.k
+        height: 41 * tl.k
+        radius: 5 * tl.k
+        color: sma.pressed ? "#767676" : "#616161"
+        Text { anchors.centerIn: parent; text: "Set Key"; color: "#f0f0f0"; font.pixelSize: 30 * tl.k }
         MouseArea {
             id: sma
             anchors.fill: parent

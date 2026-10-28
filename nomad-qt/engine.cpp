@@ -75,7 +75,7 @@ int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
 bool gAutoKey=false;
 bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
 void syncRange(){DUR=gFE/24.f;if(gVE>gFE)gVE=gFE;if(gVS<gFS)gVS=gFS;if(gVE-gVS<5)gVE=std::min(gFE,gVS+5);}
-float yaw=.6f,pitch=.4f,cd=8;V tgt{0,.5f,0};float FOV=1.047f;
+float yaw=.9f,pitch=.5f,cd=16;V tgt{0,.5f,0};float FOV=1.047f;
 V camEye(){return tgt+V{cosf(pitch)*sinf(yaw),sinf(pitch),cosf(pitch)*cosf(yaw)}*cd;}
 static void qmulE(const float*a,const float*b,float*o){o[0]=a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1];o[1]=a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0];
  o[2]=a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3];o[3]=a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2];}
@@ -460,6 +460,10 @@ void addCamera(){V e=camEye(),f=norm(tgt-e),r=norm(cross(f,V{0,1,0})),u=cross(r,
  Obj o;o.mesh=1;o.kind=3;o.col={.85f,.85f,.9f};if(n)snprintf(o.nm,24,"Camera.%03d",n);else snprintf(o.nm,24,"Camera");
  o.cur.p=t.p;o.cur.r=t.r;o.cur.s={.5f,.5f,.5f};o.fov=FOV;
  objs.push_back(o);sel=(int)objs.size()-1;if(gCamAct<0||activeCam()<0)gCamAct=sel;toast("Camera criada na vista atual. Toque nela de novo para ver pela camera");}
+void addCameraAt(V e,V tg){V f=norm(tg-e),r=norm(cross(f,V{0,1,0})),u=cross(r,f);
+ M m=id();m.m[0]=r.x;m.m[1]=r.y;m.m[2]=r.z;m.m[4]=u.x;m.m[5]=u.y;m.m[6]=u.z;m.m[8]=-f.x;m.m[9]=-f.y;m.m[10]=-f.z;m.m[12]=e.x;m.m[13]=e.y;m.m[14]=e.z;
+ T t=decomp(m);Obj o;o.mesh=1;o.kind=3;o.col={.85f,.85f,.9f};snprintf(o.nm,24,"Camera");
+ o.cur.p=t.p;o.cur.r=t.r;o.cur.s={.5f,.5f,.5f};o.fov=FOV;objs.push_back(o);sel=(int)objs.size()-1;if(gCamAct<0||activeCam()<0)gCamAct=sel;}
 void camViewToggle(){if(gCamView>=0){camViewOff();toast("Vista normal");return;}
  int i=(sel>=0&&objs[sel].kind==3)?sel:activeCam();if(i<0){toast("Crie uma camera primeiro (icone de camera)");return;}
  camViewOn(i);toast(fm("Vendo pela camera: %s",objs[i].nm));}
@@ -1709,7 +1713,7 @@ void frameUI(){
    pill(px+1.2f*u,y1+12*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
   gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
  // outliner + transform (direita)
- if(!gFileMenu){float pw=30*u,rx=W-ML_-pw,ry=navY()+navR()+1.5f*u,rh=4.4f*u,tpx=.38f*u;
+ if(!gFileMenu){float pw=30*u,rx=W-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
  int n=(int)objs.size(),rows=std::min(n,3),st=(n>3&&sel>=0)?std::clamp(sel-2,0,n-3):0;
  float oh=4*u+std::max(rows,1)*rh+1*u;panel(rx,ry,pw,oh,1*u);
  text("Scene",rx+1.5f*u,ry+2*u-2.5f*tpx,tpx,.6f,.6f,.65f);
@@ -1831,7 +1835,6 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
   text("Toque no campo para abrir o teclado",px+pad,y5+bh+1.2f*u,.32f*u,.55f,.55f,.6f);}
  gBtn.push_back({{0,0,(float)W,(float)H},299});}
  if(gToastT>0){float tt=.4f*u,w2=tw(gToast.c_str(),tt)+4*u,bx=(W-w2)/2,by=(gTlOpen?tT:(float)H-(gTlQml?21.f:9.5f)*u)-7*u;rect(bx,by,w2,5.4f*u,.08f,.08f,.08f,.93f,1*u);text(gToast.c_str(),bx+2*u,by+2.7f*u-2.5f*tt,tt,1,1,1);}
- if(!gFileMenu)drawNav();
 }
 
 // ---------- gizmos (ImGuizmo) ----------
@@ -1861,7 +1864,7 @@ void gzRun(bool draw){
  ImGuizmo::SetOrthographic(false);ImGuizmo::Enable(true);ImGuizmo::AllowAxisFlip(false);ImGuizmo::SetGizmoSizeClipSpace(.17f);
  ImGuizmo::Style&st=ImGuizmo::GetStyle();st.TranslationLineThickness=3.f*k;st.TranslationLineArrowSize=7.f*k;st.RotationLineThickness=2.f*k;st.RotationOuterLineThickness=3.f*k;
  st.ScaleLineThickness=3.f*k;st.ScaleLineCircleSize=7.f*k;st.HatchedAxisLineThickness=6.f*k;st.CenterCircleSize=7.f*k;
- ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(ImVec2((float)W,(float)H));
+ ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(ImVec2((float)W,(float)H*.685f)); // so ate acima dos paineis da timeline
  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
  ImGui::Begin("##gz",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoFocusOnAppearing|ImGuiWindowFlags_NoNav);
  ImGuizmo::SetDrawlist();ImGuizmo::SetRect(0,0,(float)W,(float)H);
@@ -1998,7 +2001,7 @@ int32_t onInput(ShimEvt*e){
   if(mode<0){
    if(gTlOpen&&tlHit(x,y,mode)){}
    else if(inR(gTrack,x,y)){mode=3;scrub(x);}
-   else if(hypotf(x-navX(),y-navY())<navR()+12)mode=4;
+   
    else{bool blk=false;for(auto&r:gBlock)if(inR(r,x,y))blk=true;
     if(blk)mode=2;else if(gSculpt){mode=sculptBegin(x,y)?40:2;}else{if(gzProbe(x,y)){gDrag=true;mode=5;gzDown();}else mode=1;}}}
  }else if(act==AMOTION_EVENT_ACTION_POINTER_DOWN){if(mode==40){sculptEnd();mode=1;}moved=true;rl=true;pinch=0;}
@@ -2045,6 +2048,10 @@ void api_init(const char *dir, int w, int h) {
         gDirStore = (dir && *dir) ? dir : ".";
         gDir = gDirStore.c_str();
         gProj = uniqueProjName(kUntitled);
+        if (objs.empty()) {   // cena inicial como no Blender: cubo e camera
+            addObj(0); snprintf(objs.back().nm, 24, "Cube"); objs.back().cur.p = {0, .5f, 0};
+            addCameraAt({7.36f, 4.96f, 6.93f}, {0, .5f, 0}); sel = 0;
+        }
         undoClear();
         gFirstInit = false;
     }

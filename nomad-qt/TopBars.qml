@@ -72,9 +72,9 @@ Item {
     Rectangle { visible: bars.addOpen; x: (79.5 - 54) * bars.k; y: (212.5 - 54) * bars.k; width: 108 * bars.k; height: 108 * bars.k; radius: 24 * bars.k; color: "#4773b3" }
 
     // ---------------- icones (recortes do conceito) ----------------
-    Image { source: "icons/tb_move.png";   x: 32 * bars.k;   y: 26 * bars.k;  width: 78 * bars.k; height: 77 * bars.k; smooth: true; mipmap: true }
-    Image { source: "icons/tb_rotate.png"; x: 168 * bars.k;  y: 26 * bars.k;  width: 67 * bars.k; height: 77 * bars.k; smooth: true; mipmap: true }
-    Image { source: "icons/tb_scale.png";  x: 297 * bars.k;  y: 22 * bars.k;  width: 84 * bars.k; height: 82 * bars.k; smooth: true; mipmap: true }
+    Glyph { name: "move";   x: (71 - 36) * bars.k;    y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
+    Glyph { name: "rotate"; x: (199.5 - 36) * bars.k; y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
+    Glyph { name: "scale";  x: (339 - 36) * bars.k;   y: (61 - 36) * bars.k; width: 72 * bars.k; height: 72 * bars.k }
     Image { source: "icons/tb_cube.png";   x: 35 * bars.k;   y: 169 * bars.k; width: 89 * bars.k; height: 87 * bars.k; smooth: true; mipmap: true }
     Image {
         source: "icons/tb_undo.png"
