@@ -42,7 +42,17 @@ qt_add_qml_module(Nomad
         engine.cpp
         engine_api.h
         engine_shim.h
+        imgui/imgui.cpp
+        imgui/imgui_draw.cpp
+        imgui/imgui_tables.cpp
+        imgui/imgui_widgets.cpp
+        imgui/imgui_impl_opengl3.cpp
+        imgui/ImGuizmo.cpp
 )
+
+# ImGui (so para os gizmos) + ImGuizmo, backend OpenGL ES 3
+target_include_directories(Nomad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
+target_compile_definitions(Nomad PRIVATE IMGUI_IMPL_OPENGL_ES3)
 
 # Bibliotecas do NDK usadas pelo motor (as mesmas do projeto antigo)
 target_link_libraries(Nomad PRIVATE

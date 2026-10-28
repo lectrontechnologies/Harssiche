@@ -34,6 +34,9 @@
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #include <media/NdkMediaMuxer.h>
+#include "imgui.h"
+#include "imgui_impl_opengl3.h"
+#include "ImGuizmo.h"
 namespace eng {
 #define PI 3.14159265f
 
@@ -1625,7 +1628,6 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  glDisable(GL_DEPTH_TEST);
  if(gBones&&!gCapNow)drawBones();
  if(!gMcFinal&&!gCapNow)drawCtrls();
- if(sel>=0&&tool<3&&!gCapNow)drawGizmo();
  }
 void frameUI(){
  gBtn.clear();gBlock.clear();float u=U(),ML_=ML(),hH=8.6f*u;
@@ -1831,6 +1833,51 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
  if(!gFileMenu)drawNav();
 }
 
+// ---------- gizmos (ImGuizmo) ----------
+// So os gizmos de mover/girar/escalar usam o ImGuizmo. O resto da interface continua como estava.
+bool gGzOK=false,gGzBackend=false,gGzUsing=false,gGzClear=false;float gGzLen0=1;
+void gzInit(){
+ if(ImGui::GetCurrentContext()){if(gGzBackend)ImGui_ImplOpenGL3_Shutdown();ImGui::DestroyContext();gGzBackend=false;} // GL novo: recria tudo
+ ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;
+ gGzBackend=gGzOK=ImGui_ImplOpenGL3_Init("#version 300 es");gGzUsing=false;gGzClear=false;}
+bool gzActive(){return gGzOK&&sel>=0&&sel<(int)objs.size()&&tool<3&&!gSculpt&&!gMcFinal&&sel!=gCamView&&W>8&&H>8;}
+M gzObjM(int i){M w=worldM(i);
+ if(objs[i].mesh==5)for(int c=0;c<3;c++){float l=sqrtf(w.m[c*4]*w.m[c*4]+w.m[c*4+1]*w.m[c*4+1]+w.m[c*4+2]*w.m[c*4+2]);if(l>1e-8f)for(int r=0;r<3;r++)w.m[c*4+r]/=l;} // osso: gizmo em escala 1 (o tamanho e o "len")
+ return w;}
+void gzApply(const M&res){Obj&ob=objs[sel];M P=ob.parent>=0?worldM(ob.parent):id();T d=decomp(mul(invAff(P),res));
+ if(tool==0)ob.cur.p=d.p;
+ else if(tool==1)ob.cur.r=d.r;
+ else if(ob.mesh==5){float f[3];for(int c=0;c<3;c++)f[c]=sqrtf(res.m[c*4]*res.m[c*4]+res.m[c*4+1]*res.m[c*4+1]+res.m[c*4+2]*res.m[c*4+2]);
+  float b=f[0];for(int c=1;c<3;c++)if(fabsf(logf(std::max(f[c],1e-4f)))>fabsf(logf(std::max(b,1e-4f))))b=f[c];
+  ob.len=std::max(.05f,gGzLen0*b);}
+ else{ob.cur.s=V{std::max(.05f,d.s.x),std::max(.05f,d.s.y),std::max(.05f,d.s.z)};}}
+// Roda um quadro do ImGui com o gizmo (o quadro de teste do toque tambem renderiza; o motor limpa a tela logo depois).
+void gzRun(bool draw){
+ ImGuiIO&io=ImGui::GetIO();io.DisplaySize=ImVec2((float)W,(float)H);io.DeltaTime=std::clamp(gDt,.001f,.1f);
+ float k=std::max(1.f,H/540.f);ImGui::GetStyle().FontScaleMain=k;
+ ImGui_ImplOpenGL3_NewFrame();ImGui::NewFrame();ImGuizmo::BeginFrame();
+ if(gGzClear&&!io.MouseDown[0]){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);gGzClear=false;} // dedo saiu: apaga o destaque
+ ImGuizmo::SetOrthographic(false);ImGuizmo::Enable(true);ImGuizmo::AllowAxisFlip(false);ImGuizmo::SetGizmoSizeClipSpace(.17f);
+ ImGuizmo::Style&st=ImGuizmo::GetStyle();st.TranslationLineThickness=3.f*k;st.TranslationLineArrowSize=7.f*k;st.RotationLineThickness=2.f*k;st.RotationOuterLineThickness=3.f*k;
+ st.ScaleLineThickness=3.f*k;st.ScaleLineCircleSize=7.f*k;st.HatchedAxisLineThickness=6.f*k;st.CenterCircleSize=7.f*k;
+ ImGui::SetNextWindowPos(ImVec2(0,0));ImGui::SetNextWindowSize(ImVec2((float)W,(float)H));
+ ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,ImVec2(0,0));ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,0.f);
+ ImGui::Begin("##gz",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoFocusOnAppearing|ImGuiWindowFlags_NoNav);
+ ImGuizmo::SetDrawlist();ImGuizmo::SetRect(0,0,(float)W,(float)H);
+ M vm=lookAt(camEye(),tgt,{0,1,0}),pm=persp(FOV,(float)W/H,nearP(),100),mat=gzObjM(sel);
+ ImGuizmo::OPERATION op=tool==0?ImGuizmo::TRANSLATE:tool==1?ImGuizmo::ROTATE:ImGuizmo::SCALE;
+ ImGuizmo::Manipulate(vm.m,pm.m,op,tool==2?ImGuizmo::LOCAL:ImGuizmo::WORLD,mat.m,nullptr,nullptr);
+ bool use=ImGuizmo::IsUsing();
+ if(use&&!gGzUsing)gGzLen0=objs[sel].len;
+ gGzUsing=use;
+ if(use&&draw)gzApply(mat);
+ ImGui::End();ImGui::PopStyleVar(2);
+ if(draw){ImGui::Render();ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());}else ImGui::EndFrame();}
+bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();io.AddMousePosEvent(x,y);gzRun(true);
+ bool over=ImGuizmo::IsOver();if(!over){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);}return over;}
+void gzDown(){ImGui::GetIO().AddMouseButtonEvent(0,true);}
+void gzMove(float x,float y){ImGui::GetIO().AddMousePosEvent(x,y);}
+void gzUp(){ImGui::GetIO().AddMouseButtonEvent(0,false);gGzClear=true;}
 // ---------- input ----------
 void pressInner(int i){
  if(gVid.on&&i!=36)return;
@@ -1947,7 +1994,7 @@ int32_t onInput(ShimEvt*e){
    else if(inR(gTrack,x,y)){mode=3;scrub(x);}
    else if(hypotf(x-navX(),y-navY())<navR()+12)mode=4;
    else{bool blk=false;for(auto&r:gBlock)if(inR(r,x,y))blk=true;
-    if(blk)mode=2;else if(gSculpt){mode=sculptBegin(x,y)?40:2;}else{int a=hitGizmo(x,y);if(a>=0){gAxis=a;gDrag=true;mode=5;}else mode=1;}}}
+    if(blk)mode=2;else if(gSculpt){mode=sculptBegin(x,y)?40:2;}else{if(gzProbe(x,y)){gDrag=true;mode=5;gzDown();}else mode=1;}}}
  }else if(act==AMOTION_EVENT_ACTION_POINTER_DOWN){if(mode==40){sculptEnd();mode=1;}moved=true;rl=true;pinch=0;}
  else if(act==AMOTION_EVENT_ACTION_POINTER_UP){rl=true;pinch=0;}
  else if(act==AMOTION_EVENT_ACTION_MOVE){
@@ -1961,11 +2008,11 @@ int32_t onInput(ShimEvt*e){
   else if(mode==1||mode==4||mode==5){
    if(rl){rl=false;lx=x;ly=y;}
    else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>20)moved=true;
-    if(mode==5)gdrag(dx,dy);else if(moved){if(tool==3&&mode==1)panCam(dx,dy);else orbit(dx,dy);}}}
+    if(mode==5)gzMove(x,y);else if(moved){if(tool==3&&mode==1)panCam(dx,dy);else orbit(dx,dy);}}}
  }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
   if(mode==40)sculptEnd();
   if(mode==30&&!moved&&gImportOpen){int k=(int)floorf((y-gListR.y+gScrollPx)/gRowH);if(k>=0&&k<(int)gFiles.size()){gImportOpen=false;pickPath(gFiles[k]);}}
-  if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);undoCommit();mode=0;gDrag=false;}
+  if(mode==1&&!moved)pick(x,y);if(mode==4&&!moved)snap(x,y);if(mode==27&&!moved)frameTap(x);if(mode==5)gzUp();undoCommit();mode=0;gDrag=false;}
  return 1;}
 
 // ---- API publica (implementada dentro do namespace para manter os mesmos nomes do motor) ----
@@ -1998,6 +2045,7 @@ void api_init(const char *dir, int w, int h) {
     W = w; H = h;
     gBgP = 0;
     initGL();
+    gzInit();
     ready = true;
     gLastT = engNow();
 }
@@ -2180,6 +2228,14 @@ void api_frame_ui() {
     glActiveTexture(GL_TEXTURE0);
     glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(gProg);
+    if (gzActive()) {   // gizmos do ImGuizmo, por baixo dos paineis do motor
+        gzRun(true);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, W, H); glBindVertexArray(0);
+        glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glDisable(GL_SCISSOR_TEST); glDisable(GL_STENCIL_TEST);
+        glActiveTexture(GL_TEXTURE0);
+        glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUseProgram(gProg);
+    }
     frameUI();
 }
 
