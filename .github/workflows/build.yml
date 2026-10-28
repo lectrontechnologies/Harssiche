@@ -74,7 +74,7 @@ jobs:
 
           # ImGui (so para os gizmos) + ImGuizmo, backend OpenGL ES 3
           target_include_directories(Nomad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
-          target_compile_definitions(Nomad PRIVATE IMGUI_IMPL_OPENGL_ES3 IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
+          target_compile_definitions(Nomad PRIVATE IMGUI_IMPL_OPENGL_ES3)
 
           # Bibliotecas do NDK usadas pelo motor (as mesmas do projeto antigo)
           target_link_libraries(Nomad PRIVATE
@@ -3587,8 +3587,8 @@ jobs:
           // So os gizmos de mover/girar/escalar usam o ImGuizmo. O resto da interface continua como estava.
           bool gGzOK=false,gGzBackend=false,gGzUsing=false,gGzClear=false;float gGzLen0=1;
           void gzInit(){
-           if(!ImGui::GetCurrentContext()){ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;}
-           else if(gGzBackend)ImGui_ImplOpenGL3_Shutdown(); // contexto GL novo: recria os recursos do backend
+           if(ImGui::GetCurrentContext()){if(gGzBackend)ImGui_ImplOpenGL3_Shutdown();ImGui::DestroyContext();gGzBackend=false;} // GL novo: recria tudo
+           ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;
            gGzBackend=gGzOK=ImGui_ImplOpenGL3_Init("#version 300 es");gGzUsing=false;gGzClear=false;}
           bool gzActive(){return gGzOK&&sel>=0&&sel<(int)objs.size()&&tool<3&&!gSculpt&&!gMcFinal&&sel!=gCamView&&W>8&&H>8;}
           M gzObjM(int i){M w=worldM(i);
@@ -3601,10 +3601,10 @@ jobs:
             float b=f[0];for(int c=1;c<3;c++)if(fabsf(logf(std::max(f[c],1e-4f)))>fabsf(logf(std::max(b,1e-4f))))b=f[c];
             ob.len=std::max(.05f,gGzLen0*b);}
            else{ob.cur.s=V{std::max(.05f,d.s.x),std::max(.05f,d.s.y),std::max(.05f,d.s.z)};}}
-          // Roda um quadro do ImGui com o gizmo. draw=false: so mede se o dedo esta sobre o gizmo (nada e desenhado).
+          // Roda um quadro do ImGui com o gizmo (o quadro de teste do toque tambem renderiza; o motor limpa a tela logo depois).
           void gzRun(bool draw){
            ImGuiIO&io=ImGui::GetIO();io.DisplaySize=ImVec2((float)W,(float)H);io.DeltaTime=std::clamp(gDt,.001f,.1f);
-           float k=std::max(1.f,H/540.f);io.FontGlobalScale=k;
+           float k=std::max(1.f,H/540.f);ImGui::GetStyle().FontScaleMain=k;
            ImGui_ImplOpenGL3_NewFrame();ImGui::NewFrame();ImGuizmo::BeginFrame();
            if(gGzClear&&!io.MouseDown[0]){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);gGzClear=false;} // dedo saiu: apaga o destaque
            ImGuizmo::SetOrthographic(false);ImGuizmo::Enable(true);ImGuizmo::AllowAxisFlip(false);ImGuizmo::SetGizmoSizeClipSpace(.17f);
@@ -3623,7 +3623,7 @@ jobs:
            if(use&&draw)gzApply(mat);
            ImGui::End();ImGui::PopStyleVar(2);
            if(draw){ImGui::Render();ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());}else ImGui::EndFrame();}
-          bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();io.AddMousePosEvent(x,y);gzRun(false);
+          bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();io.AddMousePosEvent(x,y);gzRun(true);
            bool over=ImGuizmo::IsOver();if(!over){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);}return over;}
           void gzDown(){ImGui::GetIO().AddMouseButtonEvent(0,true);}
           void gzMove(float x,float y){ImGui::GetIO().AddMousePosEvent(x,y);}
@@ -4301,21 +4301,15 @@ jobs:
           test -s stb_image_write.h
           curl -fsSL https://raw.githubusercontent.com/nothings/stb/master/stb_image.h -o stb_image.h || curl -fsSL https://cdn.jsdelivr.net/gh/nothings/stb@master/stb_image.h -o stb_image.h
           test -s stb_image.h
-          # Dear ImGui (so o necessario para o ImGuizmo) + ImGuizmo
-          mkdir -p imgui
-          IMV=v1.91.3
-          for f in imgui.h imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_internal.h imconfig.h imstb_rectpack.h imstb_textedit.h imstb_truetype.h; do
-            curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/$IMV/$f" -o "imgui/$f" || curl -fsSL "https://cdn.jsdelivr.net/gh/ocornut/imgui@$IMV/$f" -o "imgui/$f"
-            test -s "imgui/$f"
-          done
-          for f in imgui_impl_opengl3.cpp imgui_impl_opengl3.h imgui_impl_opengl3_loader.h; do
-            curl -fsSL "https://raw.githubusercontent.com/ocornut/imgui/$IMV/backends/$f" -o "imgui/$f" || curl -fsSL "https://cdn.jsdelivr.net/gh/ocornut/imgui@$IMV/backends/$f" -o "imgui/$f"
-            test -s "imgui/$f"
-          done
-          for f in ImGuizmo.h ImGuizmo.cpp; do
-            curl -fsSL "https://raw.githubusercontent.com/CedricGuillemet/ImGuizmo/master/$f" -o "imgui/$f" || curl -fsSL "https://cdn.jsdelivr.net/gh/CedricGuillemet/ImGuizmo@master/$f" -o "imgui/$f"
-            test -s "imgui/$f"
-          done
+          # Dear ImGui 1.92.5 + ImGuizmo (commit fixo, versao 1.92.5), via git
+          rm -rf imgui /tmp/imgui-src /tmp/imguizmo-src
+          mkdir -p imgui /tmp/imguizmo-src
+          git clone -q --depth 1 --branch v1.92.5 https://github.com/ocornut/imgui.git /tmp/imgui-src
+          for f in imgui.h imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_internal.h imconfig.h imstb_rectpack.h imstb_textedit.h imstb_truetype.h; do cp "/tmp/imgui-src/$f" imgui/; done
+          for f in imgui_impl_opengl3.cpp imgui_impl_opengl3.h imgui_impl_opengl3_loader.h; do cp "/tmp/imgui-src/backends/$f" imgui/; done
+          (cd /tmp/imguizmo-src && git init -q && git remote add origin https://github.com/CedricGuillemet/ImGuizmo.git && git fetch -q --depth 1 origin 105e4fde45e4e74aae8973d98750820ef7aca7e2 && git checkout -q FETCH_HEAD)
+          cp /tmp/imguizmo-src/src/ImGuizmo.h /tmp/imguizmo-src/src/ImGuizmo.cpp imgui/
+          ls -la imgui
 
       - name: Salvar arquivos no repositorio
         run: |
