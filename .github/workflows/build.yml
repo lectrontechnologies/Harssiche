@@ -60,6 +60,8 @@ jobs:
               SOURCES
                   engineview.h
                   engineview.cpp
+                  vkrender.h
+                  vkrender.cpp
                   engine.cpp
                   engine_api.h
                   engine_shim.h
@@ -230,36 +232,40 @@ jobs:
               }
 
 
-              // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan)
+              // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan).
+              // Fica logo acima do painel de reproducao, no canto inferior esquerdo.
               Rectangle {
                   id: backendChip
-                  anchors.horizontalCenter: parent.horizontalCenter
-                  y: 4
-                  width: chipRow.implicitWidth + 24
-                  height: 30
+                  readonly property real k: win.height > 0 ? win.height / 1080 : 1
+                  x: 109 * k
+                  y: 767 * k - height - 10 * k
+                  width: Math.max(chipA.implicitWidth, chipB.implicitWidth) + 24
+                  height: chipCol.implicitHeight + 16
                   radius: 6
                   color: "#d0101010"
                   border.color: "#505050"
-                  Row {
-            id: chipRow
-            anchors.centerIn: parent
-            spacing: 10
-            Text {
-                color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
-                font.pixelSize: 13
-                text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
-                    : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo : "OpenGL ES"
-            }
-            Text {
-                color: "#7fd0ff"
-                font.pixelSize: 13
-                text: engineView.savedBackend !== engineView.backend ? "reabra o app"
-                    : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
-            }
+                  Column {
+                      id: chipCol
+                      anchors.centerIn: parent
+                      spacing: 2
+                      Text {
+                          id: chipA
+                          color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
+                          font.pixelSize: 13
+                          text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
+                              : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo.split(" | ").filter(function (p, i) { return i < 2 || p.indexOf("falhou") >= 0 }).join(" | ") : "OpenGL ES"
+                      }
+                      Text {
+                          id: chipB
+                          color: "#7fd0ff"
+                          font.pixelSize: 13
+                          text: engineView.savedBackend !== engineView.backend ? "reabra o app"
+                              : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
+                      }
                   }
                   MouseArea {
-            anchors.fill: parent
-            onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
+                      anchors.fill: parent
+                      onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
                   }
               }
 
@@ -2169,6 +2175,7 @@ jobs:
           #include "engine_api.h"
 
           class QQuickWindow;
+          class VkRend;
 
           // Item QML que hospeda o motor (OpenGL ES) por baixo do Qt Quick e traduz
           // toques/teclado do Qt para o motor.
@@ -2271,7 +2278,9 @@ jobs:
               void renderEngine();    // thread de render, antes do Qt Quick desenhar (cena 3D)
               void renderEngineUi();  // thread de render, depois do Qt Quick (interface do motor)
               void glLost();
-              void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan (por enquanto so diagnostico)
+              void vulkanInfo(QQuickWindow *w);   // thread de render, backend Vulkan: le as capacidades uma vez
+              void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan: desenha o viewport
+              void vulkanPrepare();               // thread de render (antes do passe): cria o pipeline Vulkan
               void updateSize();
               void applyTimeline(const EngTimeline &t);
               void push(const EngEvent &e);
@@ -2281,7 +2290,11 @@ jobs:
               bool m_vulkan = false;
               bool m_vkFailed = false;
               bool m_vkDone = false;
+              bool m_vkFailMsg = false;
               QString m_vkInfo;
+              VkRend *m_vkr = nullptr;                                 // so na thread de render
+              std::atomic<float> m_vkYaw{0.9f}, m_vkPitch{0.5f}, m_vkDist{16.f};  // camera do viewport Vulkan
+              float m_vkLX = 0.f, m_vkLY = 0.f, m_vkLD = 0.f;           // ultimo toque (thread da interface)
               EngTimeline m_tl;      // thread da interface
               EngTimeline m_lastTl;  // thread de render
               QVariantList m_keys;
@@ -2312,6 +2325,11 @@ jobs:
           #include <QStandardPaths>
           #include <QTouchEvent>
           #include <QtGui/qtguiglobal.h>
+
+          #include <algorithm>
+          #include <cmath>
+
+          #include "vkrender.h"
           #if QT_CONFIG(vulkan)
           #include <QVulkanFunctions>
           #include <QVulkanInstance>
@@ -2357,9 +2375,40 @@ jobs:
               emit backendSavedChanged();
           }
 
+          void EngineView::vulkanPrepare() {
+          #if QT_CONFIG(vulkan)
+              QQuickWindow *w = window();
+              if (!m_vulkan || !w) return;
+              if (!m_vkr) m_vkr = new VkRend;
+              m_vkr->prepare(w);
+          #endif
+          }
+
+          void EngineView::vulkanFrame(QQuickWindow *w) {
+              vulkanInfo(w);
+          #if QT_CONFIG(vulkan)
+              if (!m_vkr) m_vkr = new VkRend;
+              VkViewParams v;
+              v.yaw = m_vkYaw.load();
+              v.pitch = m_vkPitch.load();
+              v.dist = m_vkDist.load();
+              m_vkr->draw(w, m_pw.load(), m_ph.load(), v);
+              if (m_vkr->failed() && !m_vkFailMsg) {
+                  m_vkFailMsg = true;
+                  QMetaObject::invokeMethod(
+                      this,
+                      [this] {
+                          m_vkInfo += QStringLiteral(" | viewport falhou");
+                          emit vkInfoChanged();
+                      },
+                      Qt::QueuedConnection);
+              }
+          #endif
+          }
+
           // Backend Vulkan (migracao em andamento): por enquanto so le as capacidades do aparelho uma vez e
           // mostra no chip de diagnostico. A cena 3D e a interface do motor ainda sao OpenGL e ficam desligadas.
-          void EngineView::vulkanFrame(QQuickWindow *w) {
+          void EngineView::vulkanInfo(QQuickWindow *w) {
               if (m_vkDone) return;
               m_vkDone = true;
               QString info = QStringLiteral("ativo");
@@ -2427,6 +2476,7 @@ jobs:
 
           void EngineView::onWindowChanged(QQuickWindow *w) {
               if (!w) return;
+              connect(w, &QQuickWindow::beforeRendering, this, &EngineView::vulkanPrepare, Qt::DirectConnection);
               connect(w, &QQuickWindow::beforeRenderPassRecording, this, &EngineView::renderEngine, Qt::DirectConnection);
               connect(w, &QQuickWindow::afterRenderPassRecording, this, &EngineView::renderEngineUi, Qt::DirectConnection);
               connect(w, &QQuickWindow::sceneGraphInvalidated, this, &EngineView::glLost, Qt::DirectConnection);
@@ -2551,14 +2601,50 @@ jobs:
           }
 
           void EngineView::glLost() {
-              if (!m_vulkan) eng_gl_lost();
+              if (m_vulkan) {
+          #if QT_CONFIG(vulkan)
+                  delete m_vkr;
+                  m_vkr = nullptr;
+          #endif
+              } else {
+                  eng_gl_lost();
+              }
           }
 
           // ---------------------------------------------------------------------------
           // Entrada (thread da interface) -> fila -> thread de render
           // ---------------------------------------------------------------------------
           void EngineView::push(const EngEvent &e) {
-              if (m_vulkan) return;  // sem motor ainda no Vulkan
+              if (m_vulkan) {
+                  // sem motor ainda no Vulkan: os toques so movem a camera do viewport
+                  if (e.kind == 0) {
+                      const float dx2 = e.x[0] - e.x[1], dy2 = e.y[0] - e.y[1];
+                      const float d2 = std::sqrt(dx2 * dx2 + dy2 * dy2);
+                      if (e.action == 0) {
+                          m_vkLX = e.x[0];
+                          m_vkLY = e.y[0];
+                      } else if (e.action == 5) {
+                          m_vkLD = e.n >= 2 ? d2 : 0.f;
+                      } else if (e.action == 6) {
+                          m_vkLX = -1.f;  // sobrou um dedo: recomeca a partir da posicao dele
+                      } else if (e.action == 2) {
+                          if (e.n >= 2) {
+                              if (m_vkLD > 1.f && d2 > 1.f) m_vkDist = std::clamp(m_vkDist.load() * m_vkLD / d2, 2.f, 80.f);
+                              m_vkLD = d2;
+                          } else if (m_vkLX < 0.f) {
+                              m_vkLX = e.x[0];
+                              m_vkLY = e.y[0];
+                          } else {
+                              m_vkYaw = m_vkYaw.load() - (e.x[0] - m_vkLX) * 0.006f;
+                              m_vkPitch = std::clamp(m_vkPitch.load() + (e.y[0] - m_vkLY) * 0.006f, 0.05f, 1.5f);
+                              m_vkLX = e.x[0];
+                              m_vkLY = e.y[0];
+                          }
+                      }
+                      if (window()) window()->update();
+                  }
+                  return;
+              }
               QMutexLocker l(&m_mutex);
               if (m_queue.size() < 4096) m_queue.push_back(e);
           }
@@ -5223,6 +5309,309 @@ jobs:
           Bfwc2JUmpk5Ynnrc2cFLBnk78KL9fTKZBywErrJ7/3nAd3aDMEjgkacwqIN2GzbE1INeJ6pbN+4K
           NB9Pr781n6RuQm1CPWntH5BacJpC6APGAAAAAElFTkSuQmCC
           B64EOF
+          mkdir -p nomad-qt/vk
+
+          cat > nomad-qt/vk/grid.vert <<'NOMADEOF'
+          #version 450
+          // Triangulo que cobre a tela inteira (sem buffer de vertices).
+          layout(location = 0) out vec2 vNdc;
+          void main() {
+              vec2 p = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
+              vNdc = p * 2.0 - 1.0;
+              gl_Position = vec4(vNdc, 0.0, 1.0);
+          }
+          NOMADEOF
+          cat > nomad-qt/vk/grid.frag <<'NOMADEOF'
+          #version 450
+          // Fundo (gradiente de ceu) + grade do chao (y = 0) com eixos X (vermelho) e Z (azul).
+          // A camera chega por push constants: eye.w = tan(fov/2), right.w = proporcao da tela.
+          layout(push_constant) uniform PC {
+              vec4 eye;
+              vec4 right;
+              vec4 up;
+              vec4 fwd;
+          } pc;
+          layout(location = 0) in vec2 vNdc;
+          layout(location = 0) out vec4 outColor;
+
+          void main() {
+              float th = pc.eye.w;
+              float asp = pc.right.w;
+              // y do framebuffer cresce para baixo: o topo da tela e ndc.y = -1
+              vec3 rd = normalize(pc.fwd.xyz + vNdc.x * asp * th * pc.right.xyz - vNdc.y * th * pc.up.xyz);
+              vec3 ro = pc.eye.xyz;
+
+              vec3 horizon = vec3(0.70, 0.71, 0.76);
+              vec3 zenith = vec3(0.60, 0.65, 0.80);
+              vec3 below = vec3(0.60, 0.60, 0.64);
+              vec3 col = mix(horizon, zenith, clamp(rd.y * 1.6, 0.0, 1.0));
+              col = mix(col, below, clamp(-rd.y * 3.0, 0.0, 1.0));
+
+              // interseccao com o plano y = 0 (derivadas calculadas fora de ramificacoes)
+              bool hit = (rd.y < -1e-4) && (ro.y > 0.0);
+              float t = hit ? (-ro.y / rd.y) : 1.0e4;
+              vec2 g = (ro + rd * t).xz;
+              vec2 d = max(fwidth(g), vec2(1.0e-6));
+
+              vec2 gm = abs(fract(g - 0.5) - 0.5) / d;
+              float lnMinor = 1.0 - clamp(min(gm.x, gm.y), 0.0, 1.0);
+              vec2 g10 = g / 10.0;
+              vec2 gM = abs(fract(g10 - 0.5) - 0.5) / (d / 10.0);
+              float lnMajor = 1.0 - clamp(min(gM.x, gM.y), 0.0, 1.0);
+              float axX = 1.0 - clamp(abs(g.y) / d.y, 0.0, 1.0);  // eixo X (z = 0)
+              float axZ = 1.0 - clamp(abs(g.x) / d.x, 0.0, 1.0);  // eixo Z (x = 0)
+
+              float fade = hit ? clamp(1.0 - t / 90.0, 0.0, 1.0) * clamp(-rd.y * 14.0, 0.0, 1.0) : 0.0;
+              col = mix(col, vec3(0.30, 0.31, 0.36), lnMinor * 0.30 * fade);
+              col = mix(col, vec3(0.22, 0.23, 0.30), lnMajor * 0.50 * fade);
+              col = mix(col, vec3(0.85, 0.25, 0.25), axX * 0.85 * fade);
+              col = mix(col, vec3(0.25, 0.40, 0.90), axZ * 0.85 * fade);
+              outColor = vec4(col, 1.0);
+          }
+          NOMADEOF
+          cat > nomad-qt/vkrender.h <<'NOMADEOF'
+          #pragma once
+          #include <QtGui/qtguiglobal.h>
+
+          class QQuickWindow;
+
+          // Camera orbital do viewport Vulkan (alvo + yaw/pitch/distancia).
+          struct VkViewParams {
+              float yaw = 0.9f, pitch = 0.5f, dist = 16.f;
+              float tx = 0.f, ty = 0.5f, tz = 0.f;
+          };
+
+          #if QT_CONFIG(vulkan)
+          #include <QVulkanFunctions>
+          #include <QVulkanInstance>
+
+          // Renderizador Vulkan do viewport (passo 1: fundo + grade). Desenha dentro do passe de
+          // renderizacao do Qt Quick, por baixo do QML (mesma tecnica do exemplo "Vulkan Under QML").
+          class VkRend {
+          public:
+              ~VkRend() { release(); }
+              bool prepare(QQuickWindow *w);  // cria o pipeline (uma vez); false se falhou
+              void draw(QQuickWindow *w, int pw, int ph, const VkViewParams &v);
+              void release();
+              bool failed() const { return m_failed; }
+
+          private:
+              QVulkanDeviceFunctions *m_df = nullptr;
+              VkDevice m_dev = VK_NULL_HANDLE;
+              VkPipelineLayout m_pl = VK_NULL_HANDLE;
+              VkPipeline m_pipe = VK_NULL_HANDLE;
+              bool m_init = false;
+              bool m_failed = false;
+          };
+          #endif
+          NOMADEOF
+          cat > nomad-qt/vkrender.cpp <<'NOMADEOF'
+          #include "vkrender.h"
+
+          #if QT_CONFIG(vulkan)
+          #include <QQuickWindow>
+          #include <cmath>
+          #include <cstdint>
+
+          #include "vkshaders.h"  // gerado no build: k_grid_vert / k_grid_frag (SPIR-V)
+
+          namespace {
+          struct PC {
+              float eye[4];
+              float right[4];
+              float up[4];
+              float fwd[4];
+          };
+          void nrm(float *v) {
+              const float l = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+              if (l > 1e-8f) {
+                  v[0] /= l;
+                  v[1] /= l;
+                  v[2] /= l;
+              }
+          }
+          void crs(const float *a, const float *b, float *o) {
+              o[0] = a[1] * b[2] - a[2] * b[1];
+              o[1] = a[2] * b[0] - a[0] * b[2];
+              o[2] = a[0] * b[1] - a[1] * b[0];
+          }
+          }  // namespace
+
+          bool VkRend::prepare(QQuickWindow *w) {
+              if (m_init) return !m_failed;
+              m_init = true;
+              m_failed = true;
+
+              QSGRendererInterface *rif = w->rendererInterface();
+              QVulkanInstance *inst = w->vulkanInstance();
+              if (!rif || !inst) {
+                  m_init = false;  // ainda nao disponivel: tenta de novo no proximo quadro
+                  m_failed = false;
+                  return false;
+              }
+              void *pd = rif->getResource(w, QSGRendererInterface::DeviceResource);
+              void *pr = rif->getResource(w, QSGRendererInterface::RenderPassResource);
+              if (!pd || !pr) {
+                  m_init = false;
+                  m_failed = false;
+                  return false;
+              }
+              m_dev = *reinterpret_cast<VkDevice *>(pd);
+              const VkRenderPass rp = *reinterpret_cast<VkRenderPass *>(pr);
+              m_df = inst->deviceFunctions(m_dev);
+              if (!m_df) return false;
+
+              auto mk = [&](const uint32_t *code, size_t bytes) {
+                  VkShaderModuleCreateInfo ci = {};
+                  ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                  ci.codeSize = bytes;
+                  ci.pCode = code;
+                  VkShaderModule m = VK_NULL_HANDLE;
+                  if (m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m) != VK_SUCCESS) return VkShaderModule(VK_NULL_HANDLE);
+                  return m;
+              };
+              VkShaderModule vs = mk(k_grid_vert, k_grid_vert_size);
+              VkShaderModule fs = mk(k_grid_frag, k_grid_frag_size);
+              if (!vs || !fs) {
+                  if (vs) m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
+                  if (fs) m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
+                  return false;
+              }
+
+              VkPushConstantRange pcr = {};
+              pcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+              pcr.offset = 0;
+              pcr.size = sizeof(PC);
+              VkPipelineLayoutCreateInfo pli = {};
+              pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+              pli.pushConstantRangeCount = 1;
+              pli.pPushConstantRanges = &pcr;
+              if (m_df->vkCreatePipelineLayout(m_dev, &pli, nullptr, &m_pl) != VK_SUCCESS) {
+                  m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
+                  m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
+                  return false;
+              }
+
+              VkPipelineShaderStageCreateInfo st[2] = {};
+              st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+              st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+              st[0].module = vs;
+              st[0].pName = "main";
+              st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+              st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+              st[1].module = fs;
+              st[1].pName = "main";
+
+              VkPipelineVertexInputStateCreateInfo vi = {};
+              vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+              VkPipelineInputAssemblyStateCreateInfo ia = {};
+              ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+              ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+              VkPipelineViewportStateCreateInfo vp = {};
+              vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+              vp.viewportCount = 1;
+              vp.scissorCount = 1;
+              VkPipelineRasterizationStateCreateInfo rs = {};
+              rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+              rs.polygonMode = VK_POLYGON_MODE_FILL;
+              rs.cullMode = VK_CULL_MODE_NONE;
+              rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+              rs.lineWidth = 1.0f;
+              VkPipelineMultisampleStateCreateInfo ms = {};
+              ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+              ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+              VkPipelineDepthStencilStateCreateInfo ds = {};
+              ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;  // sem teste nem escrita de profundidade
+              VkPipelineColorBlendAttachmentState cba = {};
+              cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+              VkPipelineColorBlendStateCreateInfo cb = {};
+              cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+              cb.attachmentCount = 1;
+              cb.pAttachments = &cba;
+              const VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+              VkPipelineDynamicStateCreateInfo dy = {};
+              dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+              dy.dynamicStateCount = 2;
+              dy.pDynamicStates = dyn;
+
+              VkGraphicsPipelineCreateInfo gp = {};
+              gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+              gp.stageCount = 2;
+              gp.pStages = st;
+              gp.pVertexInputState = &vi;
+              gp.pInputAssemblyState = &ia;
+              gp.pViewportState = &vp;
+              gp.pRasterizationState = &rs;
+              gp.pMultisampleState = &ms;
+              gp.pDepthStencilState = &ds;
+              gp.pColorBlendState = &cb;
+              gp.pDynamicState = &dy;
+              gp.layout = m_pl;
+              gp.renderPass = rp;
+              gp.subpass = 0;
+              const VkResult r = m_df->vkCreateGraphicsPipelines(m_dev, VK_NULL_HANDLE, 1, &gp, nullptr, &m_pipe);
+              m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
+              m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
+              if (r != VK_SUCCESS) return false;
+
+              m_failed = false;
+              return true;
+          }
+
+          void VkRend::draw(QQuickWindow *w, int pw, int ph, const VkViewParams &v) {
+              if (!m_init && !prepare(w)) return;
+              if (m_failed || !m_pipe || pw < 2 || ph < 2) return;
+
+              // camera orbital -> base ortonormal (direita/cima/frente) e posicao do olho
+              const float cp = std::cos(v.pitch), sp = std::sin(v.pitch), cy = std::cos(v.yaw), sy = std::sin(v.yaw);
+              float eye[3] = {v.tx + v.dist * cp * sy, v.ty + v.dist * sp, v.tz + v.dist * cp * cy};
+              float fwd[3] = {v.tx - eye[0], v.ty - eye[1], v.tz - eye[2]};
+              nrm(fwd);
+              const float worldUp[3] = {0.f, 1.f, 0.f};
+              float right[3], up[3];
+              crs(fwd, worldUp, right);
+              nrm(right);
+              crs(right, fwd, up);
+
+              PC pc;
+              for (int i = 0; i < 3; ++i) {
+                  pc.eye[i] = eye[i];
+                  pc.right[i] = right[i];
+                  pc.up[i] = up[i];
+                  pc.fwd[i] = fwd[i];
+              }
+              pc.eye[3] = std::tan(0.5f * 0.8f);  // fov vertical ~46 graus
+              pc.right[3] = float(pw) / float(ph);
+              pc.up[3] = 0.f;
+              pc.fwd[3] = 0.f;
+
+              QSGRendererInterface *rif = w->rendererInterface();
+              w->beginExternalCommands();
+              void *pcb = rif->getResource(w, QSGRendererInterface::CommandListResource);
+              if (pcb) {
+                  VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
+                  VkViewport vp = {0.f, 0.f, float(pw), float(ph), 0.f, 1.f};
+                  VkRect2D sc = {{0, 0}, {uint32_t(pw), uint32_t(ph)}};
+                  m_df->vkCmdSetViewport(cb, 0, 1, &vp);
+                  m_df->vkCmdSetScissor(cb, 0, 1, &sc);
+                  m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipe);
+                  m_df->vkCmdPushConstants(cb, m_pl, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PC), &pc);
+                  m_df->vkCmdDraw(cb, 3, 1, 0, 0);
+              }
+              w->endExternalCommands();
+          }
+
+          void VkRend::release() {
+              if (m_df && m_dev) {
+                  if (m_pipe) m_df->vkDestroyPipeline(m_dev, m_pipe, nullptr);
+                  if (m_pl) m_df->vkDestroyPipelineLayout(m_dev, m_pl, nullptr);
+              }
+              m_pipe = VK_NULL_HANDLE;
+              m_pl = VK_NULL_HANDLE;
+              m_init = false;
+          }
+          #endif
+          NOMADEOF
 
       - name: Baixar bibliotecas (stb, cgltf)
         run: |
@@ -5352,6 +5741,28 @@ jobs:
           </resources>
           XEOF
           grep -c 'sensorLandscape' nomad-qt/android/AndroidManifest.xml
+
+      - name: Shaders Vulkan (SPIR-V)
+        run: |
+          set -e
+          GLSLC="$ANDROID_NDK_ROOT/shader-tools/linux-x86_64/glslc"
+          test -x "$GLSLC"
+          mkdir -p "$RUNNER_TEMP/spv"
+          for f in nomad-qt/vk/*.vert nomad-qt/vk/*.frag; do
+            "$GLSLC" -O --target-env=vulkan1.1 "$f" -o "$RUNNER_TEMP/spv/$(basename "$f").spv"
+          done
+          python3 - <<'PY'
+          import glob, os, struct
+          out = ["// gerado no build (glslc): SPIR-V dos shaders do viewport Vulkan", "#pragma once", "#include <cstddef>", "#include <cstdint>"]
+          for p in sorted(glob.glob(os.environ["RUNNER_TEMP"] + "/spv/*.spv")):
+              name = os.path.basename(p)[:-4].replace(".", "_")
+              d = open(p, "rb").read()
+              assert len(d) % 4 == 0
+              w = struct.unpack("<%dI" % (len(d) // 4), d)
+              out.append("static const uint32_t k_%s[] = {%s};" % (name, ",".join("0x%08x" % x for x in w)))
+              out.append("static const size_t k_%s_size = %d;" % (name, len(d)))
+          open("nomad-qt/vkshaders.h", "w").write("\n".join(out) + "\n")
+          PY
 
       - name: Configurar (qt-cmake)
         run: |
