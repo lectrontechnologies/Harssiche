@@ -22,6 +22,13 @@ Window {
         visible: engineView.timelineVisible
     }
 
+    // Painel Scene (outliner com parentesco)
+    SceneOutliner {
+        anchors.fill: parent
+        view: engineView
+        visible: engineView.timelineVisible
+    }
+
     // Botoes do conceito (ferramentas, cubo, desfazer/refazer, menu)
     TopBars {
         anchors.fill: parent

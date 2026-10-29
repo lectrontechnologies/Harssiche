@@ -35,6 +35,8 @@ class EngineView : public QQuickItem {
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY timelineChanged)
     Q_PROPERTY(bool sculptMode READ sculptMode NOTIFY timelineChanged)
     Q_PROPERTY(bool autoKey READ autoKey NOTIFY timelineChanged)
+    Q_PROPERTY(QVariantList sceneRows READ sceneRows NOTIFY sceneChanged)
+    Q_PROPERTY(int selectedObject READ selectedObject NOTIFY timelineChanged)
     Q_PROPERTY(bool anyKeys READ anyKeys NOTIFY timelineChanged)
     Q_PROPERTY(int keyFirst READ keyFirst NOTIFY timelineChanged)
     Q_PROPERTY(int keyLast READ keyLast NOTIFY timelineChanged)
@@ -63,6 +65,8 @@ public:
     bool canRedo() const { return m_tl.canRedo; }
     bool sculptMode() const { return m_tl.sculpt; }
     bool autoKey() const { return m_tl.autoKey; }
+    QVariantList sceneRows() const { return m_rows; }
+    int selectedObject() const { return m_tl.selObj; }
     bool anyKeys() const { return m_tl.anyKeys; }
     int keyFirst() const { return m_tl.keyFirst; }
     int keyLast() const { return m_tl.keyLast; }
@@ -84,6 +88,7 @@ public:
 signals:
     void timelineChanged();
     void keysChanged();
+    void sceneChanged();
     void renderRequested();
 
 protected:
@@ -108,6 +113,7 @@ private:
     EngTimeline m_tl;      // thread da interface
     EngTimeline m_lastTl;  // thread de render
     QVariantList m_keys;
+    QVariantList m_rows;
     mutable QMutex m_rectMutex;
     std::vector<float> m_rects;
     QMutex m_mutex;

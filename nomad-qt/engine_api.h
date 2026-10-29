@@ -13,6 +13,18 @@ struct EngEvent {
     int cp = 0;      // caractere (kind == 1)
 };
 
+// Uma linha do outliner (um objeto da cena)
+struct EngRow {
+    std::string name;
+    int type = 0;          // 0 malha, 1 camera, 2 luz, 3 osso
+    int parent = -1;
+    bool hide = false;     // olho: oculto no viewport e no render
+    bool nor = false;      // camera: fora do render
+    bool operator==(const EngRow &o) const {
+        return name == o.name && type == o.type && parent == o.parent && hide == o.hide && nor == o.nor;
+    }
+};
+
 // Estado da timeline lido pelo QML (frames em unidades de frame, 24 fps)
 struct EngTimeline {
     float frame = 1;
@@ -35,6 +47,8 @@ struct EngTimeline {
     int previewSeq = 0;
     std::string previewPath;
     std::vector<float> keys;  // keyframes do objeto selecionado
+    std::vector<EngRow> rows; // objetos da cena (outliner)
+    int selObj = -1;
 };
 
 // ---- motor (engine.cpp) - tudo isto roda na thread de render ----

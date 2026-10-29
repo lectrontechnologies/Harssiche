@@ -23,7 +23,7 @@ static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
            a.tool == b.tool && a.canUndo == b.canUndo && a.canRedo == b.canRedo && a.sculpt == b.sculpt && a.autoKey == b.autoKey &&
            a.anyKeys == b.anyKeys && a.keyFirst == b.keyFirst && a.keyLast == b.keyLast && a.rendering == b.rendering &&
            a.progress == b.progress && a.openRender == b.openRender && a.previewSeq == b.previewSeq &&
-           a.keys == b.keys;
+           a.keys == b.keys && a.rows == b.rows && a.selObj == b.selObj;
 }
 
 EngineView *EngineView::instance() { return s_instance.data(); }
@@ -140,6 +140,7 @@ bool EngineView::uiHit(qreal x, qreal y) const {
 
 void EngineView::applyTimeline(const EngTimeline &t) {
     const bool keysDiff = (t.keys != m_tl.keys);
+    const bool rowsDiff = (t.rows != m_tl.rows);
     m_tl = t;
     emit timelineChanged();
     if (t.openRender) emit renderRequested();
@@ -147,6 +148,19 @@ void EngineView::applyTimeline(const EngTimeline &t) {
         m_keys.clear();
         for (float k : t.keys) m_keys.append(double(k));
         emit keysChanged();
+    }
+    if (rowsDiff) {
+        m_rows.clear();
+        for (const EngRow &r : t.rows) {
+            QVariantMap m;
+            m["name"] = QString::fromStdString(r.name);
+            m["type"] = r.type;
+            m["parent"] = r.parent;
+            m["hide"] = r.hide;
+            m["nor"] = r.nor;
+            m_rows.append(m);
+        }
+        emit sceneChanged();
     }
 }
 

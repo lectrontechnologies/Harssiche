@@ -119,6 +119,76 @@ Canvas {
         } else if (n === "pause") {
             bar(ctx, s * 0.22, s * 0.16, s * 0.2, s * 0.68)
             bar(ctx, s * 0.58, s * 0.16, s * 0.2, s * 0.68)
+        } else if (n === "chev_down" || n === "chev_right") {
+            ctx.lineWidth = s * 0.14
+            ctx.beginPath()
+            if (n === "chev_down") { ctx.moveTo(s * 0.22, s * 0.36); ctx.lineTo(s * 0.5, s * 0.64); ctx.lineTo(s * 0.78, s * 0.36) }
+            else { ctx.moveTo(s * 0.36, s * 0.22); ctx.lineTo(s * 0.64, s * 0.5); ctx.lineTo(s * 0.36, s * 0.78) }
+            ctx.stroke()
+        } else if (n === "collection") {
+            ctx.lineWidth = s * 0.09
+            ctx.strokeRect(s * 0.16, s * 0.34, s * 0.68, s * 0.5)
+            ctx.fillRect(s * 0.12, s * 0.18, s * 0.76, s * 0.16)
+            ctx.fillRect(s * 0.38, s * 0.5, s * 0.24, s * 0.08)
+        } else if (n === "check_box") {
+            ctx.fillRect(s * 0.14, s * 0.14, s * 0.72, s * 0.72)
+            ctx.strokeStyle = "#262626"
+            ctx.lineWidth = s * 0.12
+            ctx.beginPath(); ctx.moveTo(s * 0.28, s * 0.52); ctx.lineTo(s * 0.44, s * 0.68); ctx.lineTo(s * 0.74, s * 0.32); ctx.stroke()
+        } else if (n === "eye" || n === "eye_off") {
+            ctx.lineWidth = s * 0.08
+            ctx.beginPath()
+            ctx.moveTo(s * 0.06, s * 0.5)
+            ctx.quadraticCurveTo(s * 0.5, s * 0.08, s * 0.94, s * 0.5)
+            ctx.quadraticCurveTo(s * 0.5, s * 0.92, s * 0.06, s * 0.5)
+            ctx.stroke()
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.5, s * 0.15, 0, 2 * Math.PI); ctx.fill()
+            if (n === "eye_off") {
+                ctx.lineWidth = s * 0.09
+                ctx.beginPath(); ctx.moveTo(s * 0.16, s * 0.84); ctx.lineTo(s * 0.84, s * 0.16); ctx.stroke()
+            }
+        } else if (n === "render" || n === "render_off") {
+            ctx.lineWidth = s * 0.09
+            ctx.beginPath()
+            ctx.moveTo(s * 0.10, s * 0.30); ctx.lineTo(s * 0.32, s * 0.30); ctx.lineTo(s * 0.38, s * 0.18)
+            ctx.lineTo(s * 0.62, s * 0.18); ctx.lineTo(s * 0.68, s * 0.30); ctx.lineTo(s * 0.90, s * 0.30)
+            ctx.lineTo(s * 0.90, s * 0.80); ctx.lineTo(s * 0.10, s * 0.80); ctx.closePath()
+            ctx.stroke()
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.54, s * 0.17, 0, 2 * Math.PI); ctx.stroke()
+            if (n === "render_off") {
+                ctx.beginPath(); ctx.moveTo(s * 0.14, s * 0.88); ctx.lineTo(s * 0.86, s * 0.12); ctx.stroke()
+            }
+        } else if (n === "o_cam") {
+            ctx.beginPath(); ctx.arc(s * 0.28, s * 0.26, s * 0.17, 0, 2 * Math.PI); ctx.fill()
+            ctx.beginPath(); ctx.arc(s * 0.62, s * 0.26, s * 0.17, 0, 2 * Math.PI); ctx.fill()
+            ctx.fillRect(s * 0.10, s * 0.38, s * 0.62, s * 0.44)
+            tri(ctx, s * 0.92, s * 0.30, s * 0.92, s * 0.90, s * 0.70, s * 0.60)
+        } else if (n === "o_mesh") {
+            ctx.fillRect(s * 0.10, s * 0.10, s * 0.80, s * 0.80)
+            ctx.fillStyle = "#262626"
+            tri(ctx, s * 0.26, s * 0.30, s * 0.74, s * 0.30, s * 0.5, s * 0.74)
+        } else if (n === "o_light") {
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.40, s * 0.28, 0, 2 * Math.PI); ctx.fill()
+            ctx.fillRect(s * 0.36, s * 0.70, s * 0.28, s * 0.08)
+            ctx.fillRect(s * 0.40, s * 0.82, s * 0.20, s * 0.08)
+        } else if (n === "o_bone") {
+            ctx.lineWidth = s * 0.10
+            ctx.beginPath(); ctx.moveTo(s * 0.25, s * 0.75); ctx.lineTo(s * 0.75, s * 0.25); ctx.stroke()
+            ctx.beginPath(); ctx.arc(s * 0.25, s * 0.75, s * 0.14, 0, 2 * Math.PI); ctx.fill()
+            ctx.beginPath(); ctx.arc(s * 0.75, s * 0.25, s * 0.14, 0, 2 * Math.PI); ctx.fill()
+        } else if (n === "d_cam") {
+            ctx.lineWidth = s * 0.10
+            ctx.beginPath(); ctx.moveTo(s * 0.62, s * 0.14); ctx.lineTo(s * 0.34, s * 0.14); ctx.lineTo(s * 0.34, s * 0.86); ctx.lineTo(s * 0.62, s * 0.86); ctx.stroke()
+        } else if (n === "d_mesh") {
+            ctx.lineWidth = s * 0.09
+            ctx.beginPath(); ctx.moveTo(s * 0.12, s * 0.22); ctx.lineTo(s * 0.88, s * 0.22); ctx.lineTo(s * 0.5, s * 0.84); ctx.closePath(); ctx.stroke()
+            ctx.beginPath(); ctx.arc(s * 0.12, s * 0.22, s * 0.08, 0, 2 * Math.PI); ctx.fill()
+            ctx.beginPath(); ctx.arc(s * 0.88, s * 0.22, s * 0.08, 0, 2 * Math.PI); ctx.fill()
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.84, s * 0.08, 0, 2 * Math.PI); ctx.fill()
+        } else if (n === "d_light") {
+            ctx.lineWidth = s * 0.09
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.5, s * 0.36, 0, 2 * Math.PI); ctx.stroke()
+            ctx.beginPath(); ctx.arc(s * 0.5, s * 0.5, s * 0.09, 0, 2 * Math.PI); ctx.fill()
         } else if (n === "corner") {
             tri(ctx, s, 0, s, s, 0, s)
         } else if (n === "key") {

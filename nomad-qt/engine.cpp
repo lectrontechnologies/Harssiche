@@ -69,7 +69,7 @@ M model(const T&t){
 
 // ---------- cena + animacao ----------
 struct Key{float t;T x;};
-struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;};
+struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;bool hide=false,nor=false;};
 std::vector<Obj> objs;
 int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
 bool gAutoKey=false;
@@ -1153,7 +1153,7 @@ void sculptSync(){if(!gSculpt)return;
 void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
  for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
   for(size_t k=0;k<sk.j.size();k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<sk.fz.size()?sk.fz[k]:id());JS[s2][k]=mul(jw,sk.ibm[k]);}}
- for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5||o.kind)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
+ for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide||o.nor)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
   M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
   for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;
    for(int k=0;k<3;k++){const float*c=&m.cpu[v+6*k];V pp{c[0],c[1],c[2]},nn{c[3],c[4],c[5]};
@@ -1210,7 +1210,7 @@ void mcResize(int w,int h){
  glGenFramebuffers(1,&gMcOutF);glBindFramebuffer(GL_FRAMEBUFFER,gMcOutF);glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,gMcOutT,0);
  glBindFramebuffer(GL_FRAMEBUFFER,0);gMcW=w;gMcH=h;gMcCur=0;mcReset();}
 double sigScene(){double s2=0;for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];M w=worldM(i);for(int k=0;k<16;k++)s2+=w.m[k]*(k+1)*(i+1)*.37;
-  s2+=(o.col.x+o.col.y*2+o.col.z*3+o.met*5+o.rou*7+o.len)*(i+1);s2+=(o.fov*13+o.shape*17+o.kind)*(i+1);}return s2+objs.size()*1000.0+(gMcGround?7:0);}
+  s2+=(o.col.x+o.col.y*2+o.col.z*3+o.met*5+o.rou*7+o.len)*(i+1);s2+=(o.fov*13+o.shape*17+o.kind)*(i+1);s2+=((o.hide?3:0)+(o.nor?5:0))*(i+1)*1.7;}return s2+objs.size()*1000.0+(gMcGround?7:0);}
 double sigCam(){return yaw*3.1+pitch*7.3+cd*11.7+tgt.x+tgt.y*2+tgt.z*3;}
 bool mcShow(){return gMcOK&&(gMcPrev||gMcFinal)&&gMcSamples>0&&gMcTex[0];}
 void mcStep(){
@@ -1549,7 +1549,7 @@ static void drawCamObj(int i,bool selc){V e,f,r,u;if(!camBasis(i,e,f,r,u))return
  ctrlQuad(c+u*(hh*1.65f),r,u,f,hw*2.f,hh*.70f,tk*.8f,cr,cg,cb);} // barra de "cima" preenchida, separada da moldura
 void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!any)return;
  V e=camEye();float th=tanf(FOV/2);
- for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind)continue;if(o.kind==4){drawLightObj(i);continue;}if(o.kind==3){if(i!=gCamView)drawCamObj(i,i==sel);continue;}M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(!o.kind||o.hide)continue;if(o.kind==4){drawLightObj(i);continue;}if(o.kind==3){if(i!=gCamView)drawCamObj(i,i==sel);continue;}M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
   V ex=V{w.m[0],w.m[1],w.m[2]},ey=V{w.m[4],w.m[5],w.m[6]},ez=V{w.m[8],w.m[9],w.m[10]};
   if(vlen(ex)<1e-8f||vlen(ey)<1e-8f||vlen(ez)<1e-8f)continue;ex=norm(ex);ey=norm(ey);ez=norm(ez);
   float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.5f;
@@ -1560,7 +1560,7 @@ void drawCtrls(){bool any=false;for(auto&o:objs)if(o.kind){any=true;break;}if(!a
   if(o.kind==2){int ri=rigOf(i);if(ri>=0&&rigs[ri].b>=0&&rigs[ri].b<(int)objs.size())ctrlSeg(c,wp(rigs[ri].b),R*.03f,cr,cg,cb,.8f);}}}
 void drawBones(){ // estilo Maya: losango fino (aresta + corpo translucido) e junta em aneis; preto normal, verde selecionado
  std::vector<char> hc(objs.size(),0);for(auto&q:objs)if(q.mesh==5&&q.parent>=0&&q.parent<(int)objs.size())hc[q.parent]=1;
- for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5)continue;
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh!=5||o.hide)continue;
   M w=worldM(i);bool sl=(i==sel);
   float cr=sl?.45f:.03f,cg=sl?.95f:.03f,cb=sl?.35f:.03f;
   gMR[0]=0;gMR[1]=.5f;gSk=0;
@@ -1630,7 +1630,7 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
  ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
  glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glActiveTexture(GL_TEXTURE0);
- for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
   draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
  gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
  glDisable(GL_DEPTH_TEST);
@@ -1718,13 +1718,8 @@ void frameUI(){
  // outliner + transform (direita)
  if(!gFileMenu){float pw=30*u,rx=W-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
  int n=(int)objs.size(),rows=std::min(n,3),st=(n>3&&sel>=0)?std::clamp(sel-2,0,n-3):0;
- float oh=4*u+std::max(rows,1)*rh+1*u;panel(rx,ry,pw,oh,1*u);
- text("Scene",rx+1.5f*u,ry+2*u-2.5f*tpx,tpx,.6f,.6f,.65f);
- if(!n)text("Empty - tap + Cube",rx+1.5f*u,ry+4*u+2.2f*u-2.5f*tpx,tpx,.5f,.5f,.55f);
- for(int r=0;r<rows;r++){int i=st+r;float yy=ry+4*u+r*rh;
-  if(i==sel)rect(rx+.6f*u,yy,pw-1.2f*u,rh-.2f*u,.28f,.45f,.7f,1,.7f*u);
-  rect(rx+1.6f*u,yy+1.3f*u,1.8f*u,1.8f*u,objs[i].col.x,objs[i].col.y,objs[i].col.z,1,.9f*u);
-  text(objs[i].nm,rx+4.6f*u,yy+2.2f*u-2.5f*tpx,tpx,.93f,.93f,.93f);gBtn.push_back({{rx,yy,pw,rh},100+i});}
+ float oh=16.3f*u; // o painel Scene agora e QML (SceneOutliner.qml); aqui so reserva o espaco
+
  if(sel>=0){T&t=objs[sel].cur;float ty=ry+oh+1.5f*u;panel(rx,ty,pw,4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u,1*u);
 
   float lw=5.5f*u,fw=(pw-lw-1.2f*u)/3;static const char*XYZ[3]={"X","Y","Z"};
@@ -1952,16 +1947,16 @@ void pressInner(int i){
 void press(int i){pressInner(i);if(i!=91&&i!=92)undoCommit();}
 void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
 void pick(float x,float y){
- {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
+ {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind||objs[i].hide)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
   if(cb>=0){if(parentMode)finishParent(cb);else if(objs[cb].kind==3&&sel==cb)camViewToggle();else sel=cb;return;}}
- if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5)continue;M w=worldM(i);
+ if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5||objs[i].hide)continue;M w=worldM(i);
    V hd{w.m[12],w.m[13],w.m[14]},tl=hd+V{w.m[4],w.m[5],w.m[6]}*objs[i].len;float hx,hy,qx,qy;if(!prj(hd,hx,hy)||!prj(tl,qx,qy))continue;
    float vx=qx-hx,vy=qy-hy,tt=std::clamp(((x-hx)*vx+(y-hy)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);float dd=hypotf(x-hx-vx*tt,y-hy-vy*tt);if(dd<bd){bd=dd;bb=i;}}
   if(bb>=0){if(parentMode)finishParent(bb);else sel=bb;return;}}
  V e=camEye(),f=norm(tgt-e),s2=norm(cross(f,V{0,1,0})),u=cross(s2,f);
  float th=tanf(FOV/2),as=(float)W/H;V d=norm(f+s2*((2*x/W-1)*th*as)+u*((1-2*y/H)*th));
  static const float RF[3]={.87f,.5f,1.42f};int best=-1;float bt=1e9f;
- for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];V c=wp(i);float r;
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.hide)continue;V c=wp(i);float r;
   if(o.mesh==5){M w=worldM(i);c=c+V{w.m[4],w.m[5],w.m[6]}*(o.len*.5f);r=o.len*.35f;}
   else r=(o.mesh<3?RF[o.mesh]:meshes[o.mesh].rad)*std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z});
   V oc=e-c;float b=dot(oc,d),cc=dot(oc,oc)-r*r,ds=b*b-cc;if(ds<0)continue;
@@ -2088,6 +2083,17 @@ void api_timeline(EngTimeline &t) {
         t.openRender = gRenderReq; gRenderReq = false;
         t.previewSeq = gPrevSeq; t.previewPath = gPrevPath;
     }
+    t.rows.clear();
+    t.selObj = sel;
+    for (auto &o : objs) {
+        EngRow r;
+        r.name = o.nm;
+        r.type = o.kind == 3 ? 1 : (o.kind == 4 ? 2 : (o.mesh == 5 ? 3 : 0));
+        r.parent = o.parent;
+        r.hide = o.hide;
+        r.nor = o.nor;
+        t.rows.push_back(std::move(r));
+    }
     t.keys.clear();
     if (t.hasSel) for (auto &k : objs[sel].k) t.keys.push_back(k.t * 24.f);
 }
@@ -2170,6 +2176,16 @@ void api_cmd(int c, float a, float b) {
     case 18: startImage((int)roundf(a)); break;
     case 19: if (!gVid.on) vidStart(); break;
     case 20: if (gVid.on) vidFinish(true); gAutoPng = 0; gMcFinal = false; gMcHaveCam = false; break;
+    case 23: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) sel = i; break; }
+    case 24: {   // parentesco: a = filho, b = pai (b < 0 remove)
+        int c2 = (int)roundf(a), p2 = (int)roundf(b);
+        if (c2 >= 0 && c2 < (int)objs.size()) {
+            if (p2 < 0 || p2 >= (int)objs.size()) { if (objs[c2].parent >= 0) { clearParent(c2); toast("Parentesco removido"); undoCommit(); } }
+            else if (c2 != p2 && objs[c2].parent != p2) { setParent(c2, p2); undoCommit(); }
+        }
+        break; }
+    case 25: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].hide = !objs[i].hide; if (sel == i && objs[i].hide) sel = -1; undoCommit(); } break; }
+    case 26: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].nor = !objs[i].nor; undoCommit(); } break; }
     case 22: gAutoKey = !gAutoKey; toast(gAutoKey ? "Auto Key ligado" : "Auto Key desligado"); break;
     case 21: gCapReq = true; gCapW = std::clamp((int)roundf(a), 16, 8192); gCapH = std::clamp((int)roundf(b), 16, 8192); break;
     }

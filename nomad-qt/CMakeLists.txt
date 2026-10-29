@@ -16,6 +16,7 @@ qt_add_qml_module(Nomad
         Main.qml
         Timeline.qml
         Glyph.qml
+        SceneOutliner.qml
         TlButton.qml
         TlIcon.qml
         HitMask.qml
