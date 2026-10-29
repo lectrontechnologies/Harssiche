@@ -50,36 +50,40 @@ Window {
     }
 
 
-    // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan)
+    // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan).
+    // Fica logo acima do painel de reproducao, no canto inferior esquerdo.
     Rectangle {
         id: backendChip
-        anchors.horizontalCenter: parent.horizontalCenter
-        y: 4
-        width: chipRow.implicitWidth + 24
-        height: 30
+        readonly property real k: win.height > 0 ? win.height / 1080 : 1
+        x: 109 * k
+        y: 767 * k - height - 10 * k
+        width: Math.max(chipA.implicitWidth, chipB.implicitWidth) + 24
+        height: chipCol.implicitHeight + 16
         radius: 6
         color: "#d0101010"
         border.color: "#505050"
-        Row {
-  id: chipRow
-  anchors.centerIn: parent
-  spacing: 10
-  Text {
-      color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
-      font.pixelSize: 13
-      text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
-          : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo : "OpenGL ES"
-  }
-  Text {
-      color: "#7fd0ff"
-      font.pixelSize: 13
-      text: engineView.savedBackend !== engineView.backend ? "reabra o app"
-          : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
-  }
+        Column {
+            id: chipCol
+            anchors.centerIn: parent
+            spacing: 2
+            Text {
+                id: chipA
+                color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
+                font.pixelSize: 13
+                text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
+                    : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo.split(" | ").filter(function (p, i) { return i < 2 || p.indexOf("falhou") >= 0 }).join(" | ") : "OpenGL ES"
+            }
+            Text {
+                id: chipB
+                color: "#7fd0ff"
+                font.pixelSize: 13
+                text: engineView.savedBackend !== engineView.backend ? "reabra o app"
+                    : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
+            }
         }
         MouseArea {
-  anchors.fill: parent
-  onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
+            anchors.fill: parent
+            onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
         }
     }
 

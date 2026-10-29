@@ -38,6 +38,8 @@ qt_add_qml_module(Nomad
     SOURCES
         engineview.h
         engineview.cpp
+        vkrender.h
+        vkrender.cpp
         engine.cpp
         engine_api.h
         engine_shim.h

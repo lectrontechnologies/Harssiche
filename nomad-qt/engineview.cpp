@@ -12,6 +12,11 @@
 #include <QStandardPaths>
 #include <QTouchEvent>
 #include <QtGui/qtguiglobal.h>
+
+#include <algorithm>
+#include <cmath>
+
+#include "vkrender.h"
 #if QT_CONFIG(vulkan)
 #include <QVulkanFunctions>
 #include <QVulkanInstance>
@@ -57,9 +62,40 @@ void EngineView::setBackend(const QString &b) {
     emit backendSavedChanged();
 }
 
+void EngineView::vulkanPrepare() {
+#if QT_CONFIG(vulkan)
+    QQuickWindow *w = window();
+    if (!m_vulkan || !w) return;
+    if (!m_vkr) m_vkr = new VkRend;
+    m_vkr->prepare(w);
+#endif
+}
+
+void EngineView::vulkanFrame(QQuickWindow *w) {
+    vulkanInfo(w);
+#if QT_CONFIG(vulkan)
+    if (!m_vkr) m_vkr = new VkRend;
+    VkViewParams v;
+    v.yaw = m_vkYaw.load();
+    v.pitch = m_vkPitch.load();
+    v.dist = m_vkDist.load();
+    m_vkr->draw(w, m_pw.load(), m_ph.load(), v);
+    if (m_vkr->failed() && !m_vkFailMsg) {
+        m_vkFailMsg = true;
+        QMetaObject::invokeMethod(
+            this,
+            [this] {
+                m_vkInfo += QStringLiteral(" | viewport falhou");
+                emit vkInfoChanged();
+            },
+            Qt::QueuedConnection);
+    }
+#endif
+}
+
 // Backend Vulkan (migracao em andamento): por enquanto so le as capacidades do aparelho uma vez e
 // mostra no chip de diagnostico. A cena 3D e a interface do motor ainda sao OpenGL e ficam desligadas.
-void EngineView::vulkanFrame(QQuickWindow *w) {
+void EngineView::vulkanInfo(QQuickWindow *w) {
     if (m_vkDone) return;
     m_vkDone = true;
     QString info = QStringLiteral("ativo");
@@ -127,6 +163,7 @@ EngineView::EngineView(QQuickItem *parent) : QQuickItem(parent) {
 
 void EngineView::onWindowChanged(QQuickWindow *w) {
     if (!w) return;
+    connect(w, &QQuickWindow::beforeRendering, this, &EngineView::vulkanPrepare, Qt::DirectConnection);
     connect(w, &QQuickWindow::beforeRenderPassRecording, this, &EngineView::renderEngine, Qt::DirectConnection);
     connect(w, &QQuickWindow::afterRenderPassRecording, this, &EngineView::renderEngineUi, Qt::DirectConnection);
     connect(w, &QQuickWindow::sceneGraphInvalidated, this, &EngineView::glLost, Qt::DirectConnection);
@@ -251,14 +288,50 @@ void EngineView::command(int cmd, qreal a, qreal b) {
 }
 
 void EngineView::glLost() {
-    if (!m_vulkan) eng_gl_lost();
+    if (m_vulkan) {
+#if QT_CONFIG(vulkan)
+        delete m_vkr;
+        m_vkr = nullptr;
+#endif
+    } else {
+        eng_gl_lost();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Entrada (thread da interface) -> fila -> thread de render
 // ---------------------------------------------------------------------------
 void EngineView::push(const EngEvent &e) {
-    if (m_vulkan) return;  // sem motor ainda no Vulkan
+    if (m_vulkan) {
+        // sem motor ainda no Vulkan: os toques so movem a camera do viewport
+        if (e.kind == 0) {
+            const float dx2 = e.x[0] - e.x[1], dy2 = e.y[0] - e.y[1];
+            const float d2 = std::sqrt(dx2 * dx2 + dy2 * dy2);
+            if (e.action == 0) {
+                m_vkLX = e.x[0];
+                m_vkLY = e.y[0];
+            } else if (e.action == 5) {
+                m_vkLD = e.n >= 2 ? d2 : 0.f;
+            } else if (e.action == 6) {
+                m_vkLX = -1.f;  // sobrou um dedo: recomeca a partir da posicao dele
+            } else if (e.action == 2) {
+                if (e.n >= 2) {
+                    if (m_vkLD > 1.f && d2 > 1.f) m_vkDist = std::clamp(m_vkDist.load() * m_vkLD / d2, 2.f, 80.f);
+                    m_vkLD = d2;
+                } else if (m_vkLX < 0.f) {
+                    m_vkLX = e.x[0];
+                    m_vkLY = e.y[0];
+                } else {
+                    m_vkYaw = m_vkYaw.load() - (e.x[0] - m_vkLX) * 0.006f;
+                    m_vkPitch = std::clamp(m_vkPitch.load() + (e.y[0] - m_vkLY) * 0.006f, 0.05f, 1.5f);
+                    m_vkLX = e.x[0];
+                    m_vkLY = e.y[0];
+                }
+            }
+            if (window()) window()->update();
+        }
+        return;
+    }
     QMutexLocker l(&m_mutex);
     if (m_queue.size() < 4096) m_queue.push_back(e);
 }

@@ -14,6 +14,7 @@
 #include "engine_api.h"
 
 class QQuickWindow;
+class VkRend;
 
 // Item QML que hospeda o motor (OpenGL ES) por baixo do Qt Quick e traduz
 // toques/teclado do Qt para o motor.
@@ -116,7 +117,9 @@ private:
     void renderEngine();    // thread de render, antes do Qt Quick desenhar (cena 3D)
     void renderEngineUi();  // thread de render, depois do Qt Quick (interface do motor)
     void glLost();
-    void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan (por enquanto so diagnostico)
+    void vulkanInfo(QQuickWindow *w);   // thread de render, backend Vulkan: le as capacidades uma vez
+    void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan: desenha o viewport
+    void vulkanPrepare();               // thread de render (antes do passe): cria o pipeline Vulkan
     void updateSize();
     void applyTimeline(const EngTimeline &t);
     void push(const EngEvent &e);
@@ -126,7 +129,11 @@ private:
     bool m_vulkan = false;
     bool m_vkFailed = false;
     bool m_vkDone = false;
+    bool m_vkFailMsg = false;
     QString m_vkInfo;
+    VkRend *m_vkr = nullptr;                                 // so na thread de render
+    std::atomic<float> m_vkYaw{0.9f}, m_vkPitch{0.5f}, m_vkDist{16.f};  // camera do viewport Vulkan
+    float m_vkLX = 0.f, m_vkLY = 0.f, m_vkLD = 0.f;           // ultimo toque (thread da interface)
     EngTimeline m_tl;      // thread da interface
     EngTimeline m_lastTl;  // thread de render
     QVariantList m_keys;
