@@ -1,30 +1,39 @@
 import QtQuick
 
-// Painel "Scene" (outliner): arvore de objetos com parentesco, olho (visivel) e camera (render).
-// Segurar uma linha e arrastar sobre outra torna o objeto filho dela; soltar na "Collection"
-// ou fora das linhas remove o parentesco. A unidade "u" e 1% da altura (a mesma do motor).
+// Outliner (hierarquia) no estilo do conceito: painel docado a direita, redimensionavel e recolhivel.
+// Tocar seleciona; segurar uma linha e arrastar sobre outra torna o objeto filho dela;
+// soltar abaixo das linhas remove o parentesco. Medidas em pixels do conceito (altura 1080) via "k".
 Item {
     id: so
     required property var view   // EngineView
 
-    readonly property real u: height / 100
-    readonly property real panelX: width * 0.96 - 30 * u
-    readonly property real panelY: 11.5 * u
-    readonly property real panelW: 30 * u
-    readonly property real panelH: 16.3 * u
-    readonly property real headH: 3.0 * u
-    readonly property real rowH: 3.2 * u
+    readonly property real k: height > 0 ? height / 1080 : 1
 
+    // ---- dock ----
+    property real wFrac: 0.154                 // largura como fracao da janela (arrastar a borda muda)
+    property bool open: true
+    property real openFrac: open ? 1 : 0
+    Behavior on openFrac { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+    readonly property real panelW: width * wFrac
+    readonly property real insetPx: panelW * openFrac     // espaco tomado a direita (timeline e motor se ajustam)
+    readonly property real topY: 108 * k                  // abaixo da barra de desfazer/refazer/menu
+
+    // ---- dados ----
     property var flat: []
     property var collapsed: ({})
-    property bool allCollapsed: false
+    property string query: ""
+    property string menu: ""
+    property var showType: ({ "0": true, "1": true, "2": true, "3": true })
 
-    // arrastar para parentear
+    // ---- arrastar para parentear ----
     property bool dragging: false
     property int dragIdx: -1
-    property int dropIdx: -2          // -2 sem alvo valido, -1 remove o parentesco, >= 0 novo pai
+    property int dropIdx: -2          // -2 invalido, -1 remove o parentesco, >= 0 novo pai
     property real dragX: 0
     property real dragY: 0
+
+    readonly property real rowH: 27.6 * k
+    readonly property real listTop: 96 * k
 
     function rows() { return view.sceneRows }
 
@@ -43,6 +52,7 @@ Item {
     function rebuild() {
         var r = rows()
         var n = r.length
+        var q = query.toLowerCase()
         var kids = []
         var roots = []
         for (var i = 0; i < n; i++) kids.push([])
@@ -52,30 +62,54 @@ Item {
             else roots.push(j)
         }
         var out = []
+        function visible(idx) {
+            if (!showType[String(r[idx].type)]) return false
+            if (q.length > 0 && r[idx].name.toLowerCase().indexOf(q) < 0) return false
+            return true
+        }
         function walk(idx, d) {
             if (d > 48) return
-            out.push({ idx: idx, depth: d, hasKids: kids[idx].length > 0 })
-            if (!collapsed[idx]) for (var c = 0; c < kids[idx].length; c++) walk(kids[idx][c], d + 1)
+            var vis = visible(idx)
+            if (vis) out.push({ idx: idx, depth: d, hasKids: kids[idx].length > 0 })
+            if (q.length > 0 || !collapsed[idx])
+                for (var c = 0; c < kids[idx].length; c++) walk(kids[idx][c], q.length > 0 ? 0 : (vis ? d + 1 : d))
         }
-        if (!allCollapsed) for (var q = 0; q < roots.length; q++) walk(roots[q], 0)
+        for (var t = 0; t < roots.length; t++) walk(roots[t], 0)
         flat = out
     }
 
     function toggleCollapse(idx) {
         var c = {}
-        for (var k in collapsed) c[k] = collapsed[k]
+        for (var k2 in collapsed) c[k2] = collapsed[k2]
         c[idx] = !c[idx]
         collapsed = c
         rebuild()
     }
+    function expandAll() { collapsed = ({}); rebuild() }
+    function collapseAll() {
+        var r = rows()
+        var c = {}
+        for (var i = 0; i < r.length; i++) {
+            var p = r[i].parent
+            if (p >= 0 && p < r.length) c[p] = true
+        }
+        collapsed = c
+        rebuild()
+    }
+    function toggleShow(t) {
+        var c = {}
+        for (var k2 in showType) c[k2] = showType[k2]
+        c[String(t)] = !c[String(t)]
+        showType = c
+        rebuild()
+    }
 
-    // linha sob o ponto (x, y) em coordenadas do painel; 0 = Collection, 1.. = flat[i - 1]
+    // linha sob o ponto (x, y) em coordenadas do painel
     function dropAt(px, py) {
-        if (px < 0 || px > panelW || py < headH || py > panelH + 6 * u) return -2
-        var rowIdx = Math.floor((py - headH + list.contentY) / rowH)
-        if (rowIdx <= 0) return -1
-        if (rowIdx - 1 >= flat.length) return -1
-        var t = flat[rowIdx - 1].idx
+        if (px < 0 || px > panel.width || py < listTop) return -2
+        var rowIdx = Math.floor((py - listTop + list.contentY) / rowH)
+        if (rowIdx < 0 || rowIdx >= flat.length) return -1
+        var t = flat[rowIdx].idx
         if (t === dragIdx || isDesc(dragIdx, t)) return -2
         return t
     }
@@ -84,79 +118,114 @@ Item {
         target: so.view
         function onSceneChanged() { so.rebuild() }
     }
+    onQueryChanged: rebuild()
     Component.onCompleted: rebuild()
 
     // ---------------- painel ----------------
     Rectangle {
         id: panel
-        x: so.panelX
-        y: so.panelY
+        x: so.width - so.insetPx
+        y: so.topY
         width: so.panelW
-        height: so.panelH
-        color: "#262626"
-        MouseArea {
+        height: so.height - so.topY
+        color: "#383838"
+        visible: so.openFrac > 0.001
+
+        MouseArea {   // nao deixa o toque passar para o viewport
             id: bgMa
             anchors.fill: parent
             containmentMask: HitMask { target: bgMa; view: so.view }
         }
 
-        Text {
-            x: 1.4 * so.u
-            y: (so.headH - height) / 2
-            text: "Scene"
-            color: "#a8a8a8"
-            font.pixelSize: 1.7 * so.u
+        // ---- faixa do topo: aba + recolher ----
+        Rectangle { x: 0; y: 0; width: parent.width; height: 30 * so.k; color: "#2a2a2a" }
+        Rectangle {
+            x: 8 * so.k; y: 4 * so.k
+            width: tabTxt.implicitWidth + 24 * so.k
+            height: 26 * so.k
+            color: "#444444"
+            Text { id: tabTxt; anchors.centerIn: parent; text: "Outliner"; color: "#e6e6e6"; font.pixelSize: 15 * so.k }
+        }
+        Item {   // botao recolher
+            id: collapseBtn
+            x: parent.width - 34 * so.k; y: 2 * so.k
+            width: 30 * so.k; height: 26 * so.k
+            Rectangle { anchors.fill: parent; radius: 3 * so.k; color: cbMa.pressed ? "#555555" : "#3a3a3a" }
+            Glyph { anchors.centerIn: parent; width: 16 * so.k; height: 16 * so.k; name: "chev_right"; fg: "#e0e0e0" }
+            MouseArea {
+                id: cbMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: cbMa; view: so.view }
+                onClicked: { so.menu = ""; so.open = false }
+            }
         }
 
-        Flickable {
-            id: list
-            x: 0
-            y: so.headH
-            width: panel.width
-            height: panel.height - so.headH
-            clip: true
-            contentWidth: width
-            contentHeight: (so.flat.length + 1) * so.rowH
-            interactive: !so.dragging && contentHeight > height
-            boundsBehavior: Flickable.StopAtBounds
-
-            // ---- linha da Collection ----
-            Rectangle {
-                id: colRow
-                x: 0; y: 0
-                width: list.width
-                height: so.rowH
-                color: "#2c2c2c"
-                Rectangle {
-                    visible: so.dragging && so.dropIdx === -1
-                    anchors.fill: parent
-                    color: "transparent"
-                    border.color: "#4aa3ff"
-                    border.width: Math.max(1, 0.2 * so.u)
-                }
-                Glyph { x: 0.9 * so.u; y: (so.rowH - 1.6 * so.u) / 2; width: 1.6 * so.u; height: 1.6 * so.u; name: so.allCollapsed ? "chev_right" : "chev_down"; fg: "#b0b0b0" }
-                Glyph { x: 3.1 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "collection"; fg: "#d8d8d8" }
-                Text {
-                    x: 5.8 * so.u
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Collection"
-                    color: "#e4e4e4"
-                    font.pixelSize: 1.85 * so.u
-                }
-                Glyph { x: 22.0 * so.u; y: (so.rowH - 1.8 * so.u) / 2; width: 1.8 * so.u; height: 1.8 * so.u; name: "check_box"; fg: "#e4e4e4" }
-                Glyph { x: 25.0 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "eye"; fg: "#e4e4e4" }
-                Glyph { x: 27.6 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "render"; fg: "#e4e4e4" }
-                MouseArea {
-                    id: colMa
-                    x: 0; y: 0
-                    width: 3.0 * so.u
-                    height: parent.height
-                    containmentMask: HitMask { target: colMa; view: so.view }
-                    onClicked: { so.allCollapsed = !so.allCollapsed; so.rebuild() }
+        // ---- menus: Display / Show / Help ----
+        Rectangle { x: 0; y: 30 * so.k; width: parent.width; height: 30 * so.k; color: "#464646" }
+        Row {
+            x: 6 * so.k; y: 30 * so.k
+            height: 30 * so.k
+            Repeater {
+                model: ["Display", "Show", "Help"]
+                Item {
+                    required property var modelData
+                    width: mTxt.implicitWidth + 22 * so.k
+                    height: 30 * so.k
+                    Rectangle { anchors.fill: parent; color: "#5a5a5a"; visible: so.menu === parent.modelData || mMa.pressed }
+                    Text { id: mTxt; anchors.centerIn: parent; text: parent.modelData; color: "#e2e2e2"; font.pixelSize: 15 * so.k }
+                    MouseArea {
+                        id: mMa
+                        anchors.fill: parent
+                        containmentMask: HitMask { target: mMa; view: so.view }
+                        onClicked: so.menu = (so.menu === parent.modelData ? "" : parent.modelData)
+                    }
                 }
             }
+        }
 
-            // ---- linhas dos objetos ----
+        // ---- busca ----
+        Rectangle { x: 0; y: 60 * so.k; width: parent.width; height: 34 * so.k; color: "#464646" }
+        Glyph { x: 8 * so.k; y: 65 * so.k; width: 22 * so.k; height: 22 * so.k; name: "dashbox"; fg: "#8a8a8a" }
+        Rectangle {
+            x: 36 * so.k; y: 64 * so.k
+            width: parent.width - 44 * so.k; height: 26 * so.k
+            color: "#2c2c2c"
+            Text {
+                visible: search.text.length === 0 && !search.activeFocus
+                x: 6 * so.k; anchors.verticalCenter: parent.verticalCenter
+                text: "Search..."; color: "#9a9a9a"; font.pixelSize: 15 * so.k
+            }
+            TextInput {
+                id: search
+                anchors.fill: parent
+                anchors.leftMargin: 6 * so.k
+                anchors.rightMargin: 26 * so.k
+                verticalAlignment: TextInput.AlignVCenter
+                color: "#f0f0f0"
+                font.pixelSize: 15 * so.k
+                clip: true
+                selectByMouse: true
+                containmentMask: HitMask { target: search; view: so.view }
+                onTextChanged: so.query = text
+                onAccepted: { Qt.inputMethod.hide(); so.view.forceActiveFocus() }
+            }
+            Glyph { x: parent.width - 20 * so.k; y: (parent.height - 14 * so.k) / 2; width: 14 * so.k; height: 14 * so.k; name: "chev_down"; fg: "#cfcfcf" }
+        }
+
+        // ---- lista ----
+        Rectangle { x: 6 * so.k; y: so.listTop; width: parent.width - 12 * so.k; height: parent.height - so.listTop - 6 * so.k; color: "#333333" }
+        Flickable {
+            id: list
+            x: 6 * so.k
+            y: so.listTop
+            width: panel.width - 12 * so.k
+            height: panel.height - so.listTop - 6 * so.k
+            clip: true
+            contentWidth: width
+            contentHeight: Math.max(height, so.flat.length * so.rowH)
+            interactive: !so.dragging && contentHeight > height + 1
+            boundsBehavior: Flickable.StopAtBounds
+
             Repeater {
                 model: so.flat
                 Rectangle {
@@ -165,81 +234,52 @@ Item {
                     required property int index
                     readonly property var info: so.rows()[modelData.idx]
                     readonly property bool selected: so.view.selectedObject === modelData.idx
-                    readonly property real ind: 0.9 * so.u + (modelData.depth + 1) * 2.1 * so.u
+                    readonly property real ind: 8 * so.k + modelData.depth * 18 * so.k
                     x: 0
-                    y: (index + 1) * so.rowH
+                    y: index * so.rowH
                     width: list.width
                     height: so.rowH
-                    color: selected ? "#33302a" : (index % 2 ? "#2c2c2c" : "#292929")
+                    color: selected ? "#4f79a3" : "transparent"
                     visible: info !== undefined
 
                     Rectangle {   // alvo do arrastar
                         visible: so.dragging && so.dropIdx === row.modelData.idx
                         anchors.fill: parent
-                        color: "transparent"
-                        border.color: "#4aa3ff"
-                        border.width: Math.max(1, 0.2 * so.u)
-                    }
-                    Rectangle {   // linha-guia do parentesco
-                        visible: row.modelData.depth > 0
-                        x: row.ind - 1.9 * so.u
-                        width: Math.max(1, 0.12 * so.u)
-                        height: parent.height
-                        color: "#4a4a4a"
+                        color: "#2f6fb5"
+                        opacity: 0.55
                     }
 
-                    // seta de expandir
-                    Glyph {
-                        visible: row.modelData.hasKids
+                    Glyph {   // seta de expandir
+                        visible: row.modelData.hasKids && so.query.length === 0
                         x: row.ind
-                        y: (so.rowH - 1.5 * so.u) / 2
-                        width: 1.5 * so.u; height: 1.5 * so.u
+                        y: (so.rowH - 14 * so.k) / 2
+                        width: 14 * so.k; height: 14 * so.k
                         name: so.collapsed[row.modelData.idx] ? "chev_right" : "chev_down"
-                        fg: "#b0b0b0"
+                        fg: "#bdbdbd"
                     }
-                    // icone do tipo (laranja)
-                    Glyph {
-                        x: row.ind + 1.9 * so.u
-                        y: (so.rowH - 2.0 * so.u) / 2
-                        width: 2.0 * so.u; height: 2.0 * so.u
-                        name: row.info ? (row.info.type === 1 ? "o_cam" : row.info.type === 2 ? "o_light" : row.info.type === 3 ? "o_bone" : "o_mesh") : ""
-                        fg: "#e8923a"
+                    Glyph {   // icone do tipo
+                        x: row.ind + 18 * so.k
+                        y: (so.rowH - 20 * so.k) / 2
+                        width: 20 * so.k; height: 20 * so.k
+                        name: row.info ? (row.info.type === 1 ? "o_cam" : row.info.type === 2 ? "o_light" : row.info.type === 3 ? "o_bone" : "cube") : ""
+                        fg: row.info && row.info.type === 0 ? "#cfcfcf" : "#e6e6e6"
                     }
                     Text {
-                        x: row.ind + 4.6 * so.u
-                        width: Math.max(0, 20.5 * so.u - x)
+                        x: row.ind + 44 * so.k
+                        width: Math.max(0, parent.width - x - 6 * so.k)
                         anchors.verticalCenter: parent.verticalCenter
                         elide: Text.ElideRight
                         text: row.info ? row.info.name : ""
-                        color: row.selected ? "#f5a524" : "#d2d2d2"
-                        font.pixelSize: 1.85 * so.u
-                        opacity: row.info && row.info.hide ? 0.45 : 1
-                    }
-                    // icone dos dados (verde)
-                    Glyph {
-                        x: 20.6 * so.u
-                        y: (so.rowH - 1.8 * so.u) / 2
-                        width: 1.8 * so.u; height: 1.8 * so.u
-                        name: row.info ? (row.info.type === 1 ? "d_cam" : row.info.type === 2 ? "d_light" : "d_mesh") : ""
-                        fg: "#26c08a"
-                        visible: !!row.info && row.info.type !== 3
-                    }
-                    Glyph {
-                        x: 25.0 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u
-                        name: row.info && row.info.hide ? "eye_off" : "eye"
-                        fg: row.info && row.info.hide ? "#7a7a7a" : "#e4e4e4"
-                    }
-                    Glyph {
-                        x: 27.6 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u
-                        name: row.info && row.info.nor ? "render_off" : "render"
-                        fg: row.info && row.info.nor ? "#7a7a7a" : "#e4e4e4"
+                        color: row.selected ? "#ffffff" : "#d4d4d4"
+                        font.pixelSize: 16 * so.k
                     }
 
                     // toque: selecionar; segurar: arrastar para parentear
                     MouseArea {
                         id: rowMa
-                        x: 0; y: 0
-                        width: 24.2 * so.u
+                        x: row.ind + 16 * so.k
+                        y: 0
+                        width: parent.width - x
                         height: parent.height
                         containmentMask: HitMask { target: rowMa; view: so.view }
                         preventStealing: so.dragging && so.dragIdx === row.modelData.idx
@@ -269,44 +309,155 @@ Item {
                         onReleased: finish()
                         onCanceled: finish()
                     }
-                    MouseArea {   // seta de expandir
+                    MouseArea {   // seta de expandir (area maior)
                         id: arrMa
-                        x: row.ind - 0.8 * so.u
-                        width: 3.4 * so.u
+                        x: row.ind - 6 * so.k
+                        width: 34 * so.k
                         height: parent.height
-                        enabled: row.modelData.hasKids
+                        enabled: row.modelData.hasKids && so.query.length === 0
                         containmentMask: HitMask { target: arrMa; view: so.view }
                         onClicked: so.toggleCollapse(row.modelData.idx)
                     }
-                    MouseArea {   // olho
-                        id: eyeMa
-                        x: 24.2 * so.u
-                        width: 2.8 * so.u
-                        height: parent.height
-                        containmentMask: HitMask { target: eyeMa; view: so.view }
-                        onClicked: so.view.command(25, row.modelData.idx)
-                    }
-                    MouseArea {   // render
-                        id: renMa
-                        x: 27.0 * so.u
-                        width: 3.0 * so.u
-                        height: parent.height
-                        containmentMask: HitMask { target: renMa; view: so.view }
-                        onClicked: so.view.command(26, row.modelData.idx)
+                }
+            }
+        }
+
+        // barra de rolagem vertical
+        Rectangle {
+            visible: list.contentHeight > list.height + 1
+            x: panel.width - 12 * so.k; y: so.listTop
+            width: 8 * so.k; height: list.height
+            color: "#2a2a2a"
+            Rectangle {
+                width: parent.width
+                height: Math.max(24 * so.k, parent.height * list.height / list.contentHeight)
+                y: (parent.height - height) * (list.contentHeight > list.height ? list.contentY / (list.contentHeight - list.height) : 0)
+                color: "#6c6c6c"
+                radius: 3 * so.k
+            }
+        }
+
+        // ---- borda esquerda: arrastar para redimensionar ----
+        Item {
+            id: grip
+            x: -10 * so.k; y: 0
+            width: 22 * so.k; height: parent.height
+            property real startX: 0
+            property real startW: 0
+            Rectangle { x: 10 * so.k; width: Math.max(1, 2 * so.k); height: parent.height; color: "#242424" }
+            Rectangle {
+                x: 6 * so.k; y: (parent.height - height) / 2
+                width: 10 * so.k; height: 56 * so.k; radius: 4 * so.k
+                color: gMa.pressed ? "#6a6a6a" : "#4a4a4a"
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 5 * so.k
+                    Repeater { model: 3; Rectangle { width: 3 * so.k; height: 3 * so.k; radius: width / 2; color: "#b8b8b8" } }
+                }
+            }
+            MouseArea {
+                id: gMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: gMa; view: so.view }
+                preventStealing: true
+                onPressed: function (m) { grip.startX = mapToItem(so, m.x, m.y).x; grip.startW = so.wFrac }
+                onPositionChanged: function (m) {
+                    if (!pressed) return
+                    var cx = mapToItem(so, m.x, m.y).x
+                    var f = grip.startW + (grip.startX - cx) / so.width
+                    so.wFrac = Math.max(0.11, Math.min(0.45, f))
+                }
+            }
+        }
+
+        // ---- menus suspensos ----
+        MouseArea {   // fecha o menu ao tocar fora
+            anchors.fill: parent
+            enabled: so.menu !== ""
+            visible: so.menu !== ""
+            onClicked: so.menu = ""
+        }
+        Rectangle {
+            id: pop
+            visible: so.menu !== ""
+            x: so.menu === "Display" ? 6 * so.k : (so.menu === "Show" ? 86 * so.k : 140 * so.k)
+            y: 60 * so.k
+            width: Math.min(panel.width - x - 6 * so.k, 230 * so.k)
+            height: popCol.height + 8 * so.k
+            color: "#2d2d2d"
+            border.color: "#555555"
+            border.width: Math.max(1, so.k)
+            Column {
+                id: popCol
+                x: 0; y: 4 * so.k
+                width: parent.width
+                Repeater {
+                    model: so.menu === "Display" ? [
+                        { t: "Expandir tudo", a: "exp" }, { t: "Recolher tudo", a: "col" }
+                    ] : so.menu === "Show" ? [
+                        { t: "Malhas", a: "t0" }, { t: "Câmeras", a: "t1" }, { t: "Luzes", a: "t2" }, { t: "Ossos", a: "t3" }
+                    ] : so.menu === "Help" ? [
+                        { t: "Toque: selecionar", a: "" }, { t: "Segure e arraste: parentear", a: "" },
+                        { t: "Solte abaixo da lista: soltar do pai", a: "" }
+                    ] : []
+                    Item {
+                        required property var modelData
+                        width: popCol.width
+                        height: 30 * so.k
+                        Rectangle { anchors.fill: parent; color: "#555555"; visible: pMa.pressed && parent.modelData.a !== "" }
+                        Text {
+                            x: 10 * so.k
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 20 * so.k
+                            elide: Text.ElideRight
+                            text: (parent.modelData.a.charAt(0) === "t" ? (so.showType[parent.modelData.a.charAt(1)] ? "✓  " : "     ") : "") + parent.modelData.t
+                            color: parent.modelData.a === "" ? "#a8a8a8" : "#e6e6e6"
+                            font.pixelSize: 15 * so.k
+                        }
+                        MouseArea {
+                            id: pMa
+                            anchors.fill: parent
+                            enabled: parent.modelData.a !== ""
+                            onClicked: {
+                                var a = parent.modelData.a
+                                if (a === "exp") so.expandAll()
+                                else if (a === "col") so.collapseAll()
+                                else if (a.charAt(0) === "t") so.toggleShow(parseInt(a.charAt(1)))
+                                if (a === "exp" || a === "col") so.menu = ""
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    // etiqueta que segue o dedo durante o arrastar
+    // ---- aba para reabrir quando recolhido ----
+    Item {
+        visible: so.openFrac < 0.999
+        x: so.width - 26 * so.k * (1 - so.openFrac) - so.insetPx
+        y: so.topY + 150 * so.k
+        width: 26 * so.k; height: 96 * so.k
+        opacity: 1 - so.openFrac
+        Rectangle { anchors.fill: parent; color: tabMa.pressed ? "#555555" : "#3a3a3a"; border.color: "#222222"; border.width: Math.max(1, so.k) }
+        Glyph { anchors.centerIn: parent; width: 16 * so.k; height: 16 * so.k; name: "chev_left"; fg: "#e6e6e6" }
+        MouseArea {
+            id: tabMa
+            anchors.fill: parent
+            enabled: !so.open
+            containmentMask: HitMask { target: tabMa; view: so.view }
+            onClicked: so.open = true
+        }
+    }
+
+    // ---- etiqueta que segue o dedo no arrastar ----
     Rectangle {
         visible: so.dragging && so.rows()[so.dragIdx] !== undefined
-        x: so.panelX + so.dragX - width / 2
-        y: so.panelY + so.dragY - height - 1.5 * so.u
-        width: dragTxt.implicitWidth + 3 * so.u
-        height: 3.0 * so.u
-        radius: 0.6 * so.u
+        x: panel.x + so.dragX - width / 2
+        y: panel.y + so.dragY - height - 16 * so.k
+        width: dragTxt.implicitWidth + 30 * so.k
+        height: 30 * so.k
+        radius: 6 * so.k
         color: so.dropIdx === -2 ? "#5a3a3a" : "#2f5f94"
         opacity: 0.95
         Text {
@@ -314,7 +465,7 @@ Item {
             anchors.centerIn: parent
             text: so.dragging && so.rows()[so.dragIdx] ? so.rows()[so.dragIdx].name : ""
             color: "white"
-            font.pixelSize: 1.8 * so.u
+            font.pixelSize: 16 * so.k
         }
     }
 }

@@ -72,7 +72,7 @@ struct Key{float t;T x;};
 struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;bool hide=false,nor=false;};
 std::vector<Obj> objs;
 int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
-bool gAutoKey=false;
+bool gAutoKey=false;float gRI=0;   // gRI: fracao da largura tomada pelo Outliner (QML)
 bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
 void syncRange(){DUR=gFE/24.f;if(gVE>gFE)gVE=gFE;if(gVS<gFS)gVS=gFS;if(gVE-gVS<5)gVE=std::min(gFE,gVS+5);}
 float yaw=.9f,pitch=.5f,cd=16;V tgt{0,.5f,0};float FOV=1.047f;
@@ -1716,9 +1716,9 @@ void frameUI(){
    pill(px+1.2f*u,y1+12*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
   gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
  // outliner + transform (direita)
- if(!gFileMenu){float pw=30*u,rx=W-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
+ if(!gFileMenu){float pw=30*u,rx=W*(1.f-gRI)-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
  int n=(int)objs.size(),rows=std::min(n,3),st=(n>3&&sel>=0)?std::clamp(sel-2,0,n-3):0;
- float oh=16.3f*u; // o painel Scene agora e QML (SceneOutliner.qml); aqui so reserva o espaco
+ float oh=0.f; // a hierarquia agora e o Outliner em QML (SceneOutliner.qml)
 
  if(sel>=0){T&t=objs[sel].cur;float ty=ry+oh+1.5f*u;panel(rx,ty,pw,4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u,1*u);
 
@@ -1736,8 +1736,8 @@ void frameUI(){
    else text(lo_.shape==0?"Sol (direcional)":"Luz de ponto",rx+1.2f*u,ty+4*u+4*rh+rh/2-2.5f*tpx,tpx,.7f,.7f,.74f);
    {float ssz=rh*.7f,sx0=rx+1.2f*u,sy0=ty+4*u+5*rh;for(int k=0;k<6;k++){V cc=LCOL[k];float sxk=sx0+k*(ssz+.9f*u);rect(sxk,sy0+(rh-ssz)/2,ssz,ssz,cc.x,cc.y,cc.z,1,ssz/2);gBtn.push_back({{sxk,sy0,ssz+.9f*u,rh},23+k});}}}
   else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);}}
- if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[3]={9,11,12};
-  for(int k=0;k<3;k++){int id=AI[k];bool on=(id==11&&parentMode);rect(gx,ty2,bs2,bs2,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs2/2);icon2(id,gx+bs2/2,ty2+bs2/2,bs2*.27f,on);gBtn.push_back({{gx,ty2,bs2,bs2},id});gx+=bs2+.8f*u;}}}
+ if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[1]={9};
+  for(int k=0;k<1;k++){int id=AI[k];bool on=(id==11&&parentMode);rect(gx,ty2,bs2,bs2,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs2/2);icon2(id,gx+bs2/2,ty2+bs2/2,bs2*.27f,on);gBtn.push_back({{gx,ty2,bs2,bs2},id});gx+=bs2+.8f*u;}}}
  // timeline estilo Maya/Houdini (compacta)
  float TH=17.5f*u,tT=100*u-3.6f*u-TH,tw_=W-2*ML_;if(gTlOpen)panel(ML_,tT,tw_,TH,1*u);
  if(gTlOpen){float x0=ML_+.9f*u,wd=tw_-1.8f*u;pill(x0+wd-15*u,tT+.8f*u,14.5f*u,6.2f*u,62,"Recolher",false,.27f,.27f,.29f);
@@ -1787,7 +1787,6 @@ else if(!gSculpt&&!gTlQml){ // faixa fina: play + linha do tempo
  {float cf=tm*24;if(cf>=gVS-.01f&&cf<=gVE+.01f){float pxh=tx(tm);rect(pxh-.07f*u,ty0+2.2f*u,.14f*u,th-2.2f*u,1,1,1);dia(pxh,ty0+2.4f*u,1.5f*u,.95f,.95f,.95f);}}
  pill(W-ML_-13.5f*u,y0+(sh-6.2f*u)/2,13.5f*u,6.2f*u,62,"Timeline",false,.27f,.27f,.29f);}
 else{gTrack={0,0,0,0};}
-{float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-(gTlQml?20.5f:9.f)*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
  if(gImportOpen){float pw2=82*u,rh2=5.8f*u,tp2=.46f*u;int n=(int)gFiles.size();float lh=6*rh2,ph2=6.5f*u+lh+1.5f*u,px2=(W-pw2)/2,py2=(H-ph2)/2;
              float tot=n*rh2,maxs=std::max(0.f,tot-lh);gScrollPx=std::clamp(gScrollPx,0.f,maxs);gRowH=rh2;gListR={px2+1*u,py2+6.5f*u,pw2-2*u,lh};
              panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
@@ -1946,10 +1945,16 @@ void pressInner(int i){
  else if(i>=20&&i<=23){if(i==20)tm=0;else if(i==21)tm=std::max(0.f,tm-1/24.f);else if(i==22)tm=std::min(DUR,tm+1/24.f);else tm=DUR;applyAnim();}}
 void press(int i){pressInner(i);if(i!=91&&i!=92)undoCommit();}
 void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
+float camPickDist(int i,float x,float y){V e,f,r,u;if(!camBasis(i,e,f,r,u))return 1e9f;float d=std::max({objs[i].cur.s.x,objs[i].cur.s.y,objs[i].cur.s.z})*2.f;
+ float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/std::max(H,1);float hh=d*tanf(objs[i].fov/2),hw=hh*ra;V c=e+f*d;
+ V P[4]={c+r*hw+u*hh,c-r*hw+u*hh,c-r*hw-u*hh,c+r*hw-u*hh};
+ auto sd=[&](V a,V b){float ax,ay,bx,by;if(!prj(a,ax,ay)||!prj(b,bx,by))return 1e9f;float vx=bx-ax,vy=by-ay,t=std::clamp(((x-ax)*vx+(y-ay)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);return hypotf(x-ax-vx*t,y-ay-vy*t);};
+ float m=1e9f;for(int k=0;k<4;k++){m=std::min(m,sd(e,P[k]));m=std::min(m,sd(P[k],P[(k+1)%4]));}
+ V bc=c+u*(hh*1.65f);m=std::min(m,sd(bc-r*hw,bc+r*hw));return m;}
 void pick(float x,float y){
- {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind||objs[i].hide)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
+ {int cb=-1;float cdist=H*.045f;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind||objs[i].hide)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(objs[i].kind==3)dd=std::min(dd,camPickDist(i,x,y));if(dd<cdist){cdist=dd;cb=i;}}
   if(cb>=0){if(parentMode)finishParent(cb);else if(objs[cb].kind==3&&sel==cb)camViewToggle();else sel=cb;return;}}
- if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5||objs[i].hide)continue;M w=worldM(i);
+ if(gBones){int bb=-1;float bd=H*.04f;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5||objs[i].hide)continue;M w=worldM(i);
    V hd{w.m[12],w.m[13],w.m[14]},tl=hd+V{w.m[4],w.m[5],w.m[6]}*objs[i].len;float hx,hy,qx,qy;if(!prj(hd,hx,hy)||!prj(tl,qx,qy))continue;
    float vx=qx-hx,vy=qy-hy,tt=std::clamp(((x-hx)*vx+(y-hy)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);float dd=hypotf(x-hx-vx*tt,y-hy-vy*tt);if(dd<bd){bd=dd;bb=i;}}
   if(bb>=0){if(parentMode)finishParent(bb);else sel=bb;return;}}
@@ -2014,7 +2019,7 @@ int32_t onInput(ShimEvt*e){
    float mx=(x+e->x[1])/2,my=(y+e->y[1])/2;if(pinch>0&&d>1){cd=std::clamp(cd*pinch/d,.04f,40.f);panCam(mx-lmx,my-lmy);}pinch=d;lmx=mx;lmy=my;moved=true;}
   else if(mode==1||mode==4||mode==5){
    if(rl){rl=false;lx=x;ly=y;}
-   else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>20)moved=true;
+   else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>std::max(20.f,H*.03f))moved=true;
     if(mode==5)gzMove(x,y);else if(moved){orbit(dx,dy);}}}
  }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
   if(mode==40)sculptEnd();
@@ -2186,6 +2191,7 @@ void api_cmd(int c, float a, float b) {
         break; }
     case 25: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].hide = !objs[i].hide; if (sel == i && objs[i].hide) sel = -1; undoCommit(); } break; }
     case 26: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].nor = !objs[i].nor; undoCommit(); } break; }
+    case 27: gRI = std::clamp(a, 0.f, .6f); break;
     case 22: gAutoKey = !gAutoKey; toast(gAutoKey ? "Auto Key ligado" : "Auto Key desligado"); break;
     case 21: gCapReq = true; gCapW = std::clamp((int)roundf(a), 16, 8192); gCapH = std::clamp((int)roundf(b), 16, 8192); break;
     }

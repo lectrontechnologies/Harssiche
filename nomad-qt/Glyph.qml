@@ -119,6 +119,14 @@ Canvas {
         } else if (n === "pause") {
             bar(ctx, s * 0.22, s * 0.16, s * 0.2, s * 0.68)
             bar(ctx, s * 0.58, s * 0.16, s * 0.2, s * 0.68)
+        } else if (n === "chev_left") {
+            ctx.lineWidth = s * 0.14
+            ctx.beginPath(); ctx.moveTo(s * 0.64, s * 0.22); ctx.lineTo(s * 0.36, s * 0.5); ctx.lineTo(s * 0.64, s * 0.78); ctx.stroke()
+        } else if (n === "dashbox") {
+            ctx.lineWidth = s * 0.08
+            ctx.setLineDash([s * 0.14, s * 0.12])
+            ctx.strokeRect(s * 0.16, s * 0.16, s * 0.68, s * 0.68)
+            ctx.setLineDash([])
         } else if (n === "chev_down" || n === "chev_right") {
             ctx.lineWidth = s * 0.14
             ctx.beginPath()

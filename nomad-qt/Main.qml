@@ -19,11 +19,13 @@ Window {
     Timeline {
         anchors.fill: parent
         view: engineView
+        rightInset: outliner.insetPx
         visible: engineView.timelineVisible
     }
 
     // Painel Scene (outliner com parentesco)
     SceneOutliner {
+        id: outliner
         anchors.fill: parent
         view: engineView
         visible: engineView.timelineVisible
@@ -41,5 +43,12 @@ Window {
         view: engineView
     }
 
-    Component.onCompleted: engineView.forceActiveFocus()
+    // o motor precisa saber quanto espaco o Outliner toma a direita (para o painel de transformacao)
+    function syncInset() { engineView.command(27, win.width > 0 ? outliner.insetPx / win.width : 0) }
+    Connections {
+        target: outliner
+        function onInsetPxChanged() { win.syncInset() }
+    }
+
+    Component.onCompleted: { engineView.forceActiveFocus(); syncInset() }
 }
