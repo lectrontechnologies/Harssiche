@@ -3564,7 +3564,7 @@ jobs:
           // ---------- Monte Carlo (preview) e path tracing (render final) ----------
           struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
           std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
-          bool gMcOK=false,gMcPrev=false,gMcFinal=false,gMcGround=true,gMcHaveCam=false;
+          bool gMcOK=false,gMcPrev=false,gMcFinal=false,gMcGround=false,gMcHaveCam=false;
           int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcRows=24,gMcW=0,gMcH=0,gMcCur=0,gMcFrame=0;
           bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
           GLuint gMcTex[2]={0,0},gMcProg=0,gMcTm=0,gMcNB=0,gMcTB=0,gMcOutF=0,gMcOutT=0;
@@ -4210,7 +4210,7 @@ jobs:
              pill(mx+1*u,my+.75f*u+3.4f*u+i*(ph+.5f*u),mw-2*u,ph,rid[i],rl[i],on,(i==5||i==6)?.2f:.33f,(i==5||i==6)?.38f:.33f,(i==5||i==6)?.55f:.35f);}
             gBtn.push_back({{mx,my,mw,mh},299});}
            if(gRenderOpen){ // painel Render (viewport + path tracing), recolhivel
-            float px=tbX+tbW+1*u,py=hH+10*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;int nr=gMcOK?14:4;
+            float px=tbX+tbW+1*u,py=hH+10*u,pw2=27*u,rh=4.4f*u,tp2=.38f*u,bw_=pw2-2.4f*u,bh_=rh-.6f*u,y1=py+1.0f*u;int nr=gMcOK?13:4;
             panel(px,py,pw2,rh*nr+1.6f*u,1*u);
             sld(2,px,pw2,y1,rh,tp2,"AO",gAOs);
             pill(px+1.2f*u,y1+rh+.3f*u,bw_,bh_,16,(gSSAO&&gPostOK)?"SSAO: on":"SSAO: off",gSSAO,.3f,.3f,.33f);
@@ -4220,14 +4220,13 @@ jobs:
              pill(px+1.2f*u,y2,bw_,bh_,30,gMcPrev?"Preview MC: on":"Preview MC: off",gMcPrev,.3f,.3f,.33f);
              pill(px+1.2f*u,y2+rh,bw_,bh_,31,gMcFinal?(done?"Fechar render":"Parar render"):"Render final",gMcFinal,.5f,.34f,.12f);
              pill(px+1.2f*u,y2+2*rh,bw_,bh_,33,fm("Amostras: %d",gMcSpp).c_str(),false,.3f,.3f,.33f);
-             pill(px+1.2f*u,y2+3*rh,bw_,bh_,34,gMcGround?"Chao: on":"Chao: off",gMcGround,.3f,.3f,.33f);
-             pill(px+1.2f*u,y2+4*rh,bw_,bh_,35,gMcDn?"Denoise: on":"Denoise: off",gMcDn,.3f,.3f,.33f);
-             pill(px+1.2f*u,y2+5*rh,bw_,bh_,32,"Salvar PNG",false,.2f,.38f,.55f);
-            pill(px+1.2f*u,y2+6*rh,bw_,bh_,37,fm("Video: %s",gVidQN[gVidQ]).c_str(),false,.3f,.3f,.33f);
-            pill(px+1.2f*u,y2+7*rh,bw_,bh_,36,gVid.on?fm("Parar video %d/%d",gVid.done,gVid.total).c_str():fm("Render video %d-%d",std::min(gFS,gFE),std::max(gFS,gFE)).c_str(),gVid.on,.5f,.34f,.12f);
-             pill(px+1.2f*u,y2+8*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
-             pill(px+1.2f*u,y2+9*rh,bw_,bh_,39,gMcCW>0?fm("Tamanho: %dx%d",gMcCW,gMcCH).c_str():"Tamanho: tela",gMcCW>0,.3f,.3f,.33f);
-             char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+10*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
+             pill(px+1.2f*u,y2+3*rh,bw_,bh_,35,gMcDn?"Denoise: on":"Denoise: off",gMcDn,.3f,.3f,.33f);
+             pill(px+1.2f*u,y2+4*rh,bw_,bh_,32,"Salvar PNG",false,.2f,.38f,.55f);
+            pill(px+1.2f*u,y2+5*rh,bw_,bh_,37,fm("Video: %s",gVidQN[gVidQ]).c_str(),false,.3f,.3f,.33f);
+            pill(px+1.2f*u,y2+6*rh,bw_,bh_,36,gVid.on?fm("Parar video %d/%d",gVid.done,gVid.total).c_str():fm("Render video %d-%d",std::min(gFS,gFE),std::max(gFS,gFE)).c_str(),gVid.on,.5f,.34f,.12f);
+             pill(px+1.2f*u,y2+7*rh,bw_,bh_,38,gMcLeak?"Anti-fresta: on":"Anti-fresta: off",gMcLeak,.3f,.3f,.33f);
+             pill(px+1.2f*u,y2+8*rh,bw_,bh_,39,gMcCW>0?fm("Tamanho: %dx%d",gMcCW,gMcCH).c_str():"Tamanho: tela",gMcCW>0,.3f,.3f,.33f);
+             char sb[64];if(gVid.on)snprintf(sb,64,"Frame %d  %d/%d  %d/%d spp",gVid.f,gVid.done,gVid.total,gMcSamples,gMcSpp);else snprintf(sb,64,"%d / %d spp  %dx%d",gMcSamples,gMcFinal?gMcSpp:128,gMcW,gMcH);text(sb,px+1.2f*u,y2+9*rh+rh/2-2.5f*tp2,tp2*.9f,.7f,.7f,.75f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            if(gSculpt){ // barra inferior de escultura
             float bh0=14*u,by0=H-bh0;rect(0,by0,(float)W,bh0,0,0,0,.55f);gBlock.push_back({0,by0,(float)W,bh0});
