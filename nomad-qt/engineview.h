@@ -43,6 +43,10 @@ class EngineView : public QQuickItem {
     Q_PROPERTY(bool rendering READ rendering NOTIFY timelineChanged)
     Q_PROPERTY(qreal renderProgress READ renderProgress NOTIFY timelineChanged)
     Q_PROPERTY(QString previewUrl READ previewUrl NOTIFY timelineChanged)
+    Q_PROPERTY(QString backend READ backend CONSTANT)
+    Q_PROPERTY(QString savedBackend READ savedBackend NOTIFY backendSavedChanged)
+    Q_PROPERTY(QString vkInfo READ vkInfo NOTIFY vkInfoChanged)
+    Q_PROPERTY(bool vkFailed READ vkFailed CONSTANT)
 
 public:
     explicit EngineView(QQuickItem *parent = nullptr);
@@ -72,6 +76,12 @@ public:
     int keyLast() const { return m_tl.keyLast; }
     bool rendering() const { return m_tl.rendering; }
     qreal renderProgress() const { return m_tl.progress; }
+    QString backend() const { return m_vulkan ? QStringLiteral("vulkan") : QStringLiteral("opengl"); }
+    QString savedBackend() const;
+    QString vkInfo() const { return m_vkInfo; }
+    bool vkFailed() const { return m_vkFailed; }
+    // grava a escolha do backend para a proxima abertura ("opengl" ou "vulkan")
+    Q_INVOKABLE void setBackend(const QString &b);
     QString previewUrl() const {
         if (m_tl.previewPath.empty()) return QString();
         return QStringLiteral("file://") + QString::fromStdString(m_tl.previewPath) + QStringLiteral("?") + QString::number(m_tl.previewSeq);
@@ -90,6 +100,8 @@ signals:
     void keysChanged();
     void sceneChanged();
     void renderRequested();
+    void backendSavedChanged();
+    void vkInfoChanged();
 
 protected:
     void touchEvent(QTouchEvent *ev) override;
@@ -104,12 +116,17 @@ private:
     void renderEngine();    // thread de render, antes do Qt Quick desenhar (cena 3D)
     void renderEngineUi();  // thread de render, depois do Qt Quick (interface do motor)
     void glLost();
+    void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan (por enquanto so diagnostico)
     void updateSize();
     void applyTimeline(const EngTimeline &t);
     void push(const EngEvent &e);
     EngEvent makeTouch(int action) const;
 
     std::string m_dir;
+    bool m_vulkan = false;
+    bool m_vkFailed = false;
+    bool m_vkDone = false;
+    QString m_vkInfo;
     EngTimeline m_tl;      // thread da interface
     EngTimeline m_lastTl;  // thread de render
     QVariantList m_keys;

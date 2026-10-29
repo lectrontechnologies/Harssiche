@@ -3,8 +3,7 @@ import Nomad
 
 Window {
     id: win
-    visible: true
-    visibility: Window.FullScreen
+    // a janela e mostrada pelo main.cpp (depois de escolher OpenGL ou Vulkan)
     title: "Nomad Animator"
     color: "black"
 
@@ -48,6 +47,40 @@ Window {
     Connections {
         target: outliner
         function onInsetPxChanged() { win.syncInset() }
+    }
+
+
+    // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan)
+    Rectangle {
+        id: backendChip
+        anchors.horizontalCenter: parent.horizontalCenter
+        y: 4
+        width: chipRow.implicitWidth + 24
+        height: 30
+        radius: 6
+        color: "#d0101010"
+        border.color: "#505050"
+        Row {
+  id: chipRow
+  anchors.centerIn: parent
+  spacing: 10
+  Text {
+      color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
+      font.pixelSize: 13
+      text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
+          : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo : "OpenGL ES"
+  }
+  Text {
+      color: "#7fd0ff"
+      font.pixelSize: 13
+      text: engineView.savedBackend !== engineView.backend ? "reabra o app"
+          : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
+  }
+        }
+        MouseArea {
+  anchors.fill: parent
+  onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
+        }
     }
 
     Component.onCompleted: { engineView.forceActiveFocus(); syncInset() }

@@ -1,6 +1,8 @@
 #include "engineview.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QInputMethod>
 #include <QInputMethodEvent>
@@ -9,6 +11,11 @@
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QTouchEvent>
+#include <QtGui/qtguiglobal.h>
+#if QT_CONFIG(vulkan)
+#include <QVulkanFunctions>
+#include <QVulkanInstance>
+#endif
 
 #ifdef Q_OS_ANDROID
 #include <QJniEnvironment>
@@ -26,10 +33,75 @@ static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
            a.keys == b.keys && a.rows == b.rows && a.selObj == b.selObj;
 }
 
+static QString markerFile(const char *name) {
+    const QString d = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(d);
+    return d + QLatin1Char('/') + QLatin1String(name);
+}
+
 EngineView *EngineView::instance() { return s_instance.data(); }
+
+QString EngineView::savedBackend() const {
+    return QFile::exists(markerFile("backend_vulkan")) ? QStringLiteral("vulkan") : QStringLiteral("opengl");
+}
+
+void EngineView::setBackend(const QString &b) {
+    QFile::remove(markerFile("vk_failed"));
+    QFile::remove(markerFile("vk_trying"));
+    if (b == QLatin1String("vulkan")) {
+        QFile f(markerFile("backend_vulkan"));
+        f.open(QIODevice::WriteOnly);
+    } else {
+        QFile::remove(markerFile("backend_vulkan"));
+    }
+    emit backendSavedChanged();
+}
+
+// Backend Vulkan (migracao em andamento): por enquanto so le as capacidades do aparelho uma vez e
+// mostra no chip de diagnostico. A cena 3D e a interface do motor ainda sao OpenGL e ficam desligadas.
+void EngineView::vulkanFrame(QQuickWindow *w) {
+    if (m_vkDone) return;
+    m_vkDone = true;
+    QString info = QStringLiteral("ativo");
+#if QT_CONFIG(vulkan)
+    QSGRendererInterface *ri = w->rendererInterface();
+    QVulkanInstance *inst = w->vulkanInstance();
+    void *pd = ri ? ri->getResource(w, QSGRendererInterface::PhysicalDeviceResource) : nullptr;
+    if (inst && pd) {
+        const VkPhysicalDevice dev = *static_cast<VkPhysicalDevice *>(pd);
+        QVulkanFunctions *f = inst->functions();
+        VkPhysicalDeviceProperties p;
+        f->vkGetPhysicalDeviceProperties(dev, &p);
+        uint32_t n = 0;
+        f->vkEnumerateDeviceExtensionProperties(dev, nullptr, &n, nullptr);
+        info = QStringLiteral("%1.%2.%3 | %4 | compute %5 inv, %6 KB shared | %7 ext")
+                   .arg(p.apiVersion >> 22)
+                   .arg((p.apiVersion >> 12) & 0x3ff)
+                   .arg(p.apiVersion & 0xfff)
+                   .arg(QString::fromUtf8(p.deviceName))
+                   .arg(p.limits.maxComputeWorkGroupInvocations)
+                   .arg(p.limits.maxComputeSharedMemorySize / 1024)
+                   .arg(n);
+    }
+#else
+    Q_UNUSED(w)
+    info = QStringLiteral("indisponivel neste Qt");
+#endif
+    // primeiro quadro em Vulkan chegou: a abertura nao travou
+    QFile::remove(markerFile("vk_trying"));
+    QMetaObject::invokeMethod(
+        this,
+        [this, info] {
+            m_vkInfo = info;
+            emit vkInfoChanged();
+        },
+        Qt::QueuedConnection);
+}
 
 EngineView::EngineView(QQuickItem *parent) : QQuickItem(parent) {
     s_instance = this;
+    m_vulkan = (QQuickWindow::graphicsApi() == QSGRendererInterface::Vulkan);
+    m_vkFailed = QFile::exists(markerFile("vk_failed"));
     setAcceptTouchEvents(true);
     setAcceptedMouseButtons(Qt::NoButton);
     setFlag(QQuickItem::ItemAcceptsInputMethod, true);
@@ -84,6 +156,10 @@ void EngineView::updateSize() {
 void EngineView::renderEngine() {
     QQuickWindow *w = window();
     if (!w) return;
+    if (m_vulkan) {
+        vulkanFrame(w);
+        return;
+    }
     const int pw = m_pw.load(), ph = m_ph.load();
     if (pw < 2 || ph < 2) return;
 
@@ -115,7 +191,7 @@ void EngineView::renderEngine() {
 // por isso aparece por cima da timeline e das barras em QML.
 void EngineView::renderEngineUi() {
     QQuickWindow *w = window();
-    if (!w || !eng_ready()) return;
+    if (m_vulkan || !w || !eng_ready()) return;
     w->beginExternalCommands();
     eng_frame_ui();
     w->endExternalCommands();
@@ -174,12 +250,15 @@ void EngineView::command(int cmd, qreal a, qreal b) {
     if (window()) window()->update();
 }
 
-void EngineView::glLost() { eng_gl_lost(); }
+void EngineView::glLost() {
+    if (!m_vulkan) eng_gl_lost();
+}
 
 // ---------------------------------------------------------------------------
 // Entrada (thread da interface) -> fila -> thread de render
 // ---------------------------------------------------------------------------
 void EngineView::push(const EngEvent &e) {
+    if (m_vulkan) return;  // sem motor ainda no Vulkan
     QMutexLocker l(&m_mutex);
     if (m_queue.size() < 4096) m_queue.push_back(e);
 }
