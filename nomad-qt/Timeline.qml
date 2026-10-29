@@ -9,16 +9,16 @@ Item {
 
     readonly property real k: height > 0 ? height / 1080 : 1
     property real rightInset: 0                       // espaco tomado pelo Outliner a direita
-    readonly property real W: width - rightInset
+    readonly property real tw: width - rightInset
 
     // barra inferior e regua (pixels do conceito)
     readonly property real barTop: height - 222 * k          // y = 858
     readonly property real stripX: 108 * k
-    readonly property real stripW: Math.max(40, W - 233 * k)   // ate x = 2275
+    readonly property real stripW: Math.max(40, tw - 233 * k)   // ate x = 2275
     readonly property real stripY: 913 * k
     readonly property real stripH: 105 * k
     readonly property real rulerX: 141 * k                    // x do frame inicial da janela
-    readonly property real rulerW: Math.max(10, W - 270 * k)   // ate x = 2271
+    readonly property real rulerW: Math.max(10, tw - 270 * k)   // ate x = 2271
     readonly property real span: Math.max(1, view.viewEnd - view.viewStart)
     readonly property real ppf: rulerW / span
 
@@ -318,7 +318,7 @@ Item {
     // ---- painel de keys: botao de key, Auto Key, Set Key ----
     Rectangle {
         id: keyPanel
-        x: tl.W - 365 * tl.k
+        x: tl.tw - 365 * tl.k
         y: 747 * tl.k
         width: 242 * tl.k
         height: 111 * tl.k
@@ -331,7 +331,7 @@ Item {
     }
     // botao de key: toque insere, segurar apaga a key do frame
     Rectangle {
-        x: tl.W - (2400 - 2045) * tl.k
+        x: tl.tw - (2400 - 2045) * tl.k
         y: 757 * tl.k
         width: 104 * tl.k
         height: 92 * tl.k
@@ -348,7 +348,7 @@ Item {
     }
     // Auto Key (liga / desliga)
     Rectangle {
-        x: tl.W - (2400 - 2158) * tl.k
+        x: tl.tw - (2400 - 2158) * tl.k
         y: 755 * tl.k
         width: 115 * tl.k
         height: 50 * tl.k
@@ -364,7 +364,7 @@ Item {
     }
     // Set Key
     Rectangle {
-        x: tl.W - (2400 - 2158) * tl.k
+        x: tl.tw - (2400 - 2158) * tl.k
         y: 808 * tl.k
         width: 115 * tl.k
         height: 41 * tl.k
