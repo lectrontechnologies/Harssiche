@@ -141,11 +141,13 @@ jobs:
               Timeline {
                   anchors.fill: parent
                   view: engineView
+                  rightInset: outliner.insetPx
                   visible: engineView.timelineVisible
               }
 
               // Painel Scene (outliner com parentesco)
               SceneOutliner {
+                  id: outliner
                   anchors.fill: parent
                   view: engineView
                   visible: engineView.timelineVisible
@@ -163,7 +165,14 @@ jobs:
                   view: engineView
               }
 
-              Component.onCompleted: engineView.forceActiveFocus()
+              // o motor precisa saber quanto espaco o Outliner toma a direita (para o painel de transformacao)
+              function syncInset() { engineView.command(27, win.width > 0 ? outliner.insetPx / win.width : 0) }
+              Connections {
+                  target: outliner
+                  function onInsetPxChanged() { win.syncInset() }
+              }
+
+              Component.onCompleted: { engineView.forceActiveFocus(); syncInset() }
           }
           NOMADEOF
           cat > nomad-qt/Timeline.qml <<'NOMADEOF'
@@ -177,15 +186,17 @@ jobs:
               required property var view   // EngineView
 
               readonly property real k: height > 0 ? height / 1080 : 1
+              property real rightInset: 0                       // espaco tomado pelo Outliner a direita
+              readonly property real W: width - rightInset
 
               // barra inferior e regua (pixels do conceito)
               readonly property real barTop: height - 222 * k          // y = 858
               readonly property real stripX: 108 * k
-              readonly property real stripW: Math.max(40, width - 233 * k)   // ate x = 2275
+              readonly property real stripW: Math.max(40, W - 233 * k)   // ate x = 2275
               readonly property real stripY: 913 * k
               readonly property real stripH: 105 * k
               readonly property real rulerX: 141 * k                    // x do frame inicial da janela
-              readonly property real rulerW: Math.max(10, width - 270 * k)   // ate x = 2271
+              readonly property real rulerW: Math.max(10, W - 270 * k)   // ate x = 2271
               readonly property real span: Math.max(1, view.viewEnd - view.viewStart)
               readonly property real ppf: rulerW / span
 
@@ -485,7 +496,7 @@ jobs:
               // ---- painel de keys: botao de key, Auto Key, Set Key ----
               Rectangle {
                   id: keyPanel
-                  x: tl.width - 365 * tl.k
+                  x: tl.W - 365 * tl.k
                   y: 747 * tl.k
                   width: 242 * tl.k
                   height: 111 * tl.k
@@ -498,7 +509,7 @@ jobs:
               }
               // botao de key: toque insere, segurar apaga a key do frame
               Rectangle {
-                  x: tl.width - (2400 - 2045) * tl.k
+                  x: tl.W - (2400 - 2045) * tl.k
                   y: 757 * tl.k
                   width: 104 * tl.k
                   height: 92 * tl.k
@@ -515,7 +526,7 @@ jobs:
               }
               // Auto Key (liga / desliga)
               Rectangle {
-                  x: tl.width - (2400 - 2158) * tl.k
+                  x: tl.W - (2400 - 2158) * tl.k
                   y: 755 * tl.k
                   width: 115 * tl.k
                   height: 50 * tl.k
@@ -531,7 +542,7 @@ jobs:
               }
               // Set Key
               Rectangle {
-                  x: tl.width - (2400 - 2158) * tl.k
+                  x: tl.W - (2400 - 2158) * tl.k
                   y: 808 * tl.k
                   width: 115 * tl.k
                   height: 41 * tl.k
@@ -683,6 +694,14 @@ jobs:
                   } else if (n === "pause") {
                       bar(ctx, s * 0.22, s * 0.16, s * 0.2, s * 0.68)
                       bar(ctx, s * 0.58, s * 0.16, s * 0.2, s * 0.68)
+                  } else if (n === "chev_left") {
+                      ctx.lineWidth = s * 0.14
+                      ctx.beginPath(); ctx.moveTo(s * 0.64, s * 0.22); ctx.lineTo(s * 0.36, s * 0.5); ctx.lineTo(s * 0.64, s * 0.78); ctx.stroke()
+                  } else if (n === "dashbox") {
+                      ctx.lineWidth = s * 0.08
+                      ctx.setLineDash([s * 0.14, s * 0.12])
+                      ctx.strokeRect(s * 0.16, s * 0.16, s * 0.68, s * 0.68)
+                      ctx.setLineDash([])
                   } else if (n === "chev_down" || n === "chev_right") {
                       ctx.lineWidth = s * 0.14
                       ctx.beginPath()
@@ -776,31 +795,40 @@ jobs:
           cat > nomad-qt/SceneOutliner.qml <<'NOMADEOF'
           import QtQuick
 
-          // Painel "Scene" (outliner): arvore de objetos com parentesco, olho (visivel) e camera (render).
-          // Segurar uma linha e arrastar sobre outra torna o objeto filho dela; soltar na "Collection"
-          // ou fora das linhas remove o parentesco. A unidade "u" e 1% da altura (a mesma do motor).
+          // Outliner (hierarquia) no estilo do conceito: painel docado a direita, redimensionavel e recolhivel.
+          // Tocar seleciona; segurar uma linha e arrastar sobre outra torna o objeto filho dela;
+          // soltar abaixo das linhas remove o parentesco. Medidas em pixels do conceito (altura 1080) via "k".
           Item {
               id: so
               required property var view   // EngineView
 
-              readonly property real u: height / 100
-              readonly property real panelX: width * 0.96 - 30 * u
-              readonly property real panelY: 11.5 * u
-              readonly property real panelW: 30 * u
-              readonly property real panelH: 16.3 * u
-              readonly property real headH: 3.0 * u
-              readonly property real rowH: 3.2 * u
+              readonly property real k: height > 0 ? height / 1080 : 1
 
+              // ---- dock ----
+              property real wFrac: 0.154                 // largura como fracao da janela (arrastar a borda muda)
+              property bool open: true
+              property real openFrac: open ? 1 : 0
+              Behavior on openFrac { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              readonly property real panelW: width * wFrac
+              readonly property real insetPx: panelW * openFrac     // espaco tomado a direita (timeline e motor se ajustam)
+              readonly property real topY: 108 * k                  // abaixo da barra de desfazer/refazer/menu
+
+              // ---- dados ----
               property var flat: []
               property var collapsed: ({})
-              property bool allCollapsed: false
+              property string query: ""
+              property string menu: ""
+              property var showType: ({ "0": true, "1": true, "2": true, "3": true })
 
-              // arrastar para parentear
+              // ---- arrastar para parentear ----
               property bool dragging: false
               property int dragIdx: -1
-              property int dropIdx: -2          // -2 sem alvo valido, -1 remove o parentesco, >= 0 novo pai
+              property int dropIdx: -2          // -2 invalido, -1 remove o parentesco, >= 0 novo pai
               property real dragX: 0
               property real dragY: 0
+
+              readonly property real rowH: 27.6 * k
+              readonly property real listTop: 96 * k
 
               function rows() { return view.sceneRows }
 
@@ -819,6 +847,7 @@ jobs:
               function rebuild() {
                   var r = rows()
                   var n = r.length
+                  var q = query.toLowerCase()
                   var kids = []
                   var roots = []
                   for (var i = 0; i < n; i++) kids.push([])
@@ -828,30 +857,54 @@ jobs:
                       else roots.push(j)
                   }
                   var out = []
+                  function visible(idx) {
+                      if (!showType[String(r[idx].type)]) return false
+                      if (q.length > 0 && r[idx].name.toLowerCase().indexOf(q) < 0) return false
+                      return true
+                  }
                   function walk(idx, d) {
                       if (d > 48) return
-                      out.push({ idx: idx, depth: d, hasKids: kids[idx].length > 0 })
-                      if (!collapsed[idx]) for (var c = 0; c < kids[idx].length; c++) walk(kids[idx][c], d + 1)
+                      var vis = visible(idx)
+                      if (vis) out.push({ idx: idx, depth: d, hasKids: kids[idx].length > 0 })
+                      if (q.length > 0 || !collapsed[idx])
+                          for (var c = 0; c < kids[idx].length; c++) walk(kids[idx][c], q.length > 0 ? 0 : (vis ? d + 1 : d))
                   }
-                  if (!allCollapsed) for (var q = 0; q < roots.length; q++) walk(roots[q], 0)
+                  for (var t = 0; t < roots.length; t++) walk(roots[t], 0)
                   flat = out
               }
 
               function toggleCollapse(idx) {
                   var c = {}
-                  for (var k in collapsed) c[k] = collapsed[k]
+                  for (var k2 in collapsed) c[k2] = collapsed[k2]
                   c[idx] = !c[idx]
                   collapsed = c
                   rebuild()
               }
+              function expandAll() { collapsed = ({}); rebuild() }
+              function collapseAll() {
+                  var r = rows()
+                  var c = {}
+                  for (var i = 0; i < r.length; i++) {
+                      var p = r[i].parent
+                      if (p >= 0 && p < r.length) c[p] = true
+                  }
+                  collapsed = c
+                  rebuild()
+              }
+              function toggleShow(t) {
+                  var c = {}
+                  for (var k2 in showType) c[k2] = showType[k2]
+                  c[String(t)] = !c[String(t)]
+                  showType = c
+                  rebuild()
+              }
 
-              // linha sob o ponto (x, y) em coordenadas do painel; 0 = Collection, 1.. = flat[i - 1]
+              // linha sob o ponto (x, y) em coordenadas do painel
               function dropAt(px, py) {
-                  if (px < 0 || px > panelW || py < headH || py > panelH + 6 * u) return -2
-                  var rowIdx = Math.floor((py - headH + list.contentY) / rowH)
-                  if (rowIdx <= 0) return -1
-                  if (rowIdx - 1 >= flat.length) return -1
-                  var t = flat[rowIdx - 1].idx
+                  if (px < 0 || px > panel.width || py < listTop) return -2
+                  var rowIdx = Math.floor((py - listTop + list.contentY) / rowH)
+                  if (rowIdx < 0 || rowIdx >= flat.length) return -1
+                  var t = flat[rowIdx].idx
                   if (t === dragIdx || isDesc(dragIdx, t)) return -2
                   return t
               }
@@ -860,79 +913,114 @@ jobs:
                   target: so.view
                   function onSceneChanged() { so.rebuild() }
               }
+              onQueryChanged: rebuild()
               Component.onCompleted: rebuild()
 
               // ---------------- painel ----------------
               Rectangle {
                   id: panel
-                  x: so.panelX
-                  y: so.panelY
+                  x: so.width - so.insetPx
+                  y: so.topY
                   width: so.panelW
-                  height: so.panelH
-                  color: "#262626"
-                  MouseArea {
+                  height: so.height - so.topY
+                  color: "#383838"
+                  visible: so.openFrac > 0.001
+
+                  MouseArea {   // nao deixa o toque passar para o viewport
                       id: bgMa
                       anchors.fill: parent
                       containmentMask: HitMask { target: bgMa; view: so.view }
                   }
 
-                  Text {
-                      x: 1.4 * so.u
-                      y: (so.headH - height) / 2
-                      text: "Scene"
-                      color: "#a8a8a8"
-                      font.pixelSize: 1.7 * so.u
+                  // ---- faixa do topo: aba + recolher ----
+                  Rectangle { x: 0; y: 0; width: parent.width; height: 30 * so.k; color: "#2a2a2a" }
+                  Rectangle {
+                      x: 8 * so.k; y: 4 * so.k
+                      width: tabTxt.implicitWidth + 24 * so.k
+                      height: 26 * so.k
+                      color: "#444444"
+                      Text { id: tabTxt; anchors.centerIn: parent; text: "Outliner"; color: "#e6e6e6"; font.pixelSize: 15 * so.k }
+                  }
+                  Item {   // botao recolher
+                      id: collapseBtn
+                      x: parent.width - 34 * so.k; y: 2 * so.k
+                      width: 30 * so.k; height: 26 * so.k
+                      Rectangle { anchors.fill: parent; radius: 3 * so.k; color: cbMa.pressed ? "#555555" : "#3a3a3a" }
+                      Glyph { anchors.centerIn: parent; width: 16 * so.k; height: 16 * so.k; name: "chev_right"; fg: "#e0e0e0" }
+                      MouseArea {
+                          id: cbMa
+                          anchors.fill: parent
+                          containmentMask: HitMask { target: cbMa; view: so.view }
+                          onClicked: { so.menu = ""; so.open = false }
+                      }
                   }
 
-                  Flickable {
-                      id: list
-                      x: 0
-                      y: so.headH
-                      width: panel.width
-                      height: panel.height - so.headH
-                      clip: true
-                      contentWidth: width
-                      contentHeight: (so.flat.length + 1) * so.rowH
-                      interactive: !so.dragging && contentHeight > height
-                      boundsBehavior: Flickable.StopAtBounds
-
-                      // ---- linha da Collection ----
-                      Rectangle {
-                          id: colRow
-                          x: 0; y: 0
-                          width: list.width
-                          height: so.rowH
-                          color: "#2c2c2c"
-                          Rectangle {
-                              visible: so.dragging && so.dropIdx === -1
-                              anchors.fill: parent
-                              color: "transparent"
-                              border.color: "#4aa3ff"
-                              border.width: Math.max(1, 0.2 * so.u)
-                          }
-                          Glyph { x: 0.9 * so.u; y: (so.rowH - 1.6 * so.u) / 2; width: 1.6 * so.u; height: 1.6 * so.u; name: so.allCollapsed ? "chev_right" : "chev_down"; fg: "#b0b0b0" }
-                          Glyph { x: 3.1 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "collection"; fg: "#d8d8d8" }
-                          Text {
-                              x: 5.8 * so.u
-                              anchors.verticalCenter: parent.verticalCenter
-                              text: "Collection"
-                              color: "#e4e4e4"
-                              font.pixelSize: 1.85 * so.u
-                          }
-                          Glyph { x: 22.0 * so.u; y: (so.rowH - 1.8 * so.u) / 2; width: 1.8 * so.u; height: 1.8 * so.u; name: "check_box"; fg: "#e4e4e4" }
-                          Glyph { x: 25.0 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "eye"; fg: "#e4e4e4" }
-                          Glyph { x: 27.6 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u; name: "render"; fg: "#e4e4e4" }
-                          MouseArea {
-                              id: colMa
-                              x: 0; y: 0
-                              width: 3.0 * so.u
-                              height: parent.height
-                              containmentMask: HitMask { target: colMa; view: so.view }
-                              onClicked: { so.allCollapsed = !so.allCollapsed; so.rebuild() }
+                  // ---- menus: Display / Show / Help ----
+                  Rectangle { x: 0; y: 30 * so.k; width: parent.width; height: 30 * so.k; color: "#464646" }
+                  Row {
+                      x: 6 * so.k; y: 30 * so.k
+                      height: 30 * so.k
+                      Repeater {
+                          model: ["Display", "Show", "Help"]
+                          Item {
+                              required property var modelData
+                              width: mTxt.implicitWidth + 22 * so.k
+                              height: 30 * so.k
+                              Rectangle { anchors.fill: parent; color: "#5a5a5a"; visible: so.menu === parent.modelData || mMa.pressed }
+                              Text { id: mTxt; anchors.centerIn: parent; text: parent.modelData; color: "#e2e2e2"; font.pixelSize: 15 * so.k }
+                              MouseArea {
+                                  id: mMa
+                                  anchors.fill: parent
+                                  containmentMask: HitMask { target: mMa; view: so.view }
+                                  onClicked: so.menu = (so.menu === parent.modelData ? "" : parent.modelData)
+                              }
                           }
                       }
+                  }
 
-                      // ---- linhas dos objetos ----
+                  // ---- busca ----
+                  Rectangle { x: 0; y: 60 * so.k; width: parent.width; height: 34 * so.k; color: "#464646" }
+                  Glyph { x: 8 * so.k; y: 65 * so.k; width: 22 * so.k; height: 22 * so.k; name: "dashbox"; fg: "#8a8a8a" }
+                  Rectangle {
+                      x: 36 * so.k; y: 64 * so.k
+                      width: parent.width - 44 * so.k; height: 26 * so.k
+                      color: "#2c2c2c"
+                      Text {
+                          visible: search.text.length === 0 && !search.activeFocus
+                          x: 6 * so.k; anchors.verticalCenter: parent.verticalCenter
+                          text: "Search..."; color: "#9a9a9a"; font.pixelSize: 15 * so.k
+                      }
+                      TextInput {
+                          id: search
+                          anchors.fill: parent
+                          anchors.leftMargin: 6 * so.k
+                          anchors.rightMargin: 26 * so.k
+                          verticalAlignment: TextInput.AlignVCenter
+                          color: "#f0f0f0"
+                          font.pixelSize: 15 * so.k
+                          clip: true
+                          selectByMouse: true
+                          containmentMask: HitMask { target: search; view: so.view }
+                          onTextChanged: so.query = text
+                          onAccepted: { Qt.inputMethod.hide(); so.view.forceActiveFocus() }
+                      }
+                      Glyph { x: parent.width - 20 * so.k; y: (parent.height - 14 * so.k) / 2; width: 14 * so.k; height: 14 * so.k; name: "chev_down"; fg: "#cfcfcf" }
+                  }
+
+                  // ---- lista ----
+                  Rectangle { x: 6 * so.k; y: so.listTop; width: parent.width - 12 * so.k; height: parent.height - so.listTop - 6 * so.k; color: "#333333" }
+                  Flickable {
+                      id: list
+                      x: 6 * so.k
+                      y: so.listTop
+                      width: panel.width - 12 * so.k
+                      height: panel.height - so.listTop - 6 * so.k
+                      clip: true
+                      contentWidth: width
+                      contentHeight: Math.max(height, so.flat.length * so.rowH)
+                      interactive: !so.dragging && contentHeight > height + 1
+                      boundsBehavior: Flickable.StopAtBounds
+
                       Repeater {
                           model: so.flat
                           Rectangle {
@@ -941,81 +1029,52 @@ jobs:
                               required property int index
                               readonly property var info: so.rows()[modelData.idx]
                               readonly property bool selected: so.view.selectedObject === modelData.idx
-                              readonly property real ind: 0.9 * so.u + (modelData.depth + 1) * 2.1 * so.u
+                              readonly property real ind: 8 * so.k + modelData.depth * 18 * so.k
                               x: 0
-                              y: (index + 1) * so.rowH
+                              y: index * so.rowH
                               width: list.width
                               height: so.rowH
-                              color: selected ? "#33302a" : (index % 2 ? "#2c2c2c" : "#292929")
+                              color: selected ? "#4f79a3" : "transparent"
                               visible: info !== undefined
 
                               Rectangle {   // alvo do arrastar
                                   visible: so.dragging && so.dropIdx === row.modelData.idx
                                   anchors.fill: parent
-                                  color: "transparent"
-                                  border.color: "#4aa3ff"
-                                  border.width: Math.max(1, 0.2 * so.u)
-                              }
-                              Rectangle {   // linha-guia do parentesco
-                                  visible: row.modelData.depth > 0
-                                  x: row.ind - 1.9 * so.u
-                                  width: Math.max(1, 0.12 * so.u)
-                                  height: parent.height
-                                  color: "#4a4a4a"
+                                  color: "#2f6fb5"
+                                  opacity: 0.55
                               }
 
-                              // seta de expandir
-                              Glyph {
-                                  visible: row.modelData.hasKids
+                              Glyph {   // seta de expandir
+                                  visible: row.modelData.hasKids && so.query.length === 0
                                   x: row.ind
-                                  y: (so.rowH - 1.5 * so.u) / 2
-                                  width: 1.5 * so.u; height: 1.5 * so.u
+                                  y: (so.rowH - 14 * so.k) / 2
+                                  width: 14 * so.k; height: 14 * so.k
                                   name: so.collapsed[row.modelData.idx] ? "chev_right" : "chev_down"
-                                  fg: "#b0b0b0"
+                                  fg: "#bdbdbd"
                               }
-                              // icone do tipo (laranja)
-                              Glyph {
-                                  x: row.ind + 1.9 * so.u
-                                  y: (so.rowH - 2.0 * so.u) / 2
-                                  width: 2.0 * so.u; height: 2.0 * so.u
-                                  name: row.info ? (row.info.type === 1 ? "o_cam" : row.info.type === 2 ? "o_light" : row.info.type === 3 ? "o_bone" : "o_mesh") : ""
-                                  fg: "#e8923a"
+                              Glyph {   // icone do tipo
+                                  x: row.ind + 18 * so.k
+                                  y: (so.rowH - 20 * so.k) / 2
+                                  width: 20 * so.k; height: 20 * so.k
+                                  name: row.info ? (row.info.type === 1 ? "o_cam" : row.info.type === 2 ? "o_light" : row.info.type === 3 ? "o_bone" : "cube") : ""
+                                  fg: row.info && row.info.type === 0 ? "#cfcfcf" : "#e6e6e6"
                               }
                               Text {
-                                  x: row.ind + 4.6 * so.u
-                                  width: Math.max(0, 20.5 * so.u - x)
+                                  x: row.ind + 44 * so.k
+                                  width: Math.max(0, parent.width - x - 6 * so.k)
                                   anchors.verticalCenter: parent.verticalCenter
                                   elide: Text.ElideRight
                                   text: row.info ? row.info.name : ""
-                                  color: row.selected ? "#f5a524" : "#d2d2d2"
-                                  font.pixelSize: 1.85 * so.u
-                                  opacity: row.info && row.info.hide ? 0.45 : 1
-                              }
-                              // icone dos dados (verde)
-                              Glyph {
-                                  x: 20.6 * so.u
-                                  y: (so.rowH - 1.8 * so.u) / 2
-                                  width: 1.8 * so.u; height: 1.8 * so.u
-                                  name: row.info ? (row.info.type === 1 ? "d_cam" : row.info.type === 2 ? "d_light" : "d_mesh") : ""
-                                  fg: "#26c08a"
-                                  visible: !!row.info && row.info.type !== 3
-                              }
-                              Glyph {
-                                  x: 25.0 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u
-                                  name: row.info && row.info.hide ? "eye_off" : "eye"
-                                  fg: row.info && row.info.hide ? "#7a7a7a" : "#e4e4e4"
-                              }
-                              Glyph {
-                                  x: 27.6 * so.u; y: (so.rowH - 2.0 * so.u) / 2; width: 2.0 * so.u; height: 2.0 * so.u
-                                  name: row.info && row.info.nor ? "render_off" : "render"
-                                  fg: row.info && row.info.nor ? "#7a7a7a" : "#e4e4e4"
+                                  color: row.selected ? "#ffffff" : "#d4d4d4"
+                                  font.pixelSize: 16 * so.k
                               }
 
                               // toque: selecionar; segurar: arrastar para parentear
                               MouseArea {
                                   id: rowMa
-                                  x: 0; y: 0
-                                  width: 24.2 * so.u
+                                  x: row.ind + 16 * so.k
+                                  y: 0
+                                  width: parent.width - x
                                   height: parent.height
                                   containmentMask: HitMask { target: rowMa; view: so.view }
                                   preventStealing: so.dragging && so.dragIdx === row.modelData.idx
@@ -1045,44 +1104,155 @@ jobs:
                                   onReleased: finish()
                                   onCanceled: finish()
                               }
-                              MouseArea {   // seta de expandir
+                              MouseArea {   // seta de expandir (area maior)
                                   id: arrMa
-                                  x: row.ind - 0.8 * so.u
-                                  width: 3.4 * so.u
+                                  x: row.ind - 6 * so.k
+                                  width: 34 * so.k
                                   height: parent.height
-                                  enabled: row.modelData.hasKids
+                                  enabled: row.modelData.hasKids && so.query.length === 0
                                   containmentMask: HitMask { target: arrMa; view: so.view }
                                   onClicked: so.toggleCollapse(row.modelData.idx)
                               }
-                              MouseArea {   // olho
-                                  id: eyeMa
-                                  x: 24.2 * so.u
-                                  width: 2.8 * so.u
-                                  height: parent.height
-                                  containmentMask: HitMask { target: eyeMa; view: so.view }
-                                  onClicked: so.view.command(25, row.modelData.idx)
-                              }
-                              MouseArea {   // render
-                                  id: renMa
-                                  x: 27.0 * so.u
-                                  width: 3.0 * so.u
-                                  height: parent.height
-                                  containmentMask: HitMask { target: renMa; view: so.view }
-                                  onClicked: so.view.command(26, row.modelData.idx)
+                          }
+                      }
+                  }
+
+                  // barra de rolagem vertical
+                  Rectangle {
+                      visible: list.contentHeight > list.height + 1
+                      x: panel.width - 12 * so.k; y: so.listTop
+                      width: 8 * so.k; height: list.height
+                      color: "#2a2a2a"
+                      Rectangle {
+                          width: parent.width
+                          height: Math.max(24 * so.k, parent.height * list.height / list.contentHeight)
+                          y: (parent.height - height) * (list.contentHeight > list.height ? list.contentY / (list.contentHeight - list.height) : 0)
+                          color: "#6c6c6c"
+                          radius: 3 * so.k
+                      }
+                  }
+
+                  // ---- borda esquerda: arrastar para redimensionar ----
+                  Item {
+                      id: grip
+                      x: -10 * so.k; y: 0
+                      width: 22 * so.k; height: parent.height
+                      property real startX: 0
+                      property real startW: 0
+                      Rectangle { x: 10 * so.k; width: Math.max(1, 2 * so.k); height: parent.height; color: "#242424" }
+                      Rectangle {
+                          x: 6 * so.k; y: (parent.height - height) / 2
+                          width: 10 * so.k; height: 56 * so.k; radius: 4 * so.k
+                          color: gMa.pressed ? "#6a6a6a" : "#4a4a4a"
+                          Column {
+                              anchors.centerIn: parent
+                              spacing: 5 * so.k
+                              Repeater { model: 3; Rectangle { width: 3 * so.k; height: 3 * so.k; radius: width / 2; color: "#b8b8b8" } }
+                          }
+                      }
+                      MouseArea {
+                          id: gMa
+                          anchors.fill: parent
+                          containmentMask: HitMask { target: gMa; view: so.view }
+                          preventStealing: true
+                          onPressed: function (m) { grip.startX = mapToItem(so, m.x, m.y).x; grip.startW = so.wFrac }
+                          onPositionChanged: function (m) {
+                              if (!pressed) return
+                              var cx = mapToItem(so, m.x, m.y).x
+                              var f = grip.startW + (grip.startX - cx) / so.width
+                              so.wFrac = Math.max(0.11, Math.min(0.45, f))
+                          }
+                      }
+                  }
+
+                  // ---- menus suspensos ----
+                  MouseArea {   // fecha o menu ao tocar fora
+                      anchors.fill: parent
+                      enabled: so.menu !== ""
+                      visible: so.menu !== ""
+                      onClicked: so.menu = ""
+                  }
+                  Rectangle {
+                      id: pop
+                      visible: so.menu !== ""
+                      x: so.menu === "Display" ? 6 * so.k : (so.menu === "Show" ? 86 * so.k : 140 * so.k)
+                      y: 60 * so.k
+                      width: Math.min(panel.width - x - 6 * so.k, 230 * so.k)
+                      height: popCol.height + 8 * so.k
+                      color: "#2d2d2d"
+                      border.color: "#555555"
+                      border.width: Math.max(1, so.k)
+                      Column {
+                          id: popCol
+                          x: 0; y: 4 * so.k
+                          width: parent.width
+                          Repeater {
+                              model: so.menu === "Display" ? [
+                                  { t: "Expandir tudo", a: "exp" }, { t: "Recolher tudo", a: "col" }
+                              ] : so.menu === "Show" ? [
+                                  { t: "Malhas", a: "t0" }, { t: "Câmeras", a: "t1" }, { t: "Luzes", a: "t2" }, { t: "Ossos", a: "t3" }
+                              ] : so.menu === "Help" ? [
+                                  { t: "Toque: selecionar", a: "" }, { t: "Segure e arraste: parentear", a: "" },
+                                  { t: "Solte abaixo da lista: soltar do pai", a: "" }
+                              ] : []
+                              Item {
+                                  required property var modelData
+                                  width: popCol.width
+                                  height: 30 * so.k
+                                  Rectangle { anchors.fill: parent; color: "#555555"; visible: pMa.pressed && parent.modelData.a !== "" }
+                                  Text {
+                                      x: 10 * so.k
+                                      anchors.verticalCenter: parent.verticalCenter
+                                      width: parent.width - 20 * so.k
+                                      elide: Text.ElideRight
+                                      text: (parent.modelData.a.charAt(0) === "t" ? (so.showType[parent.modelData.a.charAt(1)] ? "✓  " : "     ") : "") + parent.modelData.t
+                                      color: parent.modelData.a === "" ? "#a8a8a8" : "#e6e6e6"
+                                      font.pixelSize: 15 * so.k
+                                  }
+                                  MouseArea {
+                                      id: pMa
+                                      anchors.fill: parent
+                                      enabled: parent.modelData.a !== ""
+                                      onClicked: {
+                                          var a = parent.modelData.a
+                                          if (a === "exp") so.expandAll()
+                                          else if (a === "col") so.collapseAll()
+                                          else if (a.charAt(0) === "t") so.toggleShow(parseInt(a.charAt(1)))
+                                          if (a === "exp" || a === "col") so.menu = ""
+                                      }
+                                  }
                               }
                           }
                       }
                   }
               }
 
-              // etiqueta que segue o dedo durante o arrastar
+              // ---- aba para reabrir quando recolhido ----
+              Item {
+                  visible: so.openFrac < 0.999
+                  x: so.width - 26 * so.k * (1 - so.openFrac) - so.insetPx
+                  y: so.topY + 150 * so.k
+                  width: 26 * so.k; height: 96 * so.k
+                  opacity: 1 - so.openFrac
+                  Rectangle { anchors.fill: parent; color: tabMa.pressed ? "#555555" : "#3a3a3a"; border.color: "#222222"; border.width: Math.max(1, so.k) }
+                  Glyph { anchors.centerIn: parent; width: 16 * so.k; height: 16 * so.k; name: "chev_left"; fg: "#e6e6e6" }
+                  MouseArea {
+                      id: tabMa
+                      anchors.fill: parent
+                      enabled: !so.open
+                      containmentMask: HitMask { target: tabMa; view: so.view }
+                      onClicked: so.open = true
+                  }
+              }
+
+              // ---- etiqueta que segue o dedo no arrastar ----
               Rectangle {
                   visible: so.dragging && so.rows()[so.dragIdx] !== undefined
-                  x: so.panelX + so.dragX - width / 2
-                  y: so.panelY + so.dragY - height - 1.5 * so.u
-                  width: dragTxt.implicitWidth + 3 * so.u
-                  height: 3.0 * so.u
-                  radius: 0.6 * so.u
+                  x: panel.x + so.dragX - width / 2
+                  y: panel.y + so.dragY - height - 16 * so.k
+                  width: dragTxt.implicitWidth + 30 * so.k
+                  height: 30 * so.k
+                  radius: 6 * so.k
                   color: so.dropIdx === -2 ? "#5a3a3a" : "#2f5f94"
                   opacity: 0.95
                   Text {
@@ -1090,7 +1260,7 @@ jobs:
                       anchors.centerIn: parent
                       text: so.dragging && so.rows()[so.dragIdx] ? so.rows()[so.dragIdx].name : ""
                       color: "white"
-                      font.pixelSize: 1.8 * so.u
+                      font.pixelSize: 16 * so.k
                   }
               }
           }
@@ -2443,7 +2613,7 @@ jobs:
           struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;bool hide=false,nor=false;};
           std::vector<Obj> objs;
           int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
-          bool gAutoKey=false;
+          bool gAutoKey=false;float gRI=0;   // gRI: fracao da largura tomada pelo Outliner (QML)
           bool playing=false;float tm=1/24.f;float DUR=10;int gFS=1,gFE=240,gVS=1,gVE=120,gPlayDir=1;
           void syncRange(){DUR=gFE/24.f;if(gVE>gFE)gVE=gFE;if(gVS<gFS)gVS=gFS;if(gVE-gVS<5)gVE=std::min(gFE,gVS+5);}
           float yaw=.9f,pitch=.5f,cd=16;V tgt{0,.5f,0};float FOV=1.047f;
@@ -4087,9 +4257,9 @@ jobs:
              pill(px+1.2f*u,y1+12*rh,bw_,bh_,76,"Remover IK",false,.5f,.2f,.2f);}
             gBtn.push_back({{px,py,pw2,rh*nr+1.6f*u},299});}
            // outliner + transform (direita)
-           if(!gFileMenu){float pw=30*u,rx=W-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
+           if(!gFileMenu){float pw=30*u,rx=W*(1.f-gRI)-ML_-pw,ry=11.5f*u,rh=4.4f*u,tpx=.38f*u;
            int n=(int)objs.size(),rows=std::min(n,3),st=(n>3&&sel>=0)?std::clamp(sel-2,0,n-3):0;
-           float oh=16.3f*u; // o painel Scene agora e QML (SceneOutliner.qml); aqui so reserva o espaco
+           float oh=0.f; // a hierarquia agora e o Outliner em QML (SceneOutliner.qml)
 
            if(sel>=0){T&t=objs[sel].cur;float ty=ry+oh+1.5f*u;panel(rx,ty,pw,4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u,1*u);
 
@@ -4107,8 +4277,8 @@ jobs:
              else text(lo_.shape==0?"Sol (direcional)":"Luz de ponto",rx+1.2f*u,ty+4*u+4*rh+rh/2-2.5f*tpx,tpx,.7f,.7f,.74f);
              {float ssz=rh*.7f,sx0=rx+1.2f*u,sy0=ty+4*u+5*rh;for(int k=0;k<6;k++){V cc=LCOL[k];float sxk=sx0+k*(ssz+.9f*u);rect(sxk,sy0+(rh-ssz)/2,ssz,ssz,cc.x,cc.y,cc.z,1,ssz/2);gBtn.push_back({{sxk,sy0,ssz+.9f*u,rh},23+k});}}}
             else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);}}
-           if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[3]={9,11,12};
-            for(int k=0;k<3;k++){int id=AI[k];bool on=(id==11&&parentMode);rect(gx,ty2,bs2,bs2,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs2/2);icon2(id,gx+bs2/2,ty2+bs2/2,bs2*.27f,on);gBtn.push_back({{gx,ty2,bs2,bs2},id});gx+=bs2+.8f*u;}}}
+           if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[1]={9};
+            for(int k=0;k<1;k++){int id=AI[k];bool on=(id==11&&parentMode);rect(gx,ty2,bs2,bs2,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs2/2);icon2(id,gx+bs2/2,ty2+bs2/2,bs2*.27f,on);gBtn.push_back({{gx,ty2,bs2,bs2},id});gx+=bs2+.8f*u;}}}
            // timeline estilo Maya/Houdini (compacta)
            float TH=17.5f*u,tT=100*u-3.6f*u-TH,tw_=W-2*ML_;if(gTlOpen)panel(ML_,tT,tw_,TH,1*u);
            if(gTlOpen){float x0=ML_+.9f*u,wd=tw_-1.8f*u;pill(x0+wd-15*u,tT+.8f*u,14.5f*u,6.2f*u,62,"Recolher",false,.27f,.27f,.29f);
@@ -4158,7 +4328,6 @@ jobs:
            {float cf=tm*24;if(cf>=gVS-.01f&&cf<=gVE+.01f){float pxh=tx(tm);rect(pxh-.07f*u,ty0+2.2f*u,.14f*u,th-2.2f*u,1,1,1);dia(pxh,ty0+2.4f*u,1.5f*u,.95f,.95f,.95f);}}
            pill(W-ML_-13.5f*u,y0+(sh-6.2f*u)/2,13.5f*u,6.2f*u,62,"Timeline",false,.27f,.27f,.29f);}
           else{gTrack={0,0,0,0};}
-          {float bs=7.4f*u,yb=(gTlOpen?tT:(gSculpt?(float)H-14*u:(float)H-(gTlQml?20.5f:9.f)*u))-bs-1.2f*u,xb=W-ML_-bs;bool on=gRigOpen;rect(xb,yb,bs,bs,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs/2);icon2(63,xb+bs/2,yb+bs/2,bs*.27f,on);gBtn.push_back({{xb,yb,bs,bs},63});}
            if(gImportOpen){float pw2=82*u,rh2=5.8f*u,tp2=.46f*u;int n=(int)gFiles.size();float lh=6*rh2,ph2=6.5f*u+lh+1.5f*u,px2=(W-pw2)/2,py2=(H-ph2)/2;
                        float tot=n*rh2,maxs=std::max(0.f,tot-lh);gScrollPx=std::clamp(gScrollPx,0.f,maxs);gRowH=rh2;gListR={px2+1*u,py2+6.5f*u,pw2-2*u,lh};
                        panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
@@ -4317,10 +4486,16 @@ jobs:
            else if(i>=20&&i<=23){if(i==20)tm=0;else if(i==21)tm=std::max(0.f,tm-1/24.f);else if(i==22)tm=std::min(DUR,tm+1/24.f);else tm=DUR;applyAnim();}}
           void press(int i){pressInner(i);if(i!=91&&i!=92)undoCommit();}
           void scrub(float x){int f=(int)roundf(gVS+std::clamp((x-gTX0)/gTW,0.f,1.f)*(gVE-gVS));tm=std::clamp(f,gFS,gFE)/24.f;applyAnim();}
+          float camPickDist(int i,float x,float y){V e,f,r,u;if(!camBasis(i,e,f,r,u))return 1e9f;float d=std::max({objs[i].cur.s.x,objs[i].cur.s.y,objs[i].cur.s.z})*2.f;
+           float ra=gMcCW>0?(float)gMcCW/gMcCH:(float)W/std::max(H,1);float hh=d*tanf(objs[i].fov/2),hw=hh*ra;V c=e+f*d;
+           V P[4]={c+r*hw+u*hh,c-r*hw+u*hh,c-r*hw-u*hh,c+r*hw-u*hh};
+           auto sd=[&](V a,V b){float ax,ay,bx,by;if(!prj(a,ax,ay)||!prj(b,bx,by))return 1e9f;float vx=bx-ax,vy=by-ay,t=std::clamp(((x-ax)*vx+(y-ay)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);return hypotf(x-ax-vx*t,y-ay-vy*t);};
+           float m=1e9f;for(int k=0;k<4;k++){m=std::min(m,sd(e,P[k]));m=std::min(m,sd(P[k],P[(k+1)%4]));}
+           V bc=c+u*(hh*1.65f);m=std::min(m,sd(bc-r*hw,bc+r*hw));return m;}
           void pick(float x,float y){
-           {int cb=-1;float cdist=50;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind||objs[i].hide)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(dd<cdist){cdist=dd;cb=i;}}
+           {int cb=-1;float cdist=H*.045f;for(int i=0;i<(int)objs.size();i++){if(!objs[i].kind||objs[i].hide)continue;float hx,hy;if(!prj(wp(i),hx,hy))continue;float dd=hypotf(x-hx,y-hy);if(objs[i].kind==3)dd=std::min(dd,camPickDist(i,x,y));if(dd<cdist){cdist=dd;cb=i;}}
             if(cb>=0){if(parentMode)finishParent(cb);else if(objs[cb].kind==3&&sel==cb)camViewToggle();else sel=cb;return;}}
-           if(gBones){int bb=-1;float bd=40;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5||objs[i].hide)continue;M w=worldM(i);
+           if(gBones){int bb=-1;float bd=H*.04f;for(int i=0;i<(int)objs.size();i++){if(objs[i].mesh!=5||objs[i].hide)continue;M w=worldM(i);
              V hd{w.m[12],w.m[13],w.m[14]},tl=hd+V{w.m[4],w.m[5],w.m[6]}*objs[i].len;float hx,hy,qx,qy;if(!prj(hd,hx,hy)||!prj(tl,qx,qy))continue;
              float vx=qx-hx,vy=qy-hy,tt=std::clamp(((x-hx)*vx+(y-hy)*vy)/(vx*vx+vy*vy+1e-3f),0.f,1.f);float dd=hypotf(x-hx-vx*tt,y-hy-vy*tt);if(dd<bd){bd=dd;bb=i;}}
             if(bb>=0){if(parentMode)finishParent(bb);else sel=bb;return;}}
@@ -4385,7 +4560,7 @@ jobs:
              float mx=(x+e->x[1])/2,my=(y+e->y[1])/2;if(pinch>0&&d>1){cd=std::clamp(cd*pinch/d,.04f,40.f);panCam(mx-lmx,my-lmy);}pinch=d;lmx=mx;lmy=my;moved=true;}
             else if(mode==1||mode==4||mode==5){
              if(rl){rl=false;lx=x;ly=y;}
-             else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>20)moved=true;
+             else{float dx=x-lx,dy=y-ly;lx=x;ly=y;if(hypotf(x-sx,y-sy)>std::max(20.f,H*.03f))moved=true;
               if(mode==5)gzMove(x,y);else if(moved){orbit(dx,dy);}}}
            }else if(act==AMOTION_EVENT_ACTION_UP||act==AMOTION_EVENT_ACTION_CANCEL){
             if(mode==40)sculptEnd();
@@ -4557,6 +4732,7 @@ jobs:
                   break; }
               case 25: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].hide = !objs[i].hide; if (sel == i && objs[i].hide) sel = -1; undoCommit(); } break; }
               case 26: { int i = (int)roundf(a); if (i >= 0 && i < (int)objs.size()) { objs[i].nor = !objs[i].nor; undoCommit(); } break; }
+              case 27: gRI = std::clamp(a, 0.f, .6f); break;
               case 22: gAutoKey = !gAutoKey; toast(gAutoKey ? "Auto Key ligado" : "Auto Key desligado"); break;
               case 21: gCapReq = true; gCapW = std::clamp((int)roundf(a), 16, 8192); gCapH = std::clamp((int)roundf(b), 16, 8192); break;
               }
