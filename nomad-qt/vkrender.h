@@ -1,34 +1,87 @@
 #pragma once
 #include <QtGui/qtguiglobal.h>
 
-class QQuickWindow;
+#include "engine_api.h"
 
-// Camera orbital do viewport Vulkan (alvo + yaw/pitch/distancia).
-struct VkViewParams {
-    float yaw = 0.9f, pitch = 0.5f, dist = 16.f;
-    float tx = 0.f, ty = 0.5f, tz = 0.f;
-};
+class QQuickWindow;
 
 #if QT_CONFIG(vulkan)
 #include <QVulkanFunctions>
 #include <QVulkanInstance>
+#include <unordered_map>
+#include <vector>
 
-// Renderizador Vulkan do viewport (passo 1: fundo + grade). Desenha dentro do passe de
-// renderizacao do Qt Quick, por baixo do QML (mesma tecnica do exemplo "Vulkan Under QML").
+// Renderizador Vulkan do motor: executa as ordens de desenho gravadas pelo motor (malhas, texto, recortes).
+// Desenha dentro do passe de renderizacao do Qt Quick: o 3D por baixo do QML e a interface do motor por cima
+// (mesma tecnica do exemplo "Vulkan Under QML"). Tudo roda na thread de render.
 class VkRend {
 public:
     ~VkRend() { release(); }
-    bool prepare(QQuickWindow *w);  // cria o pipeline (uma vez); false se falhou
-    void draw(QQuickWindow *w, int pw, int ph, const VkViewParams &v);
+    bool prepare(QQuickWindow *w);                      // antes do passe: cria os recursos (uma vez)
+    void upload(QQuickWindow *w, const EngVkFrame &f);  // antes do passe: copia as ordens para o slot atual
+    void drawScene(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);  // dentro do passe, antes do QML
+    void drawUi(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);     // dentro do passe, depois do QML
     void release();
+    bool ready() const { return m_ready; }
     bool failed() const { return m_failed; }
+    const char *why() const { return m_why; }  // motivo da falha (diagnostico)
 
 private:
+    struct Buf {
+        VkBuffer b = VK_NULL_HANDLE;
+        VkDeviceMemory m = VK_NULL_HANDLE;
+        void *p = nullptr;
+        VkDeviceSize size = 0;
+    };
+    struct Slot {
+        Buf ops, text;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+    };
+    struct MeshBuf {
+        Buf b;
+        int n = 0;
+        uint64_t last = 0;  // ultimo quadro em que foi usada (para liberar malhas que sumiram)
+    };
+
+    bool fail(const char *why);
+    bool findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out);
+    bool mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage);
+    void freeBuf(Buf &b);
+    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth);
+    bool uploadFont(QQuickWindow *w);
+    MeshBuf *meshFor(const EngVkOp &op);
+    void replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> &ops, uint32_t baseIdx, const EngVkFrame &f, bool ui);
+
+    QVulkanFunctions *m_if = nullptr;
     QVulkanDeviceFunctions *m_df = nullptr;
+    VkPhysicalDevice m_phys = VK_NULL_HANDLE;
     VkDevice m_dev = VK_NULL_HANDLE;
-    VkPipelineLayout m_pl = VK_NULL_HANDLE;
-    VkPipeline m_pipe = VK_NULL_HANDLE;
-    bool m_init = false;
+    VkRenderPass m_rp = VK_NULL_HANDLE;
+
+    static constexpr int kMaxSlots = 3;
+    static constexpr uint32_t kMaxOps = 8192;
+    static constexpr uint32_t kMaxTextFloats = 160000;
+    int m_slots = 2;
+    int m_cur = 0;
+    uint64_t m_frame = 0;
+    uint32_t m_sceneMeshes = 0;
+    Slot m_slot[kMaxSlots];
+
+    VkDescriptorSetLayout m_lOps = VK_NULL_HANDLE, m_lTex = VK_NULL_HANDLE;
+    VkPipelineLayout m_plMesh = VK_NULL_HANDLE, m_plText = VK_NULL_HANDLE;
+    VkPipeline m_pMesh[2][2] = {{VK_NULL_HANDLE, VK_NULL_HANDLE}, {VK_NULL_HANDLE, VK_NULL_HANDLE}};  // [linhas][profundidade]
+    VkPipeline m_pText = VK_NULL_HANDLE;
+    VkDescriptorPool m_pool = VK_NULL_HANDLE;
+    VkSampler m_samp = VK_NULL_HANDLE;
+    VkDescriptorSet m_setTex = VK_NULL_HANDLE;
+    VkImage m_img = VK_NULL_HANDLE;
+    VkDeviceMemory m_imgMem = VK_NULL_HANDLE;
+    VkImageView m_imgView = VK_NULL_HANDLE;
+    Buf m_stage;
+    bool m_font = false;
+    bool m_ready = false;
     bool m_failed = false;
+    const char *m_why = "";
+    std::unordered_map<int, MeshBuf> m_meshes;
 };
 #endif

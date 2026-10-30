@@ -37,7 +37,84 @@
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
 #include "ImGuizmo.h"
+// ---- backend Vulkan: com gVK ligado o motor nao toca em GL (toda chamada GL vira no-op) ----
+#include <type_traits>
+namespace eng { extern bool gVK; }
+#define glActiveTexture(...) (::eng::gVK ? decltype(::glActiveTexture(__VA_ARGS__))() : ::glActiveTexture(__VA_ARGS__))
+#define glAttachShader(...) (::eng::gVK ? decltype(::glAttachShader(__VA_ARGS__))() : ::glAttachShader(__VA_ARGS__))
+#define glBindBuffer(...) (::eng::gVK ? decltype(::glBindBuffer(__VA_ARGS__))() : ::glBindBuffer(__VA_ARGS__))
+#define glBindBufferBase(...) (::eng::gVK ? decltype(::glBindBufferBase(__VA_ARGS__))() : ::glBindBufferBase(__VA_ARGS__))
+#define glBindFramebuffer(...) (::eng::gVK ? decltype(::glBindFramebuffer(__VA_ARGS__))() : ::glBindFramebuffer(__VA_ARGS__))
+#define glBindImageTexture(...) (::eng::gVK ? decltype(::glBindImageTexture(__VA_ARGS__))() : ::glBindImageTexture(__VA_ARGS__))
+#define glBindRenderbuffer(...) (::eng::gVK ? decltype(::glBindRenderbuffer(__VA_ARGS__))() : ::glBindRenderbuffer(__VA_ARGS__))
+#define glBindTexture(...) (::eng::gVK ? decltype(::glBindTexture(__VA_ARGS__))() : ::glBindTexture(__VA_ARGS__))
+#define glBindVertexArray(...) (::eng::gVK ? decltype(::glBindVertexArray(__VA_ARGS__))() : ::glBindVertexArray(__VA_ARGS__))
+#define glBlendEquation(...) (::eng::gVK ? decltype(::glBlendEquation(__VA_ARGS__))() : ::glBlendEquation(__VA_ARGS__))
+#define glBlendFunc(...) (::eng::gVK ? decltype(::glBlendFunc(__VA_ARGS__))() : ::glBlendFunc(__VA_ARGS__))
+#define glBlitFramebuffer(...) (::eng::gVK ? decltype(::glBlitFramebuffer(__VA_ARGS__))() : ::glBlitFramebuffer(__VA_ARGS__))
+#define glBufferData(...) (::eng::gVK ? decltype(::glBufferData(__VA_ARGS__))() : ::glBufferData(__VA_ARGS__))
+#define glBufferSubData(...) (::eng::gVK ? decltype(::glBufferSubData(__VA_ARGS__))() : ::glBufferSubData(__VA_ARGS__))
+#define glCheckFramebufferStatus(...) (::eng::gVK ? decltype(::glCheckFramebufferStatus(__VA_ARGS__))() : ::glCheckFramebufferStatus(__VA_ARGS__))
+#define glClear(...) (::eng::gVK ? decltype(::glClear(__VA_ARGS__))() : ::glClear(__VA_ARGS__))
+#define glClearColor(...) (::eng::gVK ? decltype(::glClearColor(__VA_ARGS__))() : ::glClearColor(__VA_ARGS__))
+#define glClearDepthf(...) (::eng::gVK ? decltype(::glClearDepthf(__VA_ARGS__))() : ::glClearDepthf(__VA_ARGS__))
+#define glClearStencil(...) (::eng::gVK ? decltype(::glClearStencil(__VA_ARGS__))() : ::glClearStencil(__VA_ARGS__))
+#define glColorMask(...) (::eng::gVK ? decltype(::glColorMask(__VA_ARGS__))() : ::glColorMask(__VA_ARGS__))
+#define glCompileShader(...) (::eng::gVK ? decltype(::glCompileShader(__VA_ARGS__))() : ::glCompileShader(__VA_ARGS__))
+#define glCreateProgram(...) (::eng::gVK ? decltype(::glCreateProgram(__VA_ARGS__))() : ::glCreateProgram(__VA_ARGS__))
+#define glCreateShader(...) (::eng::gVK ? decltype(::glCreateShader(__VA_ARGS__))() : ::glCreateShader(__VA_ARGS__))
+#define glDeleteBuffers(...) (::eng::gVK ? decltype(::glDeleteBuffers(__VA_ARGS__))() : ::glDeleteBuffers(__VA_ARGS__))
+#define glDeleteFramebuffers(...) (::eng::gVK ? decltype(::glDeleteFramebuffers(__VA_ARGS__))() : ::glDeleteFramebuffers(__VA_ARGS__))
+#define glDeleteProgram(...) (::eng::gVK ? decltype(::glDeleteProgram(__VA_ARGS__))() : ::glDeleteProgram(__VA_ARGS__))
+#define glDeleteTextures(...) (::eng::gVK ? decltype(::glDeleteTextures(__VA_ARGS__))() : ::glDeleteTextures(__VA_ARGS__))
+#define glDeleteVertexArrays(...) (::eng::gVK ? decltype(::glDeleteVertexArrays(__VA_ARGS__))() : ::glDeleteVertexArrays(__VA_ARGS__))
+#define glDepthFunc(...) (::eng::gVK ? decltype(::glDepthFunc(__VA_ARGS__))() : ::glDepthFunc(__VA_ARGS__))
+#define glDepthMask(...) (::eng::gVK ? decltype(::glDepthMask(__VA_ARGS__))() : ::glDepthMask(__VA_ARGS__))
+#define glDisable(...) (::eng::gVK ? decltype(::glDisable(__VA_ARGS__))() : ::glDisable(__VA_ARGS__))
+#define glDispatchCompute(...) (::eng::gVK ? decltype(::glDispatchCompute(__VA_ARGS__))() : ::glDispatchCompute(__VA_ARGS__))
+#define glDrawArrays(...) (::eng::gVK ? decltype(::glDrawArrays(__VA_ARGS__))() : ::glDrawArrays(__VA_ARGS__))
+#define glEnable(...) (::eng::gVK ? decltype(::glEnable(__VA_ARGS__))() : ::glEnable(__VA_ARGS__))
+#define glEnableVertexAttribArray(...) (::eng::gVK ? decltype(::glEnableVertexAttribArray(__VA_ARGS__))() : ::glEnableVertexAttribArray(__VA_ARGS__))
+#define glFramebufferRenderbuffer(...) (::eng::gVK ? decltype(::glFramebufferRenderbuffer(__VA_ARGS__))() : ::glFramebufferRenderbuffer(__VA_ARGS__))
+#define glFramebufferTexture2D(...) (::eng::gVK ? decltype(::glFramebufferTexture2D(__VA_ARGS__))() : ::glFramebufferTexture2D(__VA_ARGS__))
+#define glGenBuffers(...) (::eng::gVK ? decltype(::glGenBuffers(__VA_ARGS__))() : ::glGenBuffers(__VA_ARGS__))
+#define glGenFramebuffers(...) (::eng::gVK ? decltype(::glGenFramebuffers(__VA_ARGS__))() : ::glGenFramebuffers(__VA_ARGS__))
+#define glGenRenderbuffers(...) (::eng::gVK ? decltype(::glGenRenderbuffers(__VA_ARGS__))() : ::glGenRenderbuffers(__VA_ARGS__))
+#define glGenTextures(...) (::eng::gVK ? decltype(::glGenTextures(__VA_ARGS__))() : ::glGenTextures(__VA_ARGS__))
+#define glGenVertexArrays(...) (::eng::gVK ? decltype(::glGenVertexArrays(__VA_ARGS__))() : ::glGenVertexArrays(__VA_ARGS__))
+#define glGenerateMipmap(...) (::eng::gVK ? decltype(::glGenerateMipmap(__VA_ARGS__))() : ::glGenerateMipmap(__VA_ARGS__))
+#define glGetIntegerv(...) (::eng::gVK ? decltype(::glGetIntegerv(__VA_ARGS__))() : ::glGetIntegerv(__VA_ARGS__))
+#define glGetProgramInfoLog(...) (::eng::gVK ? decltype(::glGetProgramInfoLog(__VA_ARGS__))() : ::glGetProgramInfoLog(__VA_ARGS__))
+#define glGetProgramiv(...) (::eng::gVK ? decltype(::glGetProgramiv(__VA_ARGS__))() : ::glGetProgramiv(__VA_ARGS__))
+#define glGetShaderInfoLog(...) (::eng::gVK ? decltype(::glGetShaderInfoLog(__VA_ARGS__))() : ::glGetShaderInfoLog(__VA_ARGS__))
+#define glGetShaderiv(...) (::eng::gVK ? decltype(::glGetShaderiv(__VA_ARGS__))() : ::glGetShaderiv(__VA_ARGS__))
+#define glGetUniformLocation(...) (::eng::gVK ? decltype(::glGetUniformLocation(__VA_ARGS__))() : ::glGetUniformLocation(__VA_ARGS__))
+#define glLinkProgram(...) (::eng::gVK ? decltype(::glLinkProgram(__VA_ARGS__))() : ::glLinkProgram(__VA_ARGS__))
+#define glMemoryBarrier(...) (::eng::gVK ? decltype(::glMemoryBarrier(__VA_ARGS__))() : ::glMemoryBarrier(__VA_ARGS__))
+#define glPixelStorei(...) (::eng::gVK ? decltype(::glPixelStorei(__VA_ARGS__))() : ::glPixelStorei(__VA_ARGS__))
+#define glReadPixels(...) (::eng::gVK ? decltype(::glReadPixels(__VA_ARGS__))() : ::glReadPixels(__VA_ARGS__))
+#define glRenderbufferStorageMultisample(...) (::eng::gVK ? decltype(::glRenderbufferStorageMultisample(__VA_ARGS__))() : ::glRenderbufferStorageMultisample(__VA_ARGS__))
+#define glScissor(...) (::eng::gVK ? decltype(::glScissor(__VA_ARGS__))() : ::glScissor(__VA_ARGS__))
+#define glShaderSource(...) (::eng::gVK ? decltype(::glShaderSource(__VA_ARGS__))() : ::glShaderSource(__VA_ARGS__))
+#define glTF(...) (::eng::gVK ? decltype(::glTF(__VA_ARGS__))() : ::glTF(__VA_ARGS__))
+#define glTexImage2D(...) (::eng::gVK ? decltype(::glTexImage2D(__VA_ARGS__))() : ::glTexImage2D(__VA_ARGS__))
+#define glTexParameteri(...) (::eng::gVK ? decltype(::glTexParameteri(__VA_ARGS__))() : ::glTexParameteri(__VA_ARGS__))
+#define glTexStorage2D(...) (::eng::gVK ? decltype(::glTexStorage2D(__VA_ARGS__))() : ::glTexStorage2D(__VA_ARGS__))
+#define glTexStorage3D(...) (::eng::gVK ? decltype(::glTexStorage3D(__VA_ARGS__))() : ::glTexStorage3D(__VA_ARGS__))
+#define glTexSubImage3D(...) (::eng::gVK ? decltype(::glTexSubImage3D(__VA_ARGS__))() : ::glTexSubImage3D(__VA_ARGS__))
+#define glUniform1f(...) (::eng::gVK ? decltype(::glUniform1f(__VA_ARGS__))() : ::glUniform1f(__VA_ARGS__))
+#define glUniform1i(...) (::eng::gVK ? decltype(::glUniform1i(__VA_ARGS__))() : ::glUniform1i(__VA_ARGS__))
+#define glUniform2f(...) (::eng::gVK ? decltype(::glUniform2f(__VA_ARGS__))() : ::glUniform2f(__VA_ARGS__))
+#define glUniform2i(...) (::eng::gVK ? decltype(::glUniform2i(__VA_ARGS__))() : ::glUniform2i(__VA_ARGS__))
+#define glUniform3f(...) (::eng::gVK ? decltype(::glUniform3f(__VA_ARGS__))() : ::glUniform3f(__VA_ARGS__))
+#define glUniform4f(...) (::eng::gVK ? decltype(::glUniform4f(__VA_ARGS__))() : ::glUniform4f(__VA_ARGS__))
+#define glUniform4fv(...) (::eng::gVK ? decltype(::glUniform4fv(__VA_ARGS__))() : ::glUniform4fv(__VA_ARGS__))
+#define glUniformMatrix4fv(...) (::eng::gVK ? decltype(::glUniformMatrix4fv(__VA_ARGS__))() : ::glUniformMatrix4fv(__VA_ARGS__))
+#define glUseProgram(...) (::eng::gVK ? decltype(::glUseProgram(__VA_ARGS__))() : ::glUseProgram(__VA_ARGS__))
+#define glVertexAttribPointer(...) (::eng::gVK ? decltype(::glVertexAttribPointer(__VA_ARGS__))() : ::glVertexAttribPointer(__VA_ARGS__))
+#define glViewport(...) (::eng::gVK ? decltype(::glViewport(__VA_ARGS__))() : ::glViewport(__VA_ARGS__))
 namespace eng {
+bool gVK=false;
 #define PI 3.14159265f
 
 // ---------- matematica ----------
@@ -234,14 +311,14 @@ vec3 matcap(){vec3 N=normalize(vN),V=normalize(uCam-vW);if(dot(N,V)<0.0)N=-N;
   return clamp(c,0.0,1.0);}
  void main(){if(uL<-1.5){vec2 q=(vP.xy-.5)*uS.xy;float dd=(abs(q.x)+abs(q.y)-uS.x*.5)*.7071;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL<0.0){vec2 q=(vP.xy-.5)*uS.xy;vec2 e=abs(q)-uS.xy*.5+uS.z;float dd=length(max(e,0.0))+min(max(e.x,e.y),0.0)-uS.z;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL>0.5){if(uTL.w>0.5&&uTL.x>=0.0&&texture(uTex,vec3(vUV,uTL.x)).a<0.5)discard;o=vec4(uMc>0.5?matcap():pbr(),uC.a);return;} o=vec4(uC.rgb,uC.a);})";
 GLint uMcL=-1,uMcRL=-1,uMcUL=-1,uMcBL=-1;GLuint uMVP,uM,uC,uL,uS,uCamL,uMRL,uJL,uSkL,uTLL,uTexL,gProg=0;float gS[3]={1,1,0},gMR[2]={0,.5f},gSk=0,gTL[4]={-1,-1,-1,0};void initText();void initPost();void initMC();void initTexArr();
-struct Mesh{GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
+struct Mesh{int vid=0;GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
 Mesh gBoneWire,gJointRing;
 std::vector<Mesh> meshes(6); // 0 cubo,1 esfera,2 plano,3 quad2D,4 grade,5 osso
 GLuint sh(GLenum t,const char*s){GLuint h=glCreateShader(t);glShaderSource(h,1,&s,0);glCompileShader(h);GLint ok;glGetShaderiv(h,GL_COMPILE_STATUS,&ok);
  if(!ok){char b[512];glGetShaderInfoLog(h,512,0,b);__android_log_print(ANDROID_LOG_ERROR,"NA","%s",b);}return h;}
 void vtx(std::vector<float>&v,V p,V n){v.insert(v.end(),{p.x,p.y,p.z,n.x,n.y,n.z});}
 Mesh upload(const std::vector<float>&v,GLenum mode){
- Mesh m;m.n=(int)v.size()/6;m.mode=mode;m.cpu=v;
+ Mesh m;m.n=(int)v.size()/6;m.mode=mode;m.cpu=v;{static int seq=0;m.vid=++seq;}
  glGenVertexArrays(1,&m.vao);glGenBuffers(1,&m.vbo);glBindVertexArray(m.vao);glBindBuffer(GL_ARRAY_BUFFER,m.vbo);
  glBufferData(GL_ARRAY_BUFFER,v.size()*4,v.data(),GL_STATIC_DRAW);
  glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,24,(void*)0);
@@ -290,7 +367,21 @@ void initGL(){
  glLinkProgram(p);glUseProgram(p);
  uMVP=glGetUniformLocation(p,"uMVP");uM=glGetUniformLocation(p,"uM");uC=glGetUniformLocation(p,"uC");uL=glGetUniformLocation(p,"uL");uS=glGetUniformLocation(p,"uS");uCamL=glGetUniformLocation(p,"uCam");uMcL=glGetUniformLocation(p,"uMc");uMcRL=glGetUniformLocation(p,"uMcR");uMcUL=glGetUniformLocation(p,"uMcU");uMcBL=glGetUniformLocation(p,"uMcB");uJL=glGetUniformLocation(p,"uJ");uSkL=glGetUniformLocation(p,"uSk");uTLL=glGetUniformLocation(p,"uTL");uTexL=glGetUniformLocation(p,"uTex");glUniform1i(uTexL,1);uMRL=glGetUniformLocation(p,"uMR");
  glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);buildMeshes();for(size_t i=6;i<meshes.size();i++){std::vector<float> c=meshes[i].cpu,sk=meshes[i].skin,uvv=meshes[i].uv;float r=meshes[i].rad;meshes[i]=upload(c,GL_TRIANGLES);meshes[i].rad=r;if(!sk.empty())attachSkin(meshes[i],sk);if(!uvv.empty())attachUV(meshes[i],uvv);}initText();initPost();initMC();initTexArr();}
+
+// ---------- gravacao de ordens para o backend Vulkan ----------
+EngVkFrame*gVkOut=nullptr;bool gVkDepth=false;int gVkSeg=0;
+static void vkPush(EngVkOp&o){if(!gVkOut)return;o.depth=gVkSeg==0&&gVkDepth?1:0;(gVkSeg==0?gVkOut->scene:gVkOut->ui).push_back(o);}
+void vkRecMesh(const Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
+ if(!gVkOut||m.cpu.empty())return;EngVkOp o;o.kind=0;o.vid=m.vid;o.n=m.n;o.cpu=m.cpu.data();o.lines=m.mode==GL_LINES?1:0;
+ memcpy(o.mvp,mvp.m,64);memcpy(o.mod,mod.m,64);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=a;
+ o.a[0]=lit;o.a[1]=gS[0];o.a[2]=gS[1];o.a[3]=gS[2];o.b[0]=gMR[0];o.b[1]=gMR[1];o.b[2]=gSk;
+ o.tl[0]=gTL[0];o.tl[1]=gTL[1];o.tl[2]=gTL[2];o.tl[3]=gTL[3];vkPush(o);}
+void vkScissor(float x,float y,float w,float h){if(!gVkOut)return;EngVkOp o;o.kind=2;o.sc[0]=x;o.sc[1]=y;o.sc[2]=w;o.sc[3]=h;vkPush(o);}
+void vkSetCam(V e,V r,V u,V f,float mc){if(!gVkOut)return;gVkOut->cam[0]=e.x;gVkOut->cam[1]=e.y;gVkOut->cam[2]=e.z;gVkOut->cam[3]=mc;
+ gVkOut->mcR[0]=r.x;gVkOut->mcR[1]=r.y;gVkOut->mcR[2]=r.z;gVkOut->mcU[0]=u.x;gVkOut->mcU[1]=u.y;gVkOut->mcU[2]=u.z;
+ gVkOut->mcB[0]=-f.x;gVkOut->mcB[1]=-f.y;gVkOut->mcB[2]=-f.z;}
 void draw(Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
+ if(gVK){vkRecMesh(m,mvp,mod,r,g,b,a,lit);return;}
  glUniformMatrix4fv(uMVP,1,GL_FALSE,mvp.m);glUniformMatrix4fv(uM,1,GL_FALSE,mod.m);
  glUniform4f(uC,r,g,b,a);glUniform1f(uL,lit);glUniform3f(uS,gS[0],gS[1],gS[2]);glUniform2f(uMRL,gMR[0],gMR[1]);glUniform1f(uSkL,gSk);glUniform4f(uTLL,gTL[0],gTL[1],gTL[2],gTL[3]);glBindVertexArray(m.vao);glDrawArrays(m.mode,0,m.n);}
 
@@ -339,6 +430,8 @@ void initText(){
  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
  glGenVertexArrays(1,&gTVao);glGenBuffers(1,&gTVbo);glBindVertexArray(gTVao);glBindBuffer(GL_ARRAY_BUFFER,gTVbo);
  glEnableVertexAttribArray(0);glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,16,(void*)0);}
+void initVK(){ // backend Vulkan: so dados da CPU (malhas e fonte); o desenho e do renderizador Vulkan
+ buildMeshes();static bool tried=false;if(!tried){tried=true;loadFont();}gTex=gAtlas.empty()?0:1;}
 static int u8next(const char*&s){int c=(unsigned char)*s++;if(c<0x80)return c;if(c>=0xC0&&c<0xE0&&(((unsigned char)*s)&0xC0)==0x80){int c2=(unsigned char)*s++;return((c&0x1F)<<6)|(c2&0x3F);}return 0;}
 static int u8fold(int c){if(c<128||gHi)return c; // sem glifos acentuados: usa a letra base
  static const int F[36]={0xE1,0xE0,0xE2,0xE3,0xE4,0xC1,0xC0,0xC2,0xC3,0xC4,0xE9,0xE8,0xEA,0xEB,0xC9,0xC8,0xCA,0xED,0xEC,0xEE,0xCD,0xF3,0xF2,0xF4,0xF5,0xF6,0xD3,0xD4,0xD5,0xFA,0xF9,0xFB,0xFC,0xDA,0xE7,0xC7};
@@ -351,6 +444,7 @@ void text(const char*s,float x,float y,float ps,float r,float g,float b){
   float x0=x+q.x0*sc,x1=x+q.x1*sc,y0=by+q.y0*sc,y1=by+q.y1*sc;
   v.insert(v.end(),{x0,y0,q.s0,q.t0,x1,y0,q.s1,q.t0,x1,y1,q.s1,q.t1,x0,y0,q.s0,q.t0,x1,y1,q.s1,q.t1,x0,y1,q.s0,q.t1});x+=xp*sc;}
  if(v.empty())return;
+ if(gVK){if(gVkOut){EngVkOp o;o.kind=1;o.tfirst=(int)(gVkOut->text.size()/4);o.tcount=(int)(v.size()/4);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=1;gVkOut->text.insert(gVkOut->text.end(),v.begin(),v.end());vkPush(o);}return;}
  glUseProgram(gTP);glUniform2f(uTS,(float)W,(float)H);glUniform4f(uTC,r,g,b,1);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,gTex);
  glBindVertexArray(gTVao);glBindBuffer(GL_ARRAY_BUFFER,gTVbo);glBufferData(GL_ARRAY_BUFFER,v.size()*4,v.data(),GL_STREAM_DRAW);
  glDrawArrays(GL_TRIANGLES,0,(int)v.size()/4);glUseProgram(gProg);}
@@ -1500,7 +1594,7 @@ void pickPath(const std::string&p){
  if(gPick==0){importPath(p);return;}
  if(gPick==1){if(loadMAD(p,true)){size_t sl=p.rfind('/');std::string n=sl==std::string::npos?p:p.substr(sl+1);size_t dt=n.rfind('.');if(dt!=std::string::npos)n=n.substr(0,dt);gProj=n;}}
  else loadMAD(p,false);}
-bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
+bool setJoints(int si){if(gVK)return false;if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
  for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
  glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
 // ---------- controles do rig: formas personalizadas (custom shapes) ----------
@@ -1613,6 +1707,7 @@ void frameTap(float x){float rel=(x-gFldR[4].x)/std::max(gFldR[4].w,1.f);int f=(
 // Fundo em gradiente vertical (cores do viewport do Maya): claro azulado em cima, escuro embaixo
 GLuint gBgP=0;GLint gBgH=-1;
 void drawBg(){
+ if(gVK){if(gVkOut){M m={};m.m[0]=2;m.m[5]=2;m.m[10]=1;m.m[12]=-1;m.m[13]=-1;m.m[15]=1;gS[0]=gS[1]=1;gS[2]=0;draw(meshes[3],m,id(),0,0,0,1,-3);gVkOut->mcR[3]=(float)H;}return;}
  if(!gBgP){
   const char*vs="#version 300 es\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.0-1.0,0.0,1.0);}";
   const char*fs="#version 300 es\nprecision highp float;uniform float uH;out vec4 o;\nvoid main(){float t=clamp(gl_FragCoord.y/uH,0.0,1.0);vec3 top=vec3(.49,.56,.64),bot=vec3(.065,.07,.08);o=vec4(mix(bot,top,t),1.0);}";
@@ -1624,8 +1719,8 @@ void drawBg(){
 void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
  glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);drawBg();
- glEnable(GL_DEPTH_TEST);
- gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);}
+ glEnable(GL_DEPTH_TEST);gVkDepth=true;
+ gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);vkSetCam(e_,r_,u_,f_,gMatcap?1.f:0.f);}
  if(!gCapNow)draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
  auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
  ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
@@ -1633,7 +1728,7 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
   draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
  gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
- glDisable(GL_DEPTH_TEST);
+ glDisable(GL_DEPTH_TEST);gVkDepth=false;
  if(gBones&&!gCapNow)drawBones();
  if(!gMcFinal&&!gCapNow)drawCtrls();
  }
@@ -1791,11 +1886,11 @@ else{gTrack={0,0,0,0};}
              panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
              if(gFiles.empty()){text((gPick==0?"Nenhum .gltf/.glb/.zip em Download.":"Nenhum .mad em Download."),px2+2*u,py2+8.1f*u-2.5f*tp2,tp2,.9f,.9f,.9f);
               text("Ative Acesso a todos os arquivos nas permissoes do app.",px2+2*u,py2+8.1f*u+rh2-2.5f*tp2,tp2*.9f,.6f,.6f,.65f);}
-             else{glEnable(GL_SCISSOR_TEST);glScissor((GLint)gListR.x,(GLint)(H-gListR.y-gListR.h),(GLsizei)gListR.w,(GLsizei)gListR.h);
+             else{glEnable(GL_SCISSOR_TEST);glScissor((GLint)gListR.x,(GLint)(H-gListR.y-gListR.h),(GLsizei)gListR.w,(GLsizei)gListR.h);vkScissor(gListR.x,gListR.y,gListR.w,gListR.h);
               for(int i=0;i<n;i++){float yy=gListR.y+i*rh2-gScrollPx;if(yy+rh2<gListR.y||yy>gListR.y+lh)continue;rect(px2+1*u,yy,pw2-2*u-1.6f*u,rh2-.5f*u,.24f,.24f,.27f,1,.7f*u);
                std::string nf=gFiles[i];size_t s1=nf.rfind('/');if(s1!=std::string::npos&&s1>0){size_t s2=nf.rfind('/',s1-1);nf=nf.substr(s2==std::string::npos?0:s2+1);}if(nf.size()>34)nf=nf.substr(nf.size()-34);
                text(nf.c_str(),px2+2.5f*u,yy+rh2/2-.25f*u-2.5f*tp2,tp2,.95f,.95f,.95f);}
-              glDisable(GL_SCISSOR_TEST);
+              glDisable(GL_SCISSOR_TEST);vkScissor(0,0,0,0);
               if(maxs>0){float bh_=lh*lh/tot,by_=gListR.y+(lh-bh_)*(gScrollPx/maxs);rect(px2+pw2-1.8f*u,by_,.6f*u,bh_,.6f,.6f,.65f,1,.3f*u);}}
              gBtn.push_back({{px2,py2,pw2,ph2},299});}
 if(gSizeOpen){ // caixa "Tamanho da render" (teclado do Android)
@@ -2059,8 +2154,8 @@ void api_init(const char *dir, int w, int h) {
     }
     W = w; H = h;
     gBgP = 0;
-    initGL();
-    gzInit();
+    if (gVK) initVK();
+    else { initGL(); gzInit(); }
     ready = true;
     gLastT = engNow();
 }
@@ -2068,7 +2163,7 @@ void api_init(const char *dir, int w, int h) {
 void api_resize(int w, int h) {
     if (!ready || (w == W && h == H)) return;
     W = w; H = h;
-    initPost();
+    if (!gVK) initPost();
 }
 
 static bool animRange(float &t0, float &t1);   // definida mais abaixo
@@ -2256,6 +2351,29 @@ void api_frame() {
     glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 }
 
+void api_vk_frame(EngVkFrame &out, int w, int h) {
+    if (!ready) return;
+    W = w; H = h;
+    out.scene.clear(); out.ui.clear(); out.text.clear();
+    gVkOut = &out;
+    gCapNow = false;
+    double t = engNow(); float dt = (float)(t - gLastT); gLastT = t;
+    gDt = dt; gToastT -= dt; gFAcc += dt; gFN++;
+    if (gFAcc >= .5f) { gFps = gFN / gFAcc; gFAcc = 0; gFN = 0; }
+    for (float &fl : gFlash) if (fl > 0) fl -= dt;
+    if (playing) {
+        tm += dt * gPlayDir; float a_ = gFS / 24.f, b_ = gFE / 24.f;
+        if (tm > b_) tm = a_;
+        if (tm < a_) tm = b_;
+        applyAnim();
+    }
+    gVkSeg = 0; gVkDepth = false;
+    frame();
+    gVkSeg = 1; gVkDepth = false;
+    frameUI();
+    gVkOut = nullptr;
+}
+
 void api_frame_ui() {
     if (!ready) return;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -2299,6 +2417,9 @@ void eng_init(const char *dir, int w, int h) { eng::api_init(dir, w, h); }
 void eng_resize(int w, int h) { eng::api_resize(w, h); }
 void eng_event(const EngEvent &e) { eng::api_event(e); }
 void eng_frame() { eng::api_frame(); }
+void eng_set_vk(bool on) { eng::gVK = on; }
+void eng_vk_frame(EngVkFrame &out, int w, int h) { eng::api_vk_frame(out, w, h); }
+const unsigned char *eng_vk_font(int &w, int &h) { w = h = 512; return eng::gAtlas.size() == 512u * 512u ? eng::gAtlas.data() : nullptr; }
 void eng_gl_lost() { eng::api_gl_lost(); }
 bool eng_dialog_open() { return eng::api_dialog_open(); }
 void eng_timeline(EngTimeline &t) { eng::api_timeline(t); }

@@ -51,6 +51,34 @@ struct EngTimeline {
     int selObj = -1;
 };
 
+// ---- backend Vulkan: o motor grava as ordens de desenho e o renderizador Vulkan as executa ----
+struct EngVkOp {
+    int kind = 0;   // 0 malha, 1 texto, 2 recorte (scissor)
+    int depth = 0;  // 1 = teste de profundidade ligado
+    int lines = 0;  // 1 = lista de linhas (senao triangulos)
+    int vid = 0;    // malha: id estavel (muda so se a malha for recriada)
+    int n = 0;      // malha: numero de vertices
+    const float *cpu = nullptr;  // malha: vertices (posicao + normal, 6 floats cada); valido ate o fim do quadro
+    float mvp[16] = {};
+    float mod[16] = {};
+    float col[4] = {};
+    float a[4] = {};  // a[0] = lit (>0.5 sombreado, 0 chapado, -1 retangulo, -2 losango, -3 fundo), a[1..3] = escala do retangulo
+    float b[4] = {};  // b[0] = metal, b[1] = rugosidade
+    float tl[4] = {};
+    int tfirst = 0, tcount = 0;  // texto: faixa de vertices (4 floats cada) em EngVkFrame::text
+    float sc[4] = {};            // recorte: x, y, w, h em px (w <= 0 desliga)
+};
+struct EngVkFrame {
+    std::vector<EngVkOp> scene;  // 3D (por baixo do QML)
+    std::vector<EngVkOp> ui;     // interface do motor (por cima do QML)
+    std::vector<float> text;     // vertices de texto: x, y, u, v
+    float cam[4] = {};           // xyz = posicao da camera, w = 1 se matcap
+    float mcR[4] = {}, mcU[4] = {}, mcB[4] = {};  // base do matcap (w de mcR = altura da tela em px)
+};
+void eng_set_vk(bool on);                                // liga o modo Vulkan (antes de eng_init)
+void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
+const unsigned char *eng_vk_font(int &w, int &h);        // atlas da fonte (R8), ou nullptr
+
 // ---- motor (engine.cpp) - tudo isto roda na thread de render ----
 void eng_set_android(JavaVM *vm, jobject activity);
 bool eng_ready();

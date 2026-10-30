@@ -29,6 +29,7 @@
 
 static QPointer<EngineView> s_instance;
 
+
 static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
     return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
            a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
@@ -66,26 +67,51 @@ void EngineView::vulkanPrepare() {
 #if QT_CONFIG(vulkan)
     QQuickWindow *w = window();
     if (!m_vulkan || !w) return;
-    if (!m_vkr) m_vkr = new VkRend;
-    m_vkr->prepare(w);
-#endif
-}
-
-void EngineView::vulkanFrame(QQuickWindow *w) {
     vulkanInfo(w);
-#if QT_CONFIG(vulkan)
+    const int pw = m_pw.load(), ph = m_ph.load();
+    if (pw < 2 || ph < 2) return;
     if (!m_vkr) m_vkr = new VkRend;
-    VkViewParams v;
-    v.yaw = m_vkYaw.load();
-    v.pitch = m_vkPitch.load();
-    v.dist = m_vkDist.load();
-    m_vkr->draw(w, m_pw.load(), m_ph.load(), v);
+
+    // o motor roda aqui, fora do passe de renderizacao: so grava ordens de desenho (sem OpenGL)
+    if (!m_vkEngine) {
+        eng_set_vk(true);
+        m_vkEngine = true;
+    }
+    if (!eng_ready()) eng_init(m_dir.c_str(), pw, ph);
+    else eng_resize(pw, ph);
+
+    std::vector<EngEvent> evs;
+    {
+        QMutexLocker l(&m_mutex);
+        evs.swap(m_queue);
+    }
+    for (const EngEvent &e : evs) eng_event(e);
+
+    eng_vk_frame(m_vkFrame, pw, ph);
+
+    std::vector<float> r;
+    eng_ui_rects(r);
+    {
+        QMutexLocker l(&m_rectMutex);
+        m_rects.swap(r);
+    }
+
+    EngTimeline t;
+    eng_timeline(t);
+    if (!sameTl(t, m_lastTl)) {
+        m_lastTl = t;
+        QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
+    }
+
+    m_vkr->prepare(w);
+    if (m_vkr->ready()) m_vkr->upload(w, m_vkFrame);
     if (m_vkr->failed() && !m_vkFailMsg) {
         m_vkFailMsg = true;
+        const QString why = QString::fromUtf8(m_vkr->why());
         QMetaObject::invokeMethod(
             this,
-            [this] {
-                m_vkInfo += QStringLiteral(" | viewport falhou");
+            [this, why] {
+                m_vkInfo += QStringLiteral(" | falha: ") + why;
                 emit vkInfoChanged();
             },
             Qt::QueuedConnection);
@@ -193,11 +219,13 @@ void EngineView::updateSize() {
 void EngineView::renderEngine() {
     QQuickWindow *w = window();
     if (!w) return;
+    const int pw = m_pw.load(), ph = m_ph.load();
     if (m_vulkan) {
-        vulkanFrame(w);
+#if QT_CONFIG(vulkan)
+        if (m_vkr && m_vkr->ready() && pw >= 2 && ph >= 2) m_vkr->drawScene(w, pw, ph, m_vkFrame);
+#endif
         return;
     }
-    const int pw = m_pw.load(), ph = m_ph.load();
     if (pw < 2 || ph < 2) return;
 
     w->beginExternalCommands();
@@ -228,7 +256,13 @@ void EngineView::renderEngine() {
 // por isso aparece por cima da timeline e das barras em QML.
 void EngineView::renderEngineUi() {
     QQuickWindow *w = window();
-    if (m_vulkan || !w || !eng_ready()) return;
+    if (m_vulkan) {
+#if QT_CONFIG(vulkan)
+        if (w && m_vkr && m_vkr->ready()) m_vkr->drawUi(w, m_pw.load(), m_ph.load(), m_vkFrame);
+#endif
+        return;
+    }
+    if (!w || !eng_ready()) return;
     w->beginExternalCommands();
     eng_frame_ui();
     w->endExternalCommands();
@@ -292,6 +326,7 @@ void EngineView::glLost() {
 #if QT_CONFIG(vulkan)
         delete m_vkr;
         m_vkr = nullptr;
+        m_vkFailMsg = false;
 #endif
     } else {
         eng_gl_lost();
@@ -302,36 +337,6 @@ void EngineView::glLost() {
 // Entrada (thread da interface) -> fila -> thread de render
 // ---------------------------------------------------------------------------
 void EngineView::push(const EngEvent &e) {
-    if (m_vulkan) {
-        // sem motor ainda no Vulkan: os toques so movem a camera do viewport
-        if (e.kind == 0) {
-            const float dx2 = e.x[0] - e.x[1], dy2 = e.y[0] - e.y[1];
-            const float d2 = std::sqrt(dx2 * dx2 + dy2 * dy2);
-            if (e.action == 0) {
-                m_vkLX = e.x[0];
-                m_vkLY = e.y[0];
-            } else if (e.action == 5) {
-                m_vkLD = e.n >= 2 ? d2 : 0.f;
-            } else if (e.action == 6) {
-                m_vkLX = -1.f;  // sobrou um dedo: recomeca a partir da posicao dele
-            } else if (e.action == 2) {
-                if (e.n >= 2) {
-                    if (m_vkLD > 1.f && d2 > 1.f) m_vkDist = std::clamp(m_vkDist.load() * m_vkLD / d2, 2.f, 80.f);
-                    m_vkLD = d2;
-                } else if (m_vkLX < 0.f) {
-                    m_vkLX = e.x[0];
-                    m_vkLY = e.y[0];
-                } else {
-                    m_vkYaw = m_vkYaw.load() - (e.x[0] - m_vkLX) * 0.006f;
-                    m_vkPitch = std::clamp(m_vkPitch.load() + (e.y[0] - m_vkLY) * 0.006f, 0.05f, 1.5f);
-                    m_vkLX = e.x[0];
-                    m_vkLY = e.y[0];
-                }
-            }
-            if (window()) window()->update();
-        }
-        return;
-    }
     QMutexLocker l(&m_mutex);
     if (m_queue.size() < 4096) m_queue.push_back(e);
 }
