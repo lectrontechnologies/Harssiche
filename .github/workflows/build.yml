@@ -2096,6 +2096,34 @@ jobs:
               int selObj = -1;
           };
 
+          // ---- backend Vulkan: o motor grava as ordens de desenho e o renderizador Vulkan as executa ----
+          struct EngVkOp {
+              int kind = 0;   // 0 malha, 1 texto, 2 recorte (scissor)
+              int depth = 0;  // 1 = teste de profundidade ligado
+              int lines = 0;  // 1 = lista de linhas (senao triangulos)
+              int vid = 0;    // malha: id estavel (muda so se a malha for recriada)
+              int n = 0;      // malha: numero de vertices
+              const float *cpu = nullptr;  // malha: vertices (posicao + normal, 6 floats cada); valido ate o fim do quadro
+              float mvp[16] = {};
+              float mod[16] = {};
+              float col[4] = {};
+              float a[4] = {};  // a[0] = lit (>0.5 sombreado, 0 chapado, -1 retangulo, -2 losango, -3 fundo), a[1..3] = escala do retangulo
+              float b[4] = {};  // b[0] = metal, b[1] = rugosidade
+              float tl[4] = {};
+              int tfirst = 0, tcount = 0;  // texto: faixa de vertices (4 floats cada) em EngVkFrame::text
+              float sc[4] = {};            // recorte: x, y, w, h em px (w <= 0 desliga)
+          };
+          struct EngVkFrame {
+              std::vector<EngVkOp> scene;  // 3D (por baixo do QML)
+              std::vector<EngVkOp> ui;     // interface do motor (por cima do QML)
+              std::vector<float> text;     // vertices de texto: x, y, u, v
+              float cam[4] = {};           // xyz = posicao da camera, w = 1 se matcap
+              float mcR[4] = {}, mcU[4] = {}, mcB[4] = {};  // base do matcap (w de mcR = altura da tela em px)
+          };
+          void eng_set_vk(bool on);                                // liga o modo Vulkan (antes de eng_init)
+          void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
+          const unsigned char *eng_vk_font(int &w, int &h);        // atlas da fonte (R8), ou nullptr
+
           // ---- motor (engine.cpp) - tudo isto roda na thread de render ----
           void eng_set_android(JavaVM *vm, jobject activity);
           bool eng_ready();
@@ -2173,6 +2201,7 @@ jobs:
           #include <vector>
 
           #include "engine_api.h"
+          #include "vkrender.h"
 
           class QQuickWindow;
           class VkRend;
@@ -2279,8 +2308,7 @@ jobs:
               void renderEngineUi();  // thread de render, depois do Qt Quick (interface do motor)
               void glLost();
               void vulkanInfo(QQuickWindow *w);   // thread de render, backend Vulkan: le as capacidades uma vez
-              void vulkanFrame(QQuickWindow *w);  // thread de render, backend Vulkan: desenha o viewport
-              void vulkanPrepare();               // thread de render (antes do passe): cria o pipeline Vulkan
+              void vulkanPrepare();               // thread de render (antes do passe): roda o motor, grava as ordens e envia para a GPU
               void updateSize();
               void applyTimeline(const EngTimeline &t);
               void push(const EngEvent &e);
@@ -2293,8 +2321,8 @@ jobs:
               bool m_vkFailMsg = false;
               QString m_vkInfo;
               VkRend *m_vkr = nullptr;                                 // so na thread de render
-              std::atomic<float> m_vkYaw{0.9f}, m_vkPitch{0.5f}, m_vkDist{16.f};  // camera do viewport Vulkan
-              float m_vkLX = 0.f, m_vkLY = 0.f, m_vkLD = 0.f;           // ultimo toque (thread da interface)
+              EngVkFrame m_vkFrame;                                    // ordens de desenho do quadro (thread de render)
+              bool m_vkEngine = false;                                 // motor ja iniciado em modo Vulkan
               EngTimeline m_tl;      // thread da interface
               EngTimeline m_lastTl;  // thread de render
               QVariantList m_keys;
@@ -2342,6 +2370,7 @@ jobs:
 
           static QPointer<EngineView> s_instance;
 
+
           static bool sameTl(const EngTimeline &a, const EngTimeline &b) {
               return a.frame == b.frame && a.fs == b.fs && a.fe == b.fe && a.vs == b.vs && a.ve == b.ve &&
                      a.playing == b.playing && a.dir == b.dir && a.visible == b.visible && a.hasSel == b.hasSel &&
@@ -2379,26 +2408,51 @@ jobs:
           #if QT_CONFIG(vulkan)
               QQuickWindow *w = window();
               if (!m_vulkan || !w) return;
-              if (!m_vkr) m_vkr = new VkRend;
-              m_vkr->prepare(w);
-          #endif
-          }
-
-          void EngineView::vulkanFrame(QQuickWindow *w) {
               vulkanInfo(w);
-          #if QT_CONFIG(vulkan)
+              const int pw = m_pw.load(), ph = m_ph.load();
+              if (pw < 2 || ph < 2) return;
               if (!m_vkr) m_vkr = new VkRend;
-              VkViewParams v;
-              v.yaw = m_vkYaw.load();
-              v.pitch = m_vkPitch.load();
-              v.dist = m_vkDist.load();
-              m_vkr->draw(w, m_pw.load(), m_ph.load(), v);
+
+              // o motor roda aqui, fora do passe de renderizacao: so grava ordens de desenho (sem OpenGL)
+              if (!m_vkEngine) {
+                  eng_set_vk(true);
+                  m_vkEngine = true;
+              }
+              if (!eng_ready()) eng_init(m_dir.c_str(), pw, ph);
+              else eng_resize(pw, ph);
+
+              std::vector<EngEvent> evs;
+              {
+                  QMutexLocker l(&m_mutex);
+                  evs.swap(m_queue);
+              }
+              for (const EngEvent &e : evs) eng_event(e);
+
+              eng_vk_frame(m_vkFrame, pw, ph);
+
+              std::vector<float> r;
+              eng_ui_rects(r);
+              {
+                  QMutexLocker l(&m_rectMutex);
+                  m_rects.swap(r);
+              }
+
+              EngTimeline t;
+              eng_timeline(t);
+              if (!sameTl(t, m_lastTl)) {
+                  m_lastTl = t;
+                  QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
+              }
+
+              m_vkr->prepare(w);
+              if (m_vkr->ready()) m_vkr->upload(w, m_vkFrame);
               if (m_vkr->failed() && !m_vkFailMsg) {
                   m_vkFailMsg = true;
+                  const QString why = QString::fromUtf8(m_vkr->why());
                   QMetaObject::invokeMethod(
                       this,
-                      [this] {
-                          m_vkInfo += QStringLiteral(" | viewport falhou");
+                      [this, why] {
+                          m_vkInfo += QStringLiteral(" | falha: ") + why;
                           emit vkInfoChanged();
                       },
                       Qt::QueuedConnection);
@@ -2506,11 +2560,13 @@ jobs:
           void EngineView::renderEngine() {
               QQuickWindow *w = window();
               if (!w) return;
+              const int pw = m_pw.load(), ph = m_ph.load();
               if (m_vulkan) {
-                  vulkanFrame(w);
+          #if QT_CONFIG(vulkan)
+                  if (m_vkr && m_vkr->ready() && pw >= 2 && ph >= 2) m_vkr->drawScene(w, pw, ph, m_vkFrame);
+          #endif
                   return;
               }
-              const int pw = m_pw.load(), ph = m_ph.load();
               if (pw < 2 || ph < 2) return;
 
               w->beginExternalCommands();
@@ -2541,7 +2597,13 @@ jobs:
           // por isso aparece por cima da timeline e das barras em QML.
           void EngineView::renderEngineUi() {
               QQuickWindow *w = window();
-              if (m_vulkan || !w || !eng_ready()) return;
+              if (m_vulkan) {
+          #if QT_CONFIG(vulkan)
+                  if (w && m_vkr && m_vkr->ready()) m_vkr->drawUi(w, m_pw.load(), m_ph.load(), m_vkFrame);
+          #endif
+                  return;
+              }
+              if (!w || !eng_ready()) return;
               w->beginExternalCommands();
               eng_frame_ui();
               w->endExternalCommands();
@@ -2605,6 +2667,7 @@ jobs:
           #if QT_CONFIG(vulkan)
                   delete m_vkr;
                   m_vkr = nullptr;
+                  m_vkFailMsg = false;
           #endif
               } else {
                   eng_gl_lost();
@@ -2615,36 +2678,6 @@ jobs:
           // Entrada (thread da interface) -> fila -> thread de render
           // ---------------------------------------------------------------------------
           void EngineView::push(const EngEvent &e) {
-              if (m_vulkan) {
-                  // sem motor ainda no Vulkan: os toques so movem a camera do viewport
-                  if (e.kind == 0) {
-                      const float dx2 = e.x[0] - e.x[1], dy2 = e.y[0] - e.y[1];
-                      const float d2 = std::sqrt(dx2 * dx2 + dy2 * dy2);
-                      if (e.action == 0) {
-                          m_vkLX = e.x[0];
-                          m_vkLY = e.y[0];
-                      } else if (e.action == 5) {
-                          m_vkLD = e.n >= 2 ? d2 : 0.f;
-                      } else if (e.action == 6) {
-                          m_vkLX = -1.f;  // sobrou um dedo: recomeca a partir da posicao dele
-                      } else if (e.action == 2) {
-                          if (e.n >= 2) {
-                              if (m_vkLD > 1.f && d2 > 1.f) m_vkDist = std::clamp(m_vkDist.load() * m_vkLD / d2, 2.f, 80.f);
-                              m_vkLD = d2;
-                          } else if (m_vkLX < 0.f) {
-                              m_vkLX = e.x[0];
-                              m_vkLY = e.y[0];
-                          } else {
-                              m_vkYaw = m_vkYaw.load() - (e.x[0] - m_vkLX) * 0.006f;
-                              m_vkPitch = std::clamp(m_vkPitch.load() + (e.y[0] - m_vkLY) * 0.006f, 0.05f, 1.5f);
-                              m_vkLX = e.x[0];
-                              m_vkLY = e.y[0];
-                          }
-                      }
-                      if (window()) window()->update();
-                  }
-                  return;
-              }
               QMutexLocker l(&m_mutex);
               if (m_queue.size() < 4096) m_queue.push_back(e);
           }
@@ -2851,7 +2884,84 @@ jobs:
           #include "imgui.h"
           #include "imgui_impl_opengl3.h"
           #include "ImGuizmo.h"
+          // ---- backend Vulkan: com gVK ligado o motor nao toca em GL (toda chamada GL vira no-op) ----
+          #include <type_traits>
+          namespace eng { extern bool gVK; }
+          #define glActiveTexture(...) (::eng::gVK ? decltype(::glActiveTexture(__VA_ARGS__))() : ::glActiveTexture(__VA_ARGS__))
+          #define glAttachShader(...) (::eng::gVK ? decltype(::glAttachShader(__VA_ARGS__))() : ::glAttachShader(__VA_ARGS__))
+          #define glBindBuffer(...) (::eng::gVK ? decltype(::glBindBuffer(__VA_ARGS__))() : ::glBindBuffer(__VA_ARGS__))
+          #define glBindBufferBase(...) (::eng::gVK ? decltype(::glBindBufferBase(__VA_ARGS__))() : ::glBindBufferBase(__VA_ARGS__))
+          #define glBindFramebuffer(...) (::eng::gVK ? decltype(::glBindFramebuffer(__VA_ARGS__))() : ::glBindFramebuffer(__VA_ARGS__))
+          #define glBindImageTexture(...) (::eng::gVK ? decltype(::glBindImageTexture(__VA_ARGS__))() : ::glBindImageTexture(__VA_ARGS__))
+          #define glBindRenderbuffer(...) (::eng::gVK ? decltype(::glBindRenderbuffer(__VA_ARGS__))() : ::glBindRenderbuffer(__VA_ARGS__))
+          #define glBindTexture(...) (::eng::gVK ? decltype(::glBindTexture(__VA_ARGS__))() : ::glBindTexture(__VA_ARGS__))
+          #define glBindVertexArray(...) (::eng::gVK ? decltype(::glBindVertexArray(__VA_ARGS__))() : ::glBindVertexArray(__VA_ARGS__))
+          #define glBlendEquation(...) (::eng::gVK ? decltype(::glBlendEquation(__VA_ARGS__))() : ::glBlendEquation(__VA_ARGS__))
+          #define glBlendFunc(...) (::eng::gVK ? decltype(::glBlendFunc(__VA_ARGS__))() : ::glBlendFunc(__VA_ARGS__))
+          #define glBlitFramebuffer(...) (::eng::gVK ? decltype(::glBlitFramebuffer(__VA_ARGS__))() : ::glBlitFramebuffer(__VA_ARGS__))
+          #define glBufferData(...) (::eng::gVK ? decltype(::glBufferData(__VA_ARGS__))() : ::glBufferData(__VA_ARGS__))
+          #define glBufferSubData(...) (::eng::gVK ? decltype(::glBufferSubData(__VA_ARGS__))() : ::glBufferSubData(__VA_ARGS__))
+          #define glCheckFramebufferStatus(...) (::eng::gVK ? decltype(::glCheckFramebufferStatus(__VA_ARGS__))() : ::glCheckFramebufferStatus(__VA_ARGS__))
+          #define glClear(...) (::eng::gVK ? decltype(::glClear(__VA_ARGS__))() : ::glClear(__VA_ARGS__))
+          #define glClearColor(...) (::eng::gVK ? decltype(::glClearColor(__VA_ARGS__))() : ::glClearColor(__VA_ARGS__))
+          #define glClearDepthf(...) (::eng::gVK ? decltype(::glClearDepthf(__VA_ARGS__))() : ::glClearDepthf(__VA_ARGS__))
+          #define glClearStencil(...) (::eng::gVK ? decltype(::glClearStencil(__VA_ARGS__))() : ::glClearStencil(__VA_ARGS__))
+          #define glColorMask(...) (::eng::gVK ? decltype(::glColorMask(__VA_ARGS__))() : ::glColorMask(__VA_ARGS__))
+          #define glCompileShader(...) (::eng::gVK ? decltype(::glCompileShader(__VA_ARGS__))() : ::glCompileShader(__VA_ARGS__))
+          #define glCreateProgram(...) (::eng::gVK ? decltype(::glCreateProgram(__VA_ARGS__))() : ::glCreateProgram(__VA_ARGS__))
+          #define glCreateShader(...) (::eng::gVK ? decltype(::glCreateShader(__VA_ARGS__))() : ::glCreateShader(__VA_ARGS__))
+          #define glDeleteBuffers(...) (::eng::gVK ? decltype(::glDeleteBuffers(__VA_ARGS__))() : ::glDeleteBuffers(__VA_ARGS__))
+          #define glDeleteFramebuffers(...) (::eng::gVK ? decltype(::glDeleteFramebuffers(__VA_ARGS__))() : ::glDeleteFramebuffers(__VA_ARGS__))
+          #define glDeleteProgram(...) (::eng::gVK ? decltype(::glDeleteProgram(__VA_ARGS__))() : ::glDeleteProgram(__VA_ARGS__))
+          #define glDeleteTextures(...) (::eng::gVK ? decltype(::glDeleteTextures(__VA_ARGS__))() : ::glDeleteTextures(__VA_ARGS__))
+          #define glDeleteVertexArrays(...) (::eng::gVK ? decltype(::glDeleteVertexArrays(__VA_ARGS__))() : ::glDeleteVertexArrays(__VA_ARGS__))
+          #define glDepthFunc(...) (::eng::gVK ? decltype(::glDepthFunc(__VA_ARGS__))() : ::glDepthFunc(__VA_ARGS__))
+          #define glDepthMask(...) (::eng::gVK ? decltype(::glDepthMask(__VA_ARGS__))() : ::glDepthMask(__VA_ARGS__))
+          #define glDisable(...) (::eng::gVK ? decltype(::glDisable(__VA_ARGS__))() : ::glDisable(__VA_ARGS__))
+          #define glDispatchCompute(...) (::eng::gVK ? decltype(::glDispatchCompute(__VA_ARGS__))() : ::glDispatchCompute(__VA_ARGS__))
+          #define glDrawArrays(...) (::eng::gVK ? decltype(::glDrawArrays(__VA_ARGS__))() : ::glDrawArrays(__VA_ARGS__))
+          #define glEnable(...) (::eng::gVK ? decltype(::glEnable(__VA_ARGS__))() : ::glEnable(__VA_ARGS__))
+          #define glEnableVertexAttribArray(...) (::eng::gVK ? decltype(::glEnableVertexAttribArray(__VA_ARGS__))() : ::glEnableVertexAttribArray(__VA_ARGS__))
+          #define glFramebufferRenderbuffer(...) (::eng::gVK ? decltype(::glFramebufferRenderbuffer(__VA_ARGS__))() : ::glFramebufferRenderbuffer(__VA_ARGS__))
+          #define glFramebufferTexture2D(...) (::eng::gVK ? decltype(::glFramebufferTexture2D(__VA_ARGS__))() : ::glFramebufferTexture2D(__VA_ARGS__))
+          #define glGenBuffers(...) (::eng::gVK ? decltype(::glGenBuffers(__VA_ARGS__))() : ::glGenBuffers(__VA_ARGS__))
+          #define glGenFramebuffers(...) (::eng::gVK ? decltype(::glGenFramebuffers(__VA_ARGS__))() : ::glGenFramebuffers(__VA_ARGS__))
+          #define glGenRenderbuffers(...) (::eng::gVK ? decltype(::glGenRenderbuffers(__VA_ARGS__))() : ::glGenRenderbuffers(__VA_ARGS__))
+          #define glGenTextures(...) (::eng::gVK ? decltype(::glGenTextures(__VA_ARGS__))() : ::glGenTextures(__VA_ARGS__))
+          #define glGenVertexArrays(...) (::eng::gVK ? decltype(::glGenVertexArrays(__VA_ARGS__))() : ::glGenVertexArrays(__VA_ARGS__))
+          #define glGenerateMipmap(...) (::eng::gVK ? decltype(::glGenerateMipmap(__VA_ARGS__))() : ::glGenerateMipmap(__VA_ARGS__))
+          #define glGetIntegerv(...) (::eng::gVK ? decltype(::glGetIntegerv(__VA_ARGS__))() : ::glGetIntegerv(__VA_ARGS__))
+          #define glGetProgramInfoLog(...) (::eng::gVK ? decltype(::glGetProgramInfoLog(__VA_ARGS__))() : ::glGetProgramInfoLog(__VA_ARGS__))
+          #define glGetProgramiv(...) (::eng::gVK ? decltype(::glGetProgramiv(__VA_ARGS__))() : ::glGetProgramiv(__VA_ARGS__))
+          #define glGetShaderInfoLog(...) (::eng::gVK ? decltype(::glGetShaderInfoLog(__VA_ARGS__))() : ::glGetShaderInfoLog(__VA_ARGS__))
+          #define glGetShaderiv(...) (::eng::gVK ? decltype(::glGetShaderiv(__VA_ARGS__))() : ::glGetShaderiv(__VA_ARGS__))
+          #define glGetUniformLocation(...) (::eng::gVK ? decltype(::glGetUniformLocation(__VA_ARGS__))() : ::glGetUniformLocation(__VA_ARGS__))
+          #define glLinkProgram(...) (::eng::gVK ? decltype(::glLinkProgram(__VA_ARGS__))() : ::glLinkProgram(__VA_ARGS__))
+          #define glMemoryBarrier(...) (::eng::gVK ? decltype(::glMemoryBarrier(__VA_ARGS__))() : ::glMemoryBarrier(__VA_ARGS__))
+          #define glPixelStorei(...) (::eng::gVK ? decltype(::glPixelStorei(__VA_ARGS__))() : ::glPixelStorei(__VA_ARGS__))
+          #define glReadPixels(...) (::eng::gVK ? decltype(::glReadPixels(__VA_ARGS__))() : ::glReadPixels(__VA_ARGS__))
+          #define glRenderbufferStorageMultisample(...) (::eng::gVK ? decltype(::glRenderbufferStorageMultisample(__VA_ARGS__))() : ::glRenderbufferStorageMultisample(__VA_ARGS__))
+          #define glScissor(...) (::eng::gVK ? decltype(::glScissor(__VA_ARGS__))() : ::glScissor(__VA_ARGS__))
+          #define glShaderSource(...) (::eng::gVK ? decltype(::glShaderSource(__VA_ARGS__))() : ::glShaderSource(__VA_ARGS__))
+          #define glTF(...) (::eng::gVK ? decltype(::glTF(__VA_ARGS__))() : ::glTF(__VA_ARGS__))
+          #define glTexImage2D(...) (::eng::gVK ? decltype(::glTexImage2D(__VA_ARGS__))() : ::glTexImage2D(__VA_ARGS__))
+          #define glTexParameteri(...) (::eng::gVK ? decltype(::glTexParameteri(__VA_ARGS__))() : ::glTexParameteri(__VA_ARGS__))
+          #define glTexStorage2D(...) (::eng::gVK ? decltype(::glTexStorage2D(__VA_ARGS__))() : ::glTexStorage2D(__VA_ARGS__))
+          #define glTexStorage3D(...) (::eng::gVK ? decltype(::glTexStorage3D(__VA_ARGS__))() : ::glTexStorage3D(__VA_ARGS__))
+          #define glTexSubImage3D(...) (::eng::gVK ? decltype(::glTexSubImage3D(__VA_ARGS__))() : ::glTexSubImage3D(__VA_ARGS__))
+          #define glUniform1f(...) (::eng::gVK ? decltype(::glUniform1f(__VA_ARGS__))() : ::glUniform1f(__VA_ARGS__))
+          #define glUniform1i(...) (::eng::gVK ? decltype(::glUniform1i(__VA_ARGS__))() : ::glUniform1i(__VA_ARGS__))
+          #define glUniform2f(...) (::eng::gVK ? decltype(::glUniform2f(__VA_ARGS__))() : ::glUniform2f(__VA_ARGS__))
+          #define glUniform2i(...) (::eng::gVK ? decltype(::glUniform2i(__VA_ARGS__))() : ::glUniform2i(__VA_ARGS__))
+          #define glUniform3f(...) (::eng::gVK ? decltype(::glUniform3f(__VA_ARGS__))() : ::glUniform3f(__VA_ARGS__))
+          #define glUniform4f(...) (::eng::gVK ? decltype(::glUniform4f(__VA_ARGS__))() : ::glUniform4f(__VA_ARGS__))
+          #define glUniform4fv(...) (::eng::gVK ? decltype(::glUniform4fv(__VA_ARGS__))() : ::glUniform4fv(__VA_ARGS__))
+          #define glUniformMatrix4fv(...) (::eng::gVK ? decltype(::glUniformMatrix4fv(__VA_ARGS__))() : ::glUniformMatrix4fv(__VA_ARGS__))
+          #define glUseProgram(...) (::eng::gVK ? decltype(::glUseProgram(__VA_ARGS__))() : ::glUseProgram(__VA_ARGS__))
+          #define glVertexAttribPointer(...) (::eng::gVK ? decltype(::glVertexAttribPointer(__VA_ARGS__))() : ::glVertexAttribPointer(__VA_ARGS__))
+          #define glViewport(...) (::eng::gVK ? decltype(::glViewport(__VA_ARGS__))() : ::glViewport(__VA_ARGS__))
           namespace eng {
+          bool gVK=false;
           #define PI 3.14159265f
 
           // ---------- matematica ----------
@@ -3048,14 +3158,14 @@ jobs:
             return clamp(c,0.0,1.0);}
            void main(){if(uL<-1.5){vec2 q=(vP.xy-.5)*uS.xy;float dd=(abs(q.x)+abs(q.y)-uS.x*.5)*.7071;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL<0.0){vec2 q=(vP.xy-.5)*uS.xy;vec2 e=abs(q)-uS.xy*.5+uS.z;float dd=length(max(e,0.0))+min(max(e.x,e.y),0.0)-uS.z;o=vec4(uC.rgb,uC.a*clamp(.5-dd,0.0,1.0));return;} if(uL>0.5){if(uTL.w>0.5&&uTL.x>=0.0&&texture(uTex,vec3(vUV,uTL.x)).a<0.5)discard;o=vec4(uMc>0.5?matcap():pbr(),uC.a);return;} o=vec4(uC.rgb,uC.a);})";
           GLint uMcL=-1,uMcRL=-1,uMcUL=-1,uMcBL=-1;GLuint uMVP,uM,uC,uL,uS,uCamL,uMRL,uJL,uSkL,uTLL,uTexL,gProg=0;float gS[3]={1,1,0},gMR[2]={0,.5f},gSk=0,gTL[4]={-1,-1,-1,0};void initText();void initPost();void initMC();void initTexArr();
-          struct Mesh{GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
+          struct Mesh{int vid=0;GLuint vao=0,vbo=0;int n=0;GLenum mode=GL_TRIANGLES;std::vector<float> cpu;float rad=1;GLuint svbo=0;bool skinned=false;std::vector<float> skin;GLuint uvbo=0;std::vector<float> uv;};
           Mesh gBoneWire,gJointRing;
           std::vector<Mesh> meshes(6); // 0 cubo,1 esfera,2 plano,3 quad2D,4 grade,5 osso
           GLuint sh(GLenum t,const char*s){GLuint h=glCreateShader(t);glShaderSource(h,1,&s,0);glCompileShader(h);GLint ok;glGetShaderiv(h,GL_COMPILE_STATUS,&ok);
            if(!ok){char b[512];glGetShaderInfoLog(h,512,0,b);__android_log_print(ANDROID_LOG_ERROR,"NA","%s",b);}return h;}
           void vtx(std::vector<float>&v,V p,V n){v.insert(v.end(),{p.x,p.y,p.z,n.x,n.y,n.z});}
           Mesh upload(const std::vector<float>&v,GLenum mode){
-           Mesh m;m.n=(int)v.size()/6;m.mode=mode;m.cpu=v;
+           Mesh m;m.n=(int)v.size()/6;m.mode=mode;m.cpu=v;{static int seq=0;m.vid=++seq;}
            glGenVertexArrays(1,&m.vao);glGenBuffers(1,&m.vbo);glBindVertexArray(m.vao);glBindBuffer(GL_ARRAY_BUFFER,m.vbo);
            glBufferData(GL_ARRAY_BUFFER,v.size()*4,v.data(),GL_STATIC_DRAW);
            glEnableVertexAttribArray(0);glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,24,(void*)0);
@@ -3104,7 +3214,21 @@ jobs:
            glLinkProgram(p);glUseProgram(p);
            uMVP=glGetUniformLocation(p,"uMVP");uM=glGetUniformLocation(p,"uM");uC=glGetUniformLocation(p,"uC");uL=glGetUniformLocation(p,"uL");uS=glGetUniformLocation(p,"uS");uCamL=glGetUniformLocation(p,"uCam");uMcL=glGetUniformLocation(p,"uMc");uMcRL=glGetUniformLocation(p,"uMcR");uMcUL=glGetUniformLocation(p,"uMcU");uMcBL=glGetUniformLocation(p,"uMcB");uJL=glGetUniformLocation(p,"uJ");uSkL=glGetUniformLocation(p,"uSk");uTLL=glGetUniformLocation(p,"uTL");uTexL=glGetUniformLocation(p,"uTex");glUniform1i(uTexL,1);uMRL=glGetUniformLocation(p,"uMR");
            glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);buildMeshes();for(size_t i=6;i<meshes.size();i++){std::vector<float> c=meshes[i].cpu,sk=meshes[i].skin,uvv=meshes[i].uv;float r=meshes[i].rad;meshes[i]=upload(c,GL_TRIANGLES);meshes[i].rad=r;if(!sk.empty())attachSkin(meshes[i],sk);if(!uvv.empty())attachUV(meshes[i],uvv);}initText();initPost();initMC();initTexArr();}
+
+          // ---------- gravacao de ordens para o backend Vulkan ----------
+          EngVkFrame*gVkOut=nullptr;bool gVkDepth=false;int gVkSeg=0;
+          static void vkPush(EngVkOp&o){if(!gVkOut)return;o.depth=gVkSeg==0&&gVkDepth?1:0;(gVkSeg==0?gVkOut->scene:gVkOut->ui).push_back(o);}
+          void vkRecMesh(const Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
+           if(!gVkOut||m.cpu.empty())return;EngVkOp o;o.kind=0;o.vid=m.vid;o.n=m.n;o.cpu=m.cpu.data();o.lines=m.mode==GL_LINES?1:0;
+           memcpy(o.mvp,mvp.m,64);memcpy(o.mod,mod.m,64);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=a;
+           o.a[0]=lit;o.a[1]=gS[0];o.a[2]=gS[1];o.a[3]=gS[2];o.b[0]=gMR[0];o.b[1]=gMR[1];o.b[2]=gSk;
+           o.tl[0]=gTL[0];o.tl[1]=gTL[1];o.tl[2]=gTL[2];o.tl[3]=gTL[3];vkPush(o);}
+          void vkScissor(float x,float y,float w,float h){if(!gVkOut)return;EngVkOp o;o.kind=2;o.sc[0]=x;o.sc[1]=y;o.sc[2]=w;o.sc[3]=h;vkPush(o);}
+          void vkSetCam(V e,V r,V u,V f,float mc){if(!gVkOut)return;gVkOut->cam[0]=e.x;gVkOut->cam[1]=e.y;gVkOut->cam[2]=e.z;gVkOut->cam[3]=mc;
+           gVkOut->mcR[0]=r.x;gVkOut->mcR[1]=r.y;gVkOut->mcR[2]=r.z;gVkOut->mcU[0]=u.x;gVkOut->mcU[1]=u.y;gVkOut->mcU[2]=u.z;
+           gVkOut->mcB[0]=-f.x;gVkOut->mcB[1]=-f.y;gVkOut->mcB[2]=-f.z;}
           void draw(Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
+           if(gVK){vkRecMesh(m,mvp,mod,r,g,b,a,lit);return;}
            glUniformMatrix4fv(uMVP,1,GL_FALSE,mvp.m);glUniformMatrix4fv(uM,1,GL_FALSE,mod.m);
            glUniform4f(uC,r,g,b,a);glUniform1f(uL,lit);glUniform3f(uS,gS[0],gS[1],gS[2]);glUniform2f(uMRL,gMR[0],gMR[1]);glUniform1f(uSkL,gSk);glUniform4f(uTLL,gTL[0],gTL[1],gTL[2],gTL[3]);glBindVertexArray(m.vao);glDrawArrays(m.mode,0,m.n);}
 
@@ -3153,6 +3277,8 @@ jobs:
            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
            glGenVertexArrays(1,&gTVao);glGenBuffers(1,&gTVbo);glBindVertexArray(gTVao);glBindBuffer(GL_ARRAY_BUFFER,gTVbo);
            glEnableVertexAttribArray(0);glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,16,(void*)0);}
+          void initVK(){ // backend Vulkan: so dados da CPU (malhas e fonte); o desenho e do renderizador Vulkan
+           buildMeshes();static bool tried=false;if(!tried){tried=true;loadFont();}gTex=gAtlas.empty()?0:1;}
           static int u8next(const char*&s){int c=(unsigned char)*s++;if(c<0x80)return c;if(c>=0xC0&&c<0xE0&&(((unsigned char)*s)&0xC0)==0x80){int c2=(unsigned char)*s++;return((c&0x1F)<<6)|(c2&0x3F);}return 0;}
           static int u8fold(int c){if(c<128||gHi)return c; // sem glifos acentuados: usa a letra base
            static const int F[36]={0xE1,0xE0,0xE2,0xE3,0xE4,0xC1,0xC0,0xC2,0xC3,0xC4,0xE9,0xE8,0xEA,0xEB,0xC9,0xC8,0xCA,0xED,0xEC,0xEE,0xCD,0xF3,0xF2,0xF4,0xF5,0xF6,0xD3,0xD4,0xD5,0xFA,0xF9,0xFB,0xFC,0xDA,0xE7,0xC7};
@@ -3165,6 +3291,7 @@ jobs:
             float x0=x+q.x0*sc,x1=x+q.x1*sc,y0=by+q.y0*sc,y1=by+q.y1*sc;
             v.insert(v.end(),{x0,y0,q.s0,q.t0,x1,y0,q.s1,q.t0,x1,y1,q.s1,q.t1,x0,y0,q.s0,q.t0,x1,y1,q.s1,q.t1,x0,y1,q.s0,q.t1});x+=xp*sc;}
            if(v.empty())return;
+           if(gVK){if(gVkOut){EngVkOp o;o.kind=1;o.tfirst=(int)(gVkOut->text.size()/4);o.tcount=(int)(v.size()/4);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=1;gVkOut->text.insert(gVkOut->text.end(),v.begin(),v.end());vkPush(o);}return;}
            glUseProgram(gTP);glUniform2f(uTS,(float)W,(float)H);glUniform4f(uTC,r,g,b,1);glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,gTex);
            glBindVertexArray(gTVao);glBindBuffer(GL_ARRAY_BUFFER,gTVbo);glBufferData(GL_ARRAY_BUFFER,v.size()*4,v.data(),GL_STREAM_DRAW);
            glDrawArrays(GL_TRIANGLES,0,(int)v.size()/4);glUseProgram(gProg);}
@@ -4314,7 +4441,7 @@ jobs:
            if(gPick==0){importPath(p);return;}
            if(gPick==1){if(loadMAD(p,true)){size_t sl=p.rfind('/');std::string n=sl==std::string::npos?p:p.substr(sl+1);size_t dt=n.rfind('.');if(dt!=std::string::npos)n=n.substr(0,dt);gProj=n;}}
            else loadMAD(p,false);}
-          bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
+          bool setJoints(int si){if(gVK)return false;if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
            for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
            glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
           // ---------- controles do rig: formas personalizadas (custom shapes) ----------
@@ -4427,6 +4554,7 @@ jobs:
           // Fundo em gradiente vertical (cores do viewport do Maya): claro azulado em cima, escuro embaixo
           GLuint gBgP=0;GLint gBgH=-1;
           void drawBg(){
+           if(gVK){if(gVkOut){M m={};m.m[0]=2;m.m[5]=2;m.m[10]=1;m.m[12]=-1;m.m[13]=-1;m.m[15]=1;gS[0]=gS[1]=1;gS[2]=0;draw(meshes[3],m,id(),0,0,0,1,-3);gVkOut->mcR[3]=(float)H;}return;}
            if(!gBgP){
             const char*vs="#version 300 es\nvoid main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));gl_Position=vec4(p*2.0-1.0,0.0,1.0);}";
             const char*fs="#version 300 es\nprecision highp float;uniform float uH;out vec4 o;\nvoid main(){float t=clamp(gl_FragCoord.y/uH,0.0,1.0);vec3 top=vec3(.49,.56,.64),bot=vec3(.065,.07,.08);o=vec4(mix(bot,top,t),1.0);}";
@@ -4438,8 +4566,8 @@ jobs:
           void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
            bool post=gSSAO&&gPostOK;glBindFramebuffer(GL_FRAMEBUFFER,post?(gMsOK?gMsFbo:gFbo):0);
            glViewport(0,0,W,H);glClearColor(.24f,.24f,.26f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);drawBg();
-           glEnable(GL_DEPTH_TEST);
-           gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);}
+           glEnable(GL_DEPTH_TEST);gVkDepth=true;
+           gVP=mul(persp(FOV,(float)W/H,nearP(),100),lookAt(camEye(),tgt,{0,1,0}));{V e_=camEye();glUniform3f(uCamL,e_.x,e_.y,e_.z);V f_=norm(V{tgt.x-e_.x,tgt.y-e_.y,tgt.z-e_.z});V r_=norm(cross(f_,V{0,1,0}));V u_=cross(r_,f_);glUniform1f(uMcL,gMatcap?1.f:0.f);glUniform3f(uMcRL,r_.x,r_.y,r_.z);glUniform3f(uMcUL,u_.x,u_.y,u_.z);glUniform3f(uMcBL,-f_.x,-f_.y,-f_.z);vkSetCam(e_,r_,u_,f_,gMatcap?1.f:0.f);}
            if(!gCapNow)draw(meshes[4],gVP,id(),.88f,.91f,.96f,.2f,0);
            auto ln=[&](V c,V sc,float r,float g,float b){T t;t.p=c;t.s=sc;M m=model(t);draw(meshes[0],mul(gVP,m),m,r,g,b,1,0);};
            ln({0,0,0},{20,.014f,.014f},.85f,.28f,.3f);ln({0,0,0},{.014f,.014f,20},.3f,.5f,.9f);
@@ -4447,7 +4575,7 @@ jobs:
            for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
             draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
            gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
-           glDisable(GL_DEPTH_TEST);
+           glDisable(GL_DEPTH_TEST);gVkDepth=false;
            if(gBones&&!gCapNow)drawBones();
            if(!gMcFinal&&!gCapNow)drawCtrls();
            }
@@ -4605,11 +4733,11 @@ jobs:
                        panel(px2,py2,pw2,ph2,1.2f*u);text((gPick==0?"Importar glTF / GLB / ZIP":gPick==1?"Abrir projeto (.mad)":"Importar .mad"),px2+2*u,py2+2.6f*u-2.5f*tp2,tp2,.7f,.7f,.75f);
                        if(gFiles.empty()){text((gPick==0?"Nenhum .gltf/.glb/.zip em Download.":"Nenhum .mad em Download."),px2+2*u,py2+8.1f*u-2.5f*tp2,tp2,.9f,.9f,.9f);
                         text("Ative Acesso a todos os arquivos nas permissoes do app.",px2+2*u,py2+8.1f*u+rh2-2.5f*tp2,tp2*.9f,.6f,.6f,.65f);}
-                       else{glEnable(GL_SCISSOR_TEST);glScissor((GLint)gListR.x,(GLint)(H-gListR.y-gListR.h),(GLsizei)gListR.w,(GLsizei)gListR.h);
+                       else{glEnable(GL_SCISSOR_TEST);glScissor((GLint)gListR.x,(GLint)(H-gListR.y-gListR.h),(GLsizei)gListR.w,(GLsizei)gListR.h);vkScissor(gListR.x,gListR.y,gListR.w,gListR.h);
                         for(int i=0;i<n;i++){float yy=gListR.y+i*rh2-gScrollPx;if(yy+rh2<gListR.y||yy>gListR.y+lh)continue;rect(px2+1*u,yy,pw2-2*u-1.6f*u,rh2-.5f*u,.24f,.24f,.27f,1,.7f*u);
                          std::string nf=gFiles[i];size_t s1=nf.rfind('/');if(s1!=std::string::npos&&s1>0){size_t s2=nf.rfind('/',s1-1);nf=nf.substr(s2==std::string::npos?0:s2+1);}if(nf.size()>34)nf=nf.substr(nf.size()-34);
                          text(nf.c_str(),px2+2.5f*u,yy+rh2/2-.25f*u-2.5f*tp2,tp2,.95f,.95f,.95f);}
-                        glDisable(GL_SCISSOR_TEST);
+                        glDisable(GL_SCISSOR_TEST);vkScissor(0,0,0,0);
                         if(maxs>0){float bh_=lh*lh/tot,by_=gListR.y+(lh-bh_)*(gScrollPx/maxs);rect(px2+pw2-1.8f*u,by_,.6f*u,bh_,.6f,.6f,.65f,1,.3f*u);}}
                        gBtn.push_back({{px2,py2,pw2,ph2},299});}
           if(gSizeOpen){ // caixa "Tamanho da render" (teclado do Android)
@@ -4873,8 +5001,8 @@ jobs:
               }
               W = w; H = h;
               gBgP = 0;
-              initGL();
-              gzInit();
+              if (gVK) initVK();
+              else { initGL(); gzInit(); }
               ready = true;
               gLastT = engNow();
           }
@@ -4882,7 +5010,7 @@ jobs:
           void api_resize(int w, int h) {
               if (!ready || (w == W && h == H)) return;
               W = w; H = h;
-              initPost();
+              if (!gVK) initPost();
           }
 
           static bool animRange(float &t0, float &t1);   // definida mais abaixo
@@ -5070,6 +5198,29 @@ jobs:
               glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
           }
 
+          void api_vk_frame(EngVkFrame &out, int w, int h) {
+              if (!ready) return;
+              W = w; H = h;
+              out.scene.clear(); out.ui.clear(); out.text.clear();
+              gVkOut = &out;
+              gCapNow = false;
+              double t = engNow(); float dt = (float)(t - gLastT); gLastT = t;
+              gDt = dt; gToastT -= dt; gFAcc += dt; gFN++;
+              if (gFAcc >= .5f) { gFps = gFN / gFAcc; gFAcc = 0; gFN = 0; }
+              for (float &fl : gFlash) if (fl > 0) fl -= dt;
+              if (playing) {
+                  tm += dt * gPlayDir; float a_ = gFS / 24.f, b_ = gFE / 24.f;
+                  if (tm > b_) tm = a_;
+                  if (tm < a_) tm = b_;
+                  applyAnim();
+              }
+              gVkSeg = 0; gVkDepth = false;
+              frame();
+              gVkSeg = 1; gVkDepth = false;
+              frameUI();
+              gVkOut = nullptr;
+          }
+
           void api_frame_ui() {
               if (!ready) return;
               glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -5113,6 +5264,9 @@ jobs:
           void eng_resize(int w, int h) { eng::api_resize(w, h); }
           void eng_event(const EngEvent &e) { eng::api_event(e); }
           void eng_frame() { eng::api_frame(); }
+          void eng_set_vk(bool on) { eng::gVK = on; }
+          void eng_vk_frame(EngVkFrame &out, int w, int h) { eng::api_vk_frame(out, w, h); }
+          const unsigned char *eng_vk_font(int &w, int &h) { w = h = 512; return eng::gAtlas.size() == 512u * 512u ? eng::gAtlas.data() : nullptr; }
           void eng_gl_lost() { eng::api_gl_lost(); }
           bool eng_dialog_open() { return eng::api_dialog_open(); }
           void eng_timeline(EngTimeline &t) { eng::api_timeline(t); }
@@ -5311,97 +5465,92 @@ jobs:
           B64EOF
           mkdir -p nomad-qt/vk
 
-          cat > nomad-qt/vk/grid.vert <<'NOMADEOF'
-          #version 450
-          // Triangulo que cobre a tela inteira (sem buffer de vertices).
-          layout(location = 0) out vec2 vNdc;
-          void main() {
-              vec2 p = vec2(float((gl_VertexIndex << 1) & 2), float(gl_VertexIndex & 2));
-              vNdc = p * 2.0 - 1.0;
-              gl_Position = vec4(vNdc, 0.0, 1.0);
-          }
-          NOMADEOF
-          cat > nomad-qt/vk/grid.frag <<'NOMADEOF'
-          #version 450
-          // Fundo (gradiente de ceu) + grade do chao (y = 0) com eixos X (vermelho) e Z (azul).
-          // A camera chega por push constants: eye.w = tan(fov/2), right.w = proporcao da tela.
-          layout(push_constant) uniform PC {
-              vec4 eye;
-              vec4 right;
-              vec4 up;
-              vec4 fwd;
-          } pc;
-          layout(location = 0) in vec2 vNdc;
-          layout(location = 0) out vec4 outColor;
-
-          void main() {
-              float th = pc.eye.w;
-              float asp = pc.right.w;
-              // y do framebuffer cresce para baixo: o topo da tela e ndc.y = -1
-              vec3 rd = normalize(pc.fwd.xyz + vNdc.x * asp * th * pc.right.xyz - vNdc.y * th * pc.up.xyz);
-              vec3 ro = pc.eye.xyz;
-
-              vec3 horizon = vec3(0.70, 0.71, 0.76);
-              vec3 zenith = vec3(0.60, 0.65, 0.80);
-              vec3 below = vec3(0.60, 0.60, 0.64);
-              vec3 col = mix(horizon, zenith, clamp(rd.y * 1.6, 0.0, 1.0));
-              col = mix(col, below, clamp(-rd.y * 3.0, 0.0, 1.0));
-
-              // interseccao com o plano y = 0 (derivadas calculadas fora de ramificacoes)
-              bool hit = (rd.y < -1e-4) && (ro.y > 0.0);
-              float t = hit ? (-ro.y / rd.y) : 1.0e4;
-              vec2 g = (ro + rd * t).xz;
-              vec2 d = max(fwidth(g), vec2(1.0e-6));
-
-              vec2 gm = abs(fract(g - 0.5) - 0.5) / d;
-              float lnMinor = 1.0 - clamp(min(gm.x, gm.y), 0.0, 1.0);
-              vec2 g10 = g / 10.0;
-              vec2 gM = abs(fract(g10 - 0.5) - 0.5) / (d / 10.0);
-              float lnMajor = 1.0 - clamp(min(gM.x, gM.y), 0.0, 1.0);
-              float axX = 1.0 - clamp(abs(g.y) / d.y, 0.0, 1.0);  // eixo X (z = 0)
-              float axZ = 1.0 - clamp(abs(g.x) / d.x, 0.0, 1.0);  // eixo Z (x = 0)
-
-              float fade = hit ? clamp(1.0 - t / 90.0, 0.0, 1.0) * clamp(-rd.y * 14.0, 0.0, 1.0) : 0.0;
-              col = mix(col, vec3(0.30, 0.31, 0.36), lnMinor * 0.30 * fade);
-              col = mix(col, vec3(0.22, 0.23, 0.30), lnMajor * 0.50 * fade);
-              col = mix(col, vec3(0.85, 0.25, 0.25), axX * 0.85 * fade);
-              col = mix(col, vec3(0.25, 0.40, 0.90), axZ * 0.85 * fade);
-              outColor = vec4(col, 1.0);
-          }
-          NOMADEOF
           cat > nomad-qt/vkrender.h <<'NOMADEOF'
           #pragma once
           #include <QtGui/qtguiglobal.h>
 
-          class QQuickWindow;
+          #include "engine_api.h"
 
-          // Camera orbital do viewport Vulkan (alvo + yaw/pitch/distancia).
-          struct VkViewParams {
-              float yaw = 0.9f, pitch = 0.5f, dist = 16.f;
-              float tx = 0.f, ty = 0.5f, tz = 0.f;
-          };
+          class QQuickWindow;
 
           #if QT_CONFIG(vulkan)
           #include <QVulkanFunctions>
           #include <QVulkanInstance>
+          #include <unordered_map>
+          #include <vector>
 
-          // Renderizador Vulkan do viewport (passo 1: fundo + grade). Desenha dentro do passe de
-          // renderizacao do Qt Quick, por baixo do QML (mesma tecnica do exemplo "Vulkan Under QML").
+          // Renderizador Vulkan do motor: executa as ordens de desenho gravadas pelo motor (malhas, texto, recortes).
+          // Desenha dentro do passe de renderizacao do Qt Quick: o 3D por baixo do QML e a interface do motor por cima
+          // (mesma tecnica do exemplo "Vulkan Under QML"). Tudo roda na thread de render.
           class VkRend {
           public:
               ~VkRend() { release(); }
-              bool prepare(QQuickWindow *w);  // cria o pipeline (uma vez); false se falhou
-              void draw(QQuickWindow *w, int pw, int ph, const VkViewParams &v);
+              bool prepare(QQuickWindow *w);                      // antes do passe: cria os recursos (uma vez)
+              void upload(QQuickWindow *w, const EngVkFrame &f);  // antes do passe: copia as ordens para o slot atual
+              void drawScene(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);  // dentro do passe, antes do QML
+              void drawUi(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);     // dentro do passe, depois do QML
               void release();
+              bool ready() const { return m_ready; }
               bool failed() const { return m_failed; }
+              const char *why() const { return m_why; }  // motivo da falha (diagnostico)
 
           private:
+              struct Buf {
+                  VkBuffer b = VK_NULL_HANDLE;
+                  VkDeviceMemory m = VK_NULL_HANDLE;
+                  void *p = nullptr;
+                  VkDeviceSize size = 0;
+              };
+              struct Slot {
+                  Buf ops, text;
+                  VkDescriptorSet set = VK_NULL_HANDLE;
+              };
+              struct MeshBuf {
+                  Buf b;
+                  int n = 0;
+                  uint64_t last = 0;  // ultimo quadro em que foi usada (para liberar malhas que sumiram)
+              };
+
+              bool fail(const char *why);
+              bool findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out);
+              bool mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage);
+              void freeBuf(Buf &b);
+              VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth);
+              bool uploadFont(QQuickWindow *w);
+              MeshBuf *meshFor(const EngVkOp &op);
+              void replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> &ops, uint32_t baseIdx, const EngVkFrame &f, bool ui);
+
+              QVulkanFunctions *m_if = nullptr;
               QVulkanDeviceFunctions *m_df = nullptr;
+              VkPhysicalDevice m_phys = VK_NULL_HANDLE;
               VkDevice m_dev = VK_NULL_HANDLE;
-              VkPipelineLayout m_pl = VK_NULL_HANDLE;
-              VkPipeline m_pipe = VK_NULL_HANDLE;
-              bool m_init = false;
+              VkRenderPass m_rp = VK_NULL_HANDLE;
+
+              static constexpr int kMaxSlots = 3;
+              static constexpr uint32_t kMaxOps = 8192;
+              static constexpr uint32_t kMaxTextFloats = 160000;
+              int m_slots = 2;
+              int m_cur = 0;
+              uint64_t m_frame = 0;
+              uint32_t m_sceneMeshes = 0;
+              Slot m_slot[kMaxSlots];
+
+              VkDescriptorSetLayout m_lOps = VK_NULL_HANDLE, m_lTex = VK_NULL_HANDLE;
+              VkPipelineLayout m_plMesh = VK_NULL_HANDLE, m_plText = VK_NULL_HANDLE;
+              VkPipeline m_pMesh[2][2] = {{VK_NULL_HANDLE, VK_NULL_HANDLE}, {VK_NULL_HANDLE, VK_NULL_HANDLE}};  // [linhas][profundidade]
+              VkPipeline m_pText = VK_NULL_HANDLE;
+              VkDescriptorPool m_pool = VK_NULL_HANDLE;
+              VkSampler m_samp = VK_NULL_HANDLE;
+              VkDescriptorSet m_setTex = VK_NULL_HANDLE;
+              VkImage m_img = VK_NULL_HANDLE;
+              VkDeviceMemory m_imgMem = VK_NULL_HANDLE;
+              VkImageView m_imgView = VK_NULL_HANDLE;
+              Buf m_stage;
+              bool m_font = false;
+              bool m_ready = false;
               bool m_failed = false;
+              const char *m_why = "";
+              std::unordered_map<int, MeshBuf> m_meshes;
           };
           #endif
           NOMADEOF
@@ -5410,88 +5559,84 @@ jobs:
 
           #if QT_CONFIG(vulkan)
           #include <QQuickWindow>
-          #include <cmath>
+          #include <algorithm>
           #include <cstdint>
+          #include <cstring>
 
-          #include "vkshaders.h"  // gerado no build: k_grid_vert / k_grid_frag (SPIR-V)
+          #include "vkshaders.h"  // gerado no build (glslc): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
 
           namespace {
-          struct PC {
-              float eye[4];
-              float right[4];
-              float up[4];
-              float fwd[4];
+          // dados por ordem de desenho, no mesmo layout (std430) do buffer de armazenamento dos shaders
+          struct GpuOp {
+              float mvp[16];
+              float mod[16];
+              float col[4];
+              float a[4];
+              float b[4];
+              float tl[4];
           };
-          void nrm(float *v) {
-              const float l = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-              if (l > 1e-8f) {
-                  v[0] /= l;
-                  v[1] /= l;
-                  v[2] /= l;
-              }
-          }
-          void crs(const float *a, const float *b, float *o) {
-              o[0] = a[1] * b[2] - a[2] * b[1];
-              o[1] = a[2] * b[0] - a[0] * b[2];
-              o[2] = a[0] * b[1] - a[1] * b[0];
-          }
+          struct MeshPC {
+              float cam[4];
+              float mcR[4];
+              float mcU[4];
+              float mcB[4];
+          };
+          struct TextPC {
+              float scr[2];
+              float pad[2];
+              float col[4];
+          };
           }  // namespace
 
-          bool VkRend::prepare(QQuickWindow *w) {
-              if (m_init) return !m_failed;
-              m_init = true;
+          bool VkRend::fail(const char *why) {
               m_failed = true;
+              m_why = why;
+              return false;
+          }
 
-              QSGRendererInterface *rif = w->rendererInterface();
-              QVulkanInstance *inst = w->vulkanInstance();
-              if (!rif || !inst) {
-                  m_init = false;  // ainda nao disponivel: tenta de novo no proximo quadro
-                  m_failed = false;
-                  return false;
+          bool VkRend::findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out) {
+              VkPhysicalDeviceMemoryProperties mp;
+              m_if->vkGetPhysicalDeviceMemoryProperties(m_phys, &mp);
+              for (uint32_t i = 0; i < mp.memoryTypeCount; ++i) {
+                  if ((bits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & want) == want) {
+                      out = i;
+                      return true;
+                  }
               }
-              void *pd = rif->getResource(w, QSGRendererInterface::DeviceResource);
-              void *pr = rif->getResource(w, QSGRendererInterface::RenderPassResource);
-              if (!pd || !pr) {
-                  m_init = false;
-                  m_failed = false;
-                  return false;
-              }
-              m_dev = *reinterpret_cast<VkDevice *>(pd);
-              const VkRenderPass rp = *reinterpret_cast<VkRenderPass *>(pr);
-              m_df = inst->deviceFunctions(m_dev);
-              if (!m_df) return false;
+              return false;
+          }
 
-              auto mk = [&](const uint32_t *code, size_t bytes) {
-                  VkShaderModuleCreateInfo ci = {};
-                  ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-                  ci.codeSize = bytes;
-                  ci.pCode = code;
-                  VkShaderModule m = VK_NULL_HANDLE;
-                  if (m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m) != VK_SUCCESS) return VkShaderModule(VK_NULL_HANDLE);
-                  return m;
-              };
-              VkShaderModule vs = mk(k_grid_vert, k_grid_vert_size);
-              VkShaderModule fs = mk(k_grid_frag, k_grid_frag_size);
-              if (!vs || !fs) {
-                  if (vs) m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
-                  if (fs) m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
-                  return false;
-              }
+          // buffer visivel pela CPU, coerente e mapeado de forma permanente
+          bool VkRend::mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage) {
+              VkBufferCreateInfo ci = {};
+              ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+              ci.size = size;
+              ci.usage = usage;
+              ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+              if (m_df->vkCreateBuffer(m_dev, &ci, nullptr, &b.b) != VK_SUCCESS) return false;
+              VkMemoryRequirements mr;
+              m_df->vkGetBufferMemoryRequirements(m_dev, b.b, &mr);
+              uint32_t mt = 0;
+              if (!findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, mt)) return false;
+              VkMemoryAllocateInfo ai = {};
+              ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+              ai.allocationSize = mr.size;
+              ai.memoryTypeIndex = mt;
+              if (m_df->vkAllocateMemory(m_dev, &ai, nullptr, &b.m) != VK_SUCCESS) return false;
+              if (m_df->vkBindBufferMemory(m_dev, b.b, b.m, 0) != VK_SUCCESS) return false;
+              if (m_df->vkMapMemory(m_dev, b.m, 0, VK_WHOLE_SIZE, 0, &b.p) != VK_SUCCESS) return false;
+              b.size = size;
+              return true;
+          }
 
-              VkPushConstantRange pcr = {};
-              pcr.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-              pcr.offset = 0;
-              pcr.size = sizeof(PC);
-              VkPipelineLayoutCreateInfo pli = {};
-              pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-              pli.pushConstantRangeCount = 1;
-              pli.pPushConstantRanges = &pcr;
-              if (m_df->vkCreatePipelineLayout(m_dev, &pli, nullptr, &m_pl) != VK_SUCCESS) {
-                  m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
-                  m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
-                  return false;
-              }
+          void VkRend::freeBuf(Buf &b) {
+              if (b.p) m_df->vkUnmapMemory(m_dev, b.m);
+              if (b.b) m_df->vkDestroyBuffer(m_dev, b.b, nullptr);
+              if (b.m) m_df->vkFreeMemory(m_dev, b.m, nullptr);
+              b = Buf();
+          }
 
+          VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth) {
               VkPipelineShaderStageCreateInfo st[2] = {};
               st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
               st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -5502,11 +5647,29 @@ jobs:
               st[1].module = fs;
               st[1].pName = "main";
 
+              VkVertexInputBindingDescription bd = {};
+              bd.binding = 0;
+              bd.stride = text ? 16 : 24;
+              bd.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+              VkVertexInputAttributeDescription ad[2] = {};
+              ad[0].location = 0;
+              ad[0].binding = 0;
+              ad[0].format = text ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32G32B32_SFLOAT;
+              ad[0].offset = 0;
+              ad[1].location = 1;
+              ad[1].binding = 0;
+              ad[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+              ad[1].offset = 12;
               VkPipelineVertexInputStateCreateInfo vi = {};
               vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+              vi.vertexBindingDescriptionCount = 1;
+              vi.pVertexBindingDescriptions = &bd;
+              vi.vertexAttributeDescriptionCount = text ? 1 : 2;
+              vi.pVertexAttributeDescriptions = ad;
+
               VkPipelineInputAssemblyStateCreateInfo ia = {};
               ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-              ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+              ia.topology = lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
               VkPipelineViewportStateCreateInfo vp = {};
               vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
               vp.viewportCount = 1;
@@ -5521,8 +5684,18 @@ jobs:
               ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
               ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
               VkPipelineDepthStencilStateCreateInfo ds = {};
-              ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;  // sem teste nem escrita de profundidade
+              ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+              ds.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
+              ds.depthWriteEnable = depth ? VK_TRUE : VK_FALSE;
+              ds.depthCompareOp = VK_COMPARE_OP_LESS;
               VkPipelineColorBlendAttachmentState cba = {};
+              cba.blendEnable = VK_TRUE;
+              cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+              cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+              cba.colorBlendOp = VK_BLEND_OP_ADD;
+              cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+              cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+              cba.alphaBlendOp = VK_BLEND_OP_ADD;
               cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
               VkPipelineColorBlendStateCreateInfo cb = {};
               cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -5546,71 +5719,597 @@ jobs:
               gp.pDepthStencilState = &ds;
               gp.pColorBlendState = &cb;
               gp.pDynamicState = &dy;
-              gp.layout = m_pl;
+              gp.layout = lay;
               gp.renderPass = rp;
               gp.subpass = 0;
-              const VkResult r = m_df->vkCreateGraphicsPipelines(m_dev, VK_NULL_HANDLE, 1, &gp, nullptr, &m_pipe);
-              m_df->vkDestroyShaderModule(m_dev, vs, nullptr);
-              m_df->vkDestroyShaderModule(m_dev, fs, nullptr);
-              if (r != VK_SUCCESS) return false;
+              VkPipeline p = VK_NULL_HANDLE;
+              if (m_df->vkCreateGraphicsPipelines(m_dev, VK_NULL_HANDLE, 1, &gp, nullptr, &p) != VK_SUCCESS) return VK_NULL_HANDLE;
+              return p;
+          }
 
-              m_failed = false;
+          bool VkRend::prepare(QQuickWindow *w) {
+              if (m_ready) return true;
+              if (m_failed) return false;
+
+              QSGRendererInterface *rif = w->rendererInterface();
+              QVulkanInstance *inst = w->vulkanInstance();
+              if (!rif || !inst) return false;  // ainda nao disponivel: tenta no proximo quadro
+              void *pp = rif->getResource(w, QSGRendererInterface::PhysicalDeviceResource);
+              void *pd = rif->getResource(w, QSGRendererInterface::DeviceResource);
+              void *pr = rif->getResource(w, QSGRendererInterface::RenderPassResource);
+              if (!pp || !pd || !pr) return false;
+              m_phys = *reinterpret_cast<VkPhysicalDevice *>(pp);
+              m_dev = *reinterpret_cast<VkDevice *>(pd);
+              m_rp = *reinterpret_cast<VkRenderPass *>(pr);
+              m_if = inst->functions();
+              m_df = inst->deviceFunctions(m_dev);
+              if (!m_if || !m_df) return fail("funcoes");
+              m_slots = std::clamp(w->graphicsStateInfo().framesInFlight, 1, kMaxSlots);
+
+              // layouts de descritores: [ops] buffer de armazenamento; [tex] atlas da fonte
+              VkDescriptorSetLayoutBinding b0 = {};
+              b0.binding = 0;
+              b0.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              b0.descriptorCount = 1;
+              b0.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+              VkDescriptorSetLayoutCreateInfo dl = {};
+              dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+              dl.bindingCount = 1;
+              dl.pBindings = &b0;
+              if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &m_lOps) != VK_SUCCESS) return fail("layout ops");
+              VkDescriptorSetLayoutBinding b1 = {};
+              b1.binding = 0;
+              b1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+              b1.descriptorCount = 1;
+              b1.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+              dl.pBindings = &b1;
+              if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &m_lTex) != VK_SUCCESS) return fail("layout tex");
+
+              VkPushConstantRange pcr = {};
+              pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+              pcr.offset = 0;
+              VkPipelineLayoutCreateInfo pl = {};
+              pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+              pl.setLayoutCount = 1;
+              pl.pushConstantRangeCount = 1;
+              pl.pPushConstantRanges = &pcr;
+              pl.pSetLayouts = &m_lOps;
+              pcr.size = sizeof(MeshPC);
+              if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plMesh) != VK_SUCCESS) return fail("layout malha");
+              pl.pSetLayouts = &m_lTex;
+              pcr.size = sizeof(TextPC);
+              if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plText) != VK_SUCCESS) return fail("layout texto");
+
+              auto mod = [&](const uint32_t *code, size_t bytes) {
+                  VkShaderModuleCreateInfo ci = {};
+                  ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                  ci.codeSize = bytes;
+                  ci.pCode = code;
+                  VkShaderModule m = VK_NULL_HANDLE;
+                  if (m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m) != VK_SUCCESS) return VkShaderModule(VK_NULL_HANDLE);
+                  return m;
+              };
+              VkShaderModule mv = mod(k_mesh_vert, k_mesh_vert_size), mf = mod(k_mesh_frag, k_mesh_frag_size);
+              VkShaderModule tv = mod(k_text_vert, k_text_vert_size), tf = mod(k_text_frag, k_text_frag_size);
+              bool ok = mv && mf && tv && tf;
+              if (ok) {
+                  for (int l = 0; l < 2 && ok; ++l)
+                      for (int d = 0; d < 2 && ok; ++d) {
+                          m_pMesh[l][d] = mkPipe(mv, mf, m_plMesh, m_rp, false, l == 1, d == 1);
+                          ok = m_pMesh[l][d] != VK_NULL_HANDLE;
+                      }
+                  if (ok) {
+                      m_pText = mkPipe(tv, tf, m_plText, m_rp, true, false, false);
+                      ok = m_pText != VK_NULL_HANDLE;
+                  }
+              }
+              for (VkShaderModule m : {mv, mf, tv, tf})
+                  if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
+              if (!ok) return fail("pipelines");
+
+              // descritores, buffers por slot e amostrador
+              VkDescriptorPoolSize ps[2] = {};
+              ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+              ps[0].descriptorCount = kMaxSlots;
+              ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+              ps[1].descriptorCount = 1;
+              VkDescriptorPoolCreateInfo dpi = {};
+              dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+              dpi.maxSets = kMaxSlots + 1;
+              dpi.poolSizeCount = 2;
+              dpi.pPoolSizes = ps;
+              if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
+
+              for (int i = 0; i < m_slots; ++i) {
+                  Slot &s = m_slot[i];
+                  if (!mkBuf(s.ops, VkDeviceSize(kMaxOps) * sizeof(GpuOp), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) return fail("buffer ops");
+                  if (!mkBuf(s.text, VkDeviceSize(kMaxTextFloats) * 4, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) return fail("buffer texto");
+                  VkDescriptorSetAllocateInfo ai = {};
+                  ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+                  ai.descriptorPool = m_pool;
+                  ai.descriptorSetCount = 1;
+                  ai.pSetLayouts = &m_lOps;
+                  if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &s.set) != VK_SUCCESS) return fail("conjunto ops");
+                  VkDescriptorBufferInfo bi = {s.ops.b, 0, VK_WHOLE_SIZE};
+                  VkWriteDescriptorSet wr = {};
+                  wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                  wr.dstSet = s.set;
+                  wr.dstBinding = 0;
+                  wr.descriptorCount = 1;
+                  wr.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                  wr.pBufferInfo = &bi;
+                  m_df->vkUpdateDescriptorSets(m_dev, 1, &wr, 0, nullptr);
+              }
+
+              VkSamplerCreateInfo sci = {};
+              sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+              sci.magFilter = VK_FILTER_LINEAR;
+              sci.minFilter = VK_FILTER_LINEAR;
+              sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+              sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+              sci.maxLod = 0.f;
+              if (m_df->vkCreateSampler(m_dev, &sci, nullptr, &m_samp) != VK_SUCCESS) return fail("sampler");
+              VkDescriptorSetAllocateInfo ati = {};
+              ati.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+              ati.descriptorPool = m_pool;
+              ati.descriptorSetCount = 1;
+              ati.pSetLayouts = &m_lTex;
+              if (m_df->vkAllocateDescriptorSets(m_dev, &ati, &m_setTex) != VK_SUCCESS) return fail("conjunto tex");
+
+              m_ready = true;
+              uploadFont(w);  // se falhar, o texto fica desligado (m_font = false) e as demais ordens continuam
               return true;
           }
 
-          void VkRend::draw(QQuickWindow *w, int pw, int ph, const VkViewParams &v) {
-              if (!m_init && !prepare(w)) return;
-              if (m_failed || !m_pipe || pw < 2 || ph < 2) return;
+          // atlas da fonte (R8) para uma imagem do dispositivo, copiado com comandos gravados antes do passe
+          bool VkRend::uploadFont(QQuickWindow *w) {
+              int fw = 0, fh = 0;
+              const unsigned char *px = eng_vk_font(fw, fh);
+              if (!px) return false;
 
-              // camera orbital -> base ortonormal (direita/cima/frente) e posicao do olho
-              const float cp = std::cos(v.pitch), sp = std::sin(v.pitch), cy = std::cos(v.yaw), sy = std::sin(v.yaw);
-              float eye[3] = {v.tx + v.dist * cp * sy, v.ty + v.dist * sp, v.tz + v.dist * cp * cy};
-              float fwd[3] = {v.tx - eye[0], v.ty - eye[1], v.tz - eye[2]};
-              nrm(fwd);
-              const float worldUp[3] = {0.f, 1.f, 0.f};
-              float right[3], up[3];
-              crs(fwd, worldUp, right);
-              nrm(right);
-              crs(right, fwd, up);
+              VkImageCreateInfo ic = {};
+              ic.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+              ic.imageType = VK_IMAGE_TYPE_2D;
+              ic.format = VK_FORMAT_R8_UNORM;
+              ic.extent = {uint32_t(fw), uint32_t(fh), 1};
+              ic.mipLevels = 1;
+              ic.arrayLayers = 1;
+              ic.samples = VK_SAMPLE_COUNT_1_BIT;
+              ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+              ic.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+              ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+              ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+              if (m_df->vkCreateImage(m_dev, &ic, nullptr, &m_img) != VK_SUCCESS) return false;
+              VkMemoryRequirements mr;
+              m_df->vkGetImageMemoryRequirements(m_dev, m_img, &mr);
+              uint32_t mt = 0;
+              if (!findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mt)) return false;
+              VkMemoryAllocateInfo ai = {};
+              ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+              ai.allocationSize = mr.size;
+              ai.memoryTypeIndex = mt;
+              if (m_df->vkAllocateMemory(m_dev, &ai, nullptr, &m_imgMem) != VK_SUCCESS) return false;
+              if (m_df->vkBindImageMemory(m_dev, m_img, m_imgMem, 0) != VK_SUCCESS) return false;
+              VkImageViewCreateInfo vc = {};
+              vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+              vc.image = m_img;
+              vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
+              vc.format = VK_FORMAT_R8_UNORM;
+              vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+              if (m_df->vkCreateImageView(m_dev, &vc, nullptr, &m_imgView) != VK_SUCCESS) return false;
 
-              PC pc;
-              for (int i = 0; i < 3; ++i) {
-                  pc.eye[i] = eye[i];
-                  pc.right[i] = right[i];
-                  pc.up[i] = up[i];
-                  pc.fwd[i] = fwd[i];
-              }
-              pc.eye[3] = std::tan(0.5f * 0.8f);  // fov vertical ~46 graus
-              pc.right[3] = float(pw) / float(ph);
-              pc.up[3] = 0.f;
-              pc.fwd[3] = 0.f;
+              const VkDeviceSize bytes = VkDeviceSize(fw) * fh;
+              if (!mkBuf(m_stage, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) return false;
+              std::memcpy(m_stage.p, px, size_t(bytes));
 
               QSGRendererInterface *rif = w->rendererInterface();
               w->beginExternalCommands();
               void *pcb = rif->getResource(w, QSGRendererInterface::CommandListResource);
-              if (pcb) {
-                  VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
-                  VkViewport vp = {0.f, 0.f, float(pw), float(ph), 0.f, 1.f};
-                  VkRect2D sc = {{0, 0}, {uint32_t(pw), uint32_t(ph)}};
-                  m_df->vkCmdSetViewport(cb, 0, 1, &vp);
-                  m_df->vkCmdSetScissor(cb, 0, 1, &sc);
-                  m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipe);
-                  m_df->vkCmdPushConstants(cb, m_pl, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PC), &pc);
-                  m_df->vkCmdDraw(cb, 3, 1, 0, 0);
+              if (!pcb) {
+                  w->endExternalCommands();
+                  return false;
+              }
+              VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
+              VkImageMemoryBarrier br = {};
+              br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+              br.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+              br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+              br.image = m_img;
+              br.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+              br.srcAccessMask = 0;
+              br.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+              br.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+              br.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+              m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &br);
+              VkBufferImageCopy cp = {};
+              cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+              cp.imageExtent = {uint32_t(fw), uint32_t(fh), 1};
+              m_df->vkCmdCopyBufferToImage(cb, m_stage.b, m_img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+              br.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+              br.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+              br.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+              br.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+              m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &br);
+              w->endExternalCommands();
+
+              VkDescriptorImageInfo ii = {m_samp, m_imgView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+              VkWriteDescriptorSet wr = {};
+              wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+              wr.dstSet = m_setTex;
+              wr.dstBinding = 0;
+              wr.descriptorCount = 1;
+              wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+              wr.pImageInfo = &ii;
+              m_df->vkUpdateDescriptorSets(m_dev, 1, &wr, 0, nullptr);
+              m_font = true;
+              return true;
+          }
+
+          // buffer de vertices da malha (criado na primeira vez que ela aparece)
+          VkRend::MeshBuf *VkRend::meshFor(const EngVkOp &op) {
+              auto it = m_meshes.find(op.vid);
+              if (it != m_meshes.end() && it->second.n == op.n) {
+                  it->second.last = m_frame;
+                  return &it->second;
+              }
+              if (it != m_meshes.end()) {
+                  freeBuf(it->second.b);
+                  m_meshes.erase(it);
+              }
+              MeshBuf mb;
+              mb.n = op.n;
+              mb.last = m_frame;
+              if (!mkBuf(mb.b, VkDeviceSize(op.n) * 24, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
+                  freeBuf(mb.b);
+                  return nullptr;
+              }
+              std::memcpy(mb.b.p, op.cpu, size_t(op.n) * 24);
+              return &m_meshes.emplace(op.vid, mb).first->second;
+          }
+
+          void VkRend::upload(QQuickWindow *w, const EngVkFrame &f) {
+              if (!m_ready) return;
+              m_cur = w->graphicsStateInfo().currentFrameSlot % m_slots;
+              ++m_frame;
+              Slot &s = m_slot[m_cur];
+              GpuOp *dst = static_cast<GpuOp *>(s.ops.p);
+              uint32_t k = 0;
+              m_sceneMeshes = 0;
+              for (int seg = 0; seg < 2; ++seg) {
+                  const std::vector<EngVkOp> &ops = seg == 0 ? f.scene : f.ui;
+                  for (const EngVkOp &op : ops) {
+                      if (op.kind != 0 || !op.cpu || op.n <= 0) continue;
+                      if (k >= kMaxOps) break;
+                      meshFor(op);
+                      GpuOp &g = dst[k++];
+                      std::memcpy(g.mvp, op.mvp, sizeof g.mvp);
+                      std::memcpy(g.mod, op.mod, sizeof g.mod);
+                      std::memcpy(g.col, op.col, sizeof g.col);
+                      std::memcpy(g.a, op.a, sizeof g.a);
+                      std::memcpy(g.b, op.b, sizeof g.b);
+                      std::memcpy(g.tl, op.tl, sizeof g.tl);
+                  }
+                  if (seg == 0) m_sceneMeshes = k;
+              }
+              // malhas recriadas ganham outro id: libera as antigas (so depois de varios quadros, ja fora da GPU)
+              if ((m_frame & 63) == 0) {
+                  for (auto it = m_meshes.begin(); it != m_meshes.end();) {
+                      if (it->second.last + 16 < m_frame) {
+                          freeBuf(it->second.b);
+                          it = m_meshes.erase(it);
+                      } else {
+                          ++it;
+                      }
+                  }
+              }
+              const size_t nt = std::min<size_t>(f.text.size(), kMaxTextFloats);
+              if (nt) std::memcpy(s.text.p, f.text.data(), nt * 4);
+          }
+
+          void VkRend::replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> &ops, uint32_t baseIdx, const EngVkFrame &f, bool ui) {
+              QSGRendererInterface *rif = w->rendererInterface();
+              w->beginExternalCommands();
+              void *pcb = rif->getResource(w, QSGRendererInterface::CommandListResource);
+              if (!pcb) {
+                  w->endExternalCommands();
+                  return;
+              }
+              VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
+              Slot &s = m_slot[m_cur];
+
+              VkViewport vp = {0.f, 0.f, float(pw), float(ph), 0.f, 1.f};
+              const VkRect2D full = {{0, 0}, {uint32_t(pw), uint32_t(ph)}};
+              m_df->vkCmdSetViewport(cb, 0, 1, &vp);
+              m_df->vkCmdSetScissor(cb, 0, 1, &full);
+
+              MeshPC mpc = {};
+              std::memcpy(mpc.cam, f.cam, sizeof mpc.cam);
+              std::memcpy(mpc.mcR, f.mcR, sizeof mpc.mcR);
+              std::memcpy(mpc.mcU, f.mcU, sizeof mpc.mcU);
+              std::memcpy(mpc.mcB, f.mcB, sizeof mpc.mcB);
+              mpc.mcR[3] = float(ph);
+
+              int mode = 0;  // 0 nada ligado, 1 malha, 2 texto
+              VkPipeline cur = VK_NULL_HANDLE;
+              uint32_t idx = baseIdx;
+              bool anyDepth = false;
+              for (const EngVkOp &op : ops) {
+                  if (op.kind == 2) {  // recorte
+                      VkRect2D sc = full;
+                      if (op.sc[2] > 0.f && op.sc[3] > 0.f) {
+                          const int x0 = std::clamp(int(op.sc[0]), 0, pw), y0 = std::clamp(int(op.sc[1]), 0, ph);
+                          const int x1 = std::clamp(int(op.sc[0] + op.sc[2] + 0.999f), 0, pw), y1 = std::clamp(int(op.sc[1] + op.sc[3] + 0.999f), 0, ph);
+                          sc = {{x0, y0}, {uint32_t(std::max(0, x1 - x0)), uint32_t(std::max(0, y1 - y0))}};
+                      }
+                      m_df->vkCmdSetScissor(cb, 0, 1, &sc);
+                      continue;
+                  }
+                  if (op.kind == 0) {
+                      if (!op.cpu || op.n <= 0) continue;
+                      const uint32_t myIdx = idx++;
+                      if (myIdx >= kMaxOps) continue;
+                      MeshBuf *mb = meshFor(op);
+                      if (!mb) continue;
+                      const bool depth = !ui && op.depth;
+                      anyDepth = anyDepth || depth;
+                      VkPipeline want = m_pMesh[op.lines ? 1 : 0][depth ? 1 : 0];
+                      if (mode != 1) {
+                          m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 1, &s.set, 0, nullptr);
+                          m_df->vkCmdPushConstants(cb, m_plMesh, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mpc, &mpc);
+                          mode = 1;
+                          cur = VK_NULL_HANDLE;
+                      }
+                      if (want != cur) {
+                          m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                          cur = want;
+                      }
+                      const VkDeviceSize off = 0;
+                      m_df->vkCmdBindVertexBuffers(cb, 0, 1, &mb->b.b, &off);
+                      m_df->vkCmdDraw(cb, uint32_t(op.n), 1, 0, myIdx);
+                  } else if (op.kind == 1) {
+                      if (!m_font || op.tcount <= 0 || size_t(op.tfirst + op.tcount) * 4 > kMaxTextFloats) continue;
+                      if (mode != 2) {
+                          m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pText);
+                          m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plText, 0, 1, &m_setTex, 0, nullptr);
+                          mode = 2;
+                          cur = VK_NULL_HANDLE;
+                      }
+                      TextPC tpc = {};
+                      tpc.scr[0] = float(pw);
+                      tpc.scr[1] = float(ph);
+                      std::memcpy(tpc.col, op.col, sizeof tpc.col);
+                      m_df->vkCmdPushConstants(cb, m_plText, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof tpc, &tpc);
+                      const VkDeviceSize off = VkDeviceSize(op.tfirst) * 16;
+                      m_df->vkCmdBindVertexBuffers(cb, 0, 1, &s.text.b, &off);
+                      m_df->vkCmdDraw(cb, uint32_t(op.tcount), 1, 0, 0);
+                  }
+              }
+
+              // o Qt Quick desenha o QML em seguida: devolve a profundidade a 1.0 para o 3D nao "vencer" o teste
+              if (anyDepth) {
+                  VkClearAttachment ca = {};
+                  ca.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                  ca.clearValue.depthStencil = {1.0f, 0};
+                  VkClearRect cr = {full, 0, 1};
+                  m_df->vkCmdClearAttachments(cb, 1, &ca, 1, &cr);
               }
               w->endExternalCommands();
           }
 
+          void VkRend::drawScene(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
+              if (!m_ready || pw < 2 || ph < 2) return;
+              replay(w, pw, ph, f.scene, 0, f, false);
+          }
+
+          void VkRend::drawUi(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
+              if (!m_ready || pw < 2 || ph < 2) return;
+              replay(w, pw, ph, f.ui, m_sceneMeshes, f, true);
+          }
+
           void VkRend::release() {
               if (m_df && m_dev) {
-                  if (m_pipe) m_df->vkDestroyPipeline(m_dev, m_pipe, nullptr);
-                  if (m_pl) m_df->vkDestroyPipelineLayout(m_dev, m_pl, nullptr);
+                  for (auto &kv : m_meshes) freeBuf(kv.second.b);
+                  for (int i = 0; i < kMaxSlots; ++i) {
+                      freeBuf(m_slot[i].ops);
+                      freeBuf(m_slot[i].text);
+                  }
+                  freeBuf(m_stage);
+                  for (int l = 0; l < 2; ++l)
+                      for (int d = 0; d < 2; ++d)
+                          if (m_pMesh[l][d]) m_df->vkDestroyPipeline(m_dev, m_pMesh[l][d], nullptr);
+                  if (m_pText) m_df->vkDestroyPipeline(m_dev, m_pText, nullptr);
+                  if (m_plMesh) m_df->vkDestroyPipelineLayout(m_dev, m_plMesh, nullptr);
+                  if (m_plText) m_df->vkDestroyPipelineLayout(m_dev, m_plText, nullptr);
+                  if (m_pool) m_df->vkDestroyDescriptorPool(m_dev, m_pool, nullptr);
+                  if (m_lOps) m_df->vkDestroyDescriptorSetLayout(m_dev, m_lOps, nullptr);
+                  if (m_lTex) m_df->vkDestroyDescriptorSetLayout(m_dev, m_lTex, nullptr);
+                  if (m_samp) m_df->vkDestroySampler(m_dev, m_samp, nullptr);
+                  if (m_imgView) m_df->vkDestroyImageView(m_dev, m_imgView, nullptr);
+                  if (m_img) m_df->vkDestroyImage(m_dev, m_img, nullptr);
+                  if (m_imgMem) m_df->vkFreeMemory(m_dev, m_imgMem, nullptr);
               }
-              m_pipe = VK_NULL_HANDLE;
-              m_pl = VK_NULL_HANDLE;
-              m_init = false;
+              m_meshes.clear();
+              for (int l = 0; l < 2; ++l)
+                  for (int d = 0; d < 2; ++d) m_pMesh[l][d] = VK_NULL_HANDLE;
+              m_pText = VK_NULL_HANDLE;
+              m_plMesh = m_plText = VK_NULL_HANDLE;
+              m_pool = VK_NULL_HANDLE;
+              m_lOps = m_lTex = VK_NULL_HANDLE;
+              m_samp = VK_NULL_HANDLE;
+              m_imgView = VK_NULL_HANDLE;
+              m_img = VK_NULL_HANDLE;
+              m_imgMem = VK_NULL_HANDLE;
+              m_font = false;
+              m_ready = false;
           }
           #endif
+          NOMADEOF
+          cat > nomad-qt/vk/mesh.vert <<'NOMADEOF'
+          #version 450
+          // Malhas do motor: posicao + normal; os dados por objeto (matrizes, cor, parametros) vem de um buffer de
+          // armazenamento indexado por gl_InstanceIndex (= indice da ordem de desenho).
+          layout(location = 0) in vec3 aP;
+          layout(location = 1) in vec3 aN;
+
+          struct Op {
+              mat4 mvp;
+              mat4 mod;
+              vec4 col;
+              vec4 a;   // a.x = lit, a.yzw = escala (retangulos)
+              vec4 b;   // b.xy = metal, rugosidade
+              vec4 tl;
+          };
+          layout(std430, set = 0, binding = 0) readonly buffer Ops { Op ops[]; };
+
+          layout(location = 0) out vec3 vN;
+          layout(location = 1) out vec3 vP;
+          layout(location = 2) out vec3 vW;
+          layout(location = 3) flat out int vOp;
+
+          void main() {
+              Op o = ops[gl_InstanceIndex];
+              vec4 p = vec4(aP, 1.0);
+              vec4 c = o.mvp * p;
+              // as matrizes do motor sao de OpenGL (y para cima, z de -w a w): converte para o clip do Vulkan
+              c.y = -c.y;
+              c.z = (c.z + c.w) * 0.5;
+              gl_Position = c;
+              vN = mat3(o.mod) * aN;
+              vP = aP;
+              vW = (o.mod * p).xyz;
+              vOp = gl_InstanceIndex;
+          }
+          NOMADEOF
+          cat > nomad-qt/vk/mesh.frag <<'NOMADEOF'
+          #version 450
+          // Porta do shader do motor (sombreamento PBR simples, matcap, retangulos arredondados, losango e fundo).
+          // Ainda sem texturas de material (glTF): usa a cor base.
+          struct Op {
+              mat4 mvp;
+              mat4 mod;
+              vec4 col;
+              vec4 a;
+              vec4 b;
+              vec4 tl;
+          };
+          layout(std430, set = 0, binding = 0) readonly buffer Ops { Op ops[]; };
+          layout(push_constant) uniform PC {
+              vec4 cam;   // xyz = posicao da camera, w = matcap ligado
+              vec4 mcR;   // base do matcap; w = altura da tela
+              vec4 mcU;
+              vec4 mcB;
+          } pc;
+
+          layout(location = 0) in vec3 vN;
+          layout(location = 1) in vec3 vP;
+          layout(location = 2) in vec3 vW;
+          layout(location = 3) flat in int vOp;
+          layout(location = 0) out vec4 o;
+
+          vec3 shade(vec3 L, vec3 Lc, vec3 N, vec3 V, vec3 alb, vec3 F0, float met, float rou) {
+              vec3 H = normalize(L + V);
+              float a = rou * rou, a2 = a * a;
+              float NL = max(dot(N, L), 0.0), NV = max(dot(N, V), 1e-3), NH = max(dot(N, H), 0.0), VH = max(dot(V, H), 0.0);
+              float dd = NH * NH * (a2 - 1.0) + 1.0;
+              float D = a2 / (3.14159 * dd * dd + 1e-6);
+              float k = (rou + 1.0) * (rou + 1.0) / 8.0;
+              float G = (NL / (NL * (1.0 - k) + k)) * (NV / (NV * (1.0 - k) + k));
+              vec3 F = F0 + (1.0 - F0) * pow(max(1.0 - VH, 0.0), 5.0);
+              vec3 spec = D * G * F / (4.0 * NV * max(NL, 1e-3));
+              vec3 kd = (1.0 - F) * (1.0 - met);
+              return (kd * alb / 3.14159 + spec) * Lc * NL;
+          }
+
+          vec3 pbr(vec4 uC, vec2 uMR) {
+              vec3 N = normalize(vN), V = normalize(pc.cam.xyz - vW);
+              if (dot(N, V) < 0.0) N = -N;
+              vec3 base = uC.rgb;
+              float met = uMR.x, rou = uMR.y;
+              vec3 alb = pow(base, vec3(2.2));
+              rou = clamp(rou, 0.05, 1.0);
+              vec3 F0 = mix(vec3(0.04), alb, met);
+              vec3 col = shade(normalize(vec3(.4, .8, .5)), vec3(3.2, 3.0, 2.8), N, V, alb, F0, met, rou)
+                       + shade(normalize(vec3(-.6, .3, -.4)), vec3(.6, .7, 1.0), N, V, alb, F0, met, rou);
+              vec3 amb = mix(vec3(.12, .11, .10), vec3(.22, .26, .34), N.y * .5 + .5);
+              float NV = max(dot(N, V), 0.0);
+              vec3 Fa = F0 + (max(vec3(1.0 - rou), F0) - F0) * pow(1.0 - NV, 5.0);
+              col += amb * (alb * (1.0 - met) + Fa * 0.6);
+              col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);
+              return pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+          }
+
+          vec3 matcap() {
+              vec3 N = normalize(vN), V = normalize(pc.cam.xyz - vW);
+              if (dot(N, V) < 0.0) N = -N;
+              vec3 n = vec3(dot(N, pc.mcR.xyz), dot(N, pc.mcU.xyz), dot(N, pc.mcB.xyz));
+              vec3 L1 = normalize(vec3(.10, .50, .85)), L2 = normalize(vec3(-.60, -.30, .50));
+              float d1 = max(dot(n, L1), 0.0), d2 = max(dot(n, L2), 0.0);
+              float amb = .46 + .10 * n.y;
+              vec3 c = vec3(.64) * (amb + .50 * d1 + .22 * d2);
+              vec3 H = normalize(L1 + vec3(0.0, 0.0, 1.0));
+              c += vec3(.04) * pow(max(dot(n, H), 0.0), 24.0);
+              return clamp(c, 0.0, 1.0);
+          }
+
+          void main() {
+              Op op = ops[vOp];
+              float uL = op.a.x;
+              vec3 uS = op.a.yzw;
+              vec4 uC = op.col;
+              if (uL < -2.5) {  // fundo do viewport (gradiente vertical)
+                  float t = clamp(1.0 - gl_FragCoord.y / max(pc.mcR.w, 1.0), 0.0, 1.0);
+                  vec3 top = vec3(.49, .56, .64), bot = vec3(.065, .07, .08);
+                  o = vec4(mix(bot, top, t), 1.0);
+                  return;
+              }
+              if (uL < -1.5) {  // losango
+                  vec2 q = (vP.xy - .5) * uS.xy;
+                  float dd = (abs(q.x) + abs(q.y) - uS.x * .5) * .7071;
+                  o = vec4(uC.rgb, uC.a * clamp(.5 - dd, 0.0, 1.0));
+                  return;
+              }
+              if (uL < 0.0) {  // retangulo arredondado
+                  vec2 q = (vP.xy - .5) * uS.xy;
+                  vec2 e = abs(q) - uS.xy * .5 + uS.z;
+                  float dd = length(max(e, 0.0)) + min(max(e.x, e.y), 0.0) - uS.z;
+                  o = vec4(uC.rgb, uC.a * clamp(.5 - dd, 0.0, 1.0));
+                  return;
+              }
+              if (uL > 0.5) {  // malha sombreada
+                  o = vec4(pc.cam.w > 0.5 ? matcap() : pbr(uC, op.b.xy), uC.a);
+                  return;
+              }
+              o = vec4(uC.rgb, uC.a);
+          }
+          NOMADEOF
+          cat > nomad-qt/vk/text.vert <<'NOMADEOF'
+          #version 450
+          // Texto: vertices (x, y em px; u, v) em um buffer sequencial; a cor e o tamanho da tela vem por push constants.
+          layout(location = 0) in vec4 aV;
+          layout(push_constant) uniform PC {
+              vec2 scr;
+              vec2 pad;
+              vec4 col;
+          } pc;
+          layout(location = 0) out vec2 vT;
+          void main() {
+              gl_Position = vec4(aV.x / pc.scr.x * 2.0 - 1.0, aV.y / pc.scr.y * 2.0 - 1.0, 0.0, 1.0);
+              vT = aV.zw;
+          }
+          NOMADEOF
+          cat > nomad-qt/vk/text.frag <<'NOMADEOF'
+          #version 450
+          layout(set = 0, binding = 0) uniform sampler2D uTex;
+          layout(push_constant) uniform PC {
+              vec2 scr;
+              vec2 pad;
+              vec4 col;
+          } pc;
+          layout(location = 0) in vec2 vT;
+          layout(location = 0) out vec4 o;
+          void main() {
+              o = vec4(pc.col.rgb, pc.col.a * texture(uTex, vT).r);
+          }
           NOMADEOF
 
       - name: Baixar bibliotecas (stb, cgltf)
