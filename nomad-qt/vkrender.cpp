@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "vkshaders.h"  // gerado no build (glslc): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
+#include "vkshaders.h"  // gerado no build (Slang): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
 
 namespace {
 // dados por ordem de desenho, no mesmo layout (std430) do buffer de armazenamento dos shaders
