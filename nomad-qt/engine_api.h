@@ -112,6 +112,9 @@ void eng_frame_ui();                       // fase da interface do motor (depois
 void eng_ui_rects(std::vector<float> &out);  // retangulos x,y,w,h (px) ocupados pela interface do motor
 
 // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
+// backend Vulkan: renderiza as ordens gravadas fora da tela e devolve os pixels (RGBA8, de baixo para cima).
+// 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel
+int plat_vk_capture(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px);
 void plat_show_keyboard();
 void plat_hide_keyboard();
 void plat_keep_screen_on(bool on);

@@ -1429,7 +1429,7 @@ bool vidPush(const unsigned char*px,int sw,int sh){
  std::string pth=fm("%s/frame_%04d.png",gVid.dir.c_str(),gVid.f);FILE*f=fopen(pth.c_str(),"wb");if(!f)return false;
  stbi_write_png_to_func(mcWrite,f,sw,sh,4,fl.data(),sw*4);fclose(f);return true;}
 void vidStart(){
- if(!gMcOK){toast("Render de video precisa de ES 3.1");return;}
+ if(!gMcOK&&!gVK){toast("Render de video precisa de ES 3.1");return;}
  if(!filesGranted()){needFiles();return;}
  gVid=Vid();{int ra=gRA>=0?gRA:std::min(gFS,gFE),rb=gRB>=0?gRB:std::max(gFS,gFE);if(rb<ra)std::swap(ra,rb);gVid.fps=std::clamp(gVidFps,1,120);gVid.t0=ra/24.f;gVid.f0=0;gVid.total=std::max(1,(int)floorf((rb-ra)/24.f*gVid.fps+1e-3f)+1);gVid.f1=gVid.total-1;gVid.f=0;gVid.tm0=tm;}
  static const int PW[3]={1024,1280,1920},PB[3]={6,8,12},PS[3]={8,16,0};
@@ -1730,7 +1730,7 @@ void frame(){solveRigs();sculptSync();if(gCamView>=0)viewFromCam();
  glActiveTexture(GL_TEXTURE1);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);glActiveTexture(GL_TEXTURE0);
  for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide)continue;M mod=worldM(i);bool skd=o.skin>=0&&meshes[o.mesh].skinned&&setJoints(o.skin);if(skd)mod=id();gSk=skd?1.f:0.f;float h=(i==sel)?.35f:0;gMR[0]=o.met;gMR[1]=o.rou;gTL[0]=(float)o.tb;gTL[1]=(float)o.tm;gTL[2]=(float)o.tn;gTL[3]=o.ac;
   draw(meshes[o.mesh],mul(gVP,mod),mod,o.col.x+(1-o.col.x)*h,o.col.y+(1-o.col.y)*h,o.col.z+(1-o.col.z)*h,1,1);}
- gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();vidStep();
+ gMR[0]=0;gMR[1]=.5f;gSk=0;gTL[0]=gTL[1]=gTL[2]=-1;gTL[3]=0;glActiveTexture(GL_TEXTURE0);if(post)runPost();mcFrame();if(!gVK)vidStep();
  glDisable(GL_DEPTH_TEST);gVkDepth=false;
  if(gBones&&!gCapNow)drawBones();
  if(!gMcFinal&&!gCapNow)drawCtrls();
@@ -2273,7 +2273,7 @@ static void capturePreview(int rw, int rh) {
 }
 
 static void startImage(int mode) {
-    if (!gMcOK) { toast("Render precisa de ES 3.1"); return; }
+    if (!gMcOK && !gVK) { toast("Render precisa de ES 3.1"); return; }
     gAutoPng = mode; gMcFinal = true; gMcPrev = false; gMcHaveCam = false; gSigS = -1;
 }
 
@@ -2375,6 +2375,94 @@ void api_frame() {
     glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 }
 
+// ---------- captura fora da tela (backend Vulkan) ----------
+// Renderiza o quadro atual com a camera de render (ou a do viewport, se nao houver), sem overlays e sem destaque
+// de selecao, e le os pixels. Devolve 0 = ok, 1 = tenta no proximo quadro, 2 = indisponivel.
+static int vkCaptureScene(int cw, int ch, std::vector<unsigned char> &px) {
+    if (!gVK || !gVkOut || cw < 8 || ch < 8) return 2;
+    static EngVkFrame cf;
+    EngVkFrame *sOut = gVkOut;
+    const int sW = W, sH = H, sCam = gCamView, sSel = sel, sSeg = gVkSeg, sPal = gVkPal;
+    const V sTgt = tgt;
+    const float sYaw = yaw, sPitch = pitch, sCd = cd, sFov = FOV;
+    const bool sMc = gMatcap, sCapNow = gCapNow, sDepth = gVkDepth;
+    cf.scene.clear(); cf.ui.clear(); cf.text.clear(); cf.pal.clear();
+    gVkOut = &cf; gVkPal = -1; gVkSeg = 0; gVkDepth = false;
+    W = cw; H = ch; gCapNow = true; gMatcap = false; sel = -1;
+    { V e, f, r, u; float fv; const int ac = activeCam(); if (ac >= 0 && camRender(e, f, r, u, fv)) gCamView = ac; }
+    frame();
+    const int rc = ::plat_vk_capture(cf, cw, ch, px);
+    gVkOut = sOut; gVkPal = sPal; gVkSeg = sSeg; gVkDepth = sDepth;
+    W = sW; H = sH; gCamView = sCam; sel = sSel;
+    tgt = sTgt; yaw = sYaw; pitch = sPitch; cd = sCd; FOV = sFov;
+    gMatcap = sMc; gCapNow = sCapNow;
+    return rc;
+}
+
+// grava RGBA8 (de baixo para cima) como PNG
+static void vkWritePngFile(FILE *f, const std::vector<unsigned char> &px, int w, int h) {
+    std::vector<unsigned char> fl(px.size());
+    for (int y = 0; y < h; y++) memcpy(&fl[(size_t)y * w * 4], &px[(size_t)(h - 1 - y) * w * 4], (size_t)w * 4);
+    stbi_write_png_to_func(mcWrite, f, w, h, 4, fl.data(), w * 4);
+}
+static bool vkWritePng(const std::string &path, const std::vector<unsigned char> &px, int w, int h) {
+    FILE *f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    vkWritePngFile(f, px, w, h);
+    fclose(f);
+    return true;
+}
+
+static int gVkTries = 0;
+
+static void vkVidStep() {
+    if (!gVid.on) return;
+    tm = gVid.t0 + gVid.f / (float)gVid.fps; applyAnim();
+    std::vector<unsigned char> px;
+    const int rc = vkCaptureScene(gVid.vw, gVid.vh, px);
+    if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; toast("Falha ao capturar o frame"); vidFinish(true); } return; }
+    gVkTries = 0;
+    if (rc != 0) { toast("Captura indisponivel neste aparelho"); vidFinish(true); return; }
+    if (!vidPush(px.data(), gVid.vw, gVid.vh)) { toast("Falha ao gravar frame"); vidFinish(true); return; }
+    gVid.done++; gVid.f++;
+    if (gVid.f > gVid.f1) vidFinish(true);
+}
+
+// um passo por quadro: video, previa e imagem final
+static void vkJobs() {
+    if (gVid.on) { vkVidStep(); return; }
+    std::vector<unsigned char> px;
+    if (gCapReq) {   // previa (tela de render): mesma proporcao do render, largura de ate 640
+        const int rw = gCapW, rh = gCapH;
+        const int ow = std::min(640, rw), oh = std::max(8, (int)((float)ow * rh / rw));
+        const int rc = vkCaptureScene(ow, oh, px);
+        if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gCapReq = false; } return; }
+        gVkTries = 0; gCapReq = false;
+        if (rc == 0) { gPrevPath = std::string(gDir) + "/preview.png"; if (vkWritePng(gPrevPath, px, ow, oh)) gPrevSeq++; }
+        else toast("Captura indisponivel neste aparelho");
+        return;
+    }
+    if (gAutoPng) {  // imagem final (1 = ver na tela de render, 2 = salvar na galeria)
+        int tw, th;
+        if (gMcCW > 0 && gMcCH > 0) { tw = gMcCW; th = gMcCH; }
+        else { const float sc = std::min(1.f, (float)gMcFinW / std::max(W, 1)); tw = (int)(W * sc); th = (int)(H * sc); }
+        tw = std::clamp(tw, 16, 4096); th = std::clamp(th, 16, 4096);
+        const int rc = vkCaptureScene(tw, th, px);
+        if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gAutoPng = 0; toast("Falha ao capturar a imagem"); } return; }
+        gVkTries = 0;
+        const int mode = gAutoPng; gAutoPng = 0;
+        if (rc != 0) { toast("Captura indisponivel neste aparelho"); return; }
+        gPrevPath = std::string(gDir) + "/preview.png";
+        if (vkWritePng(gPrevPath, px, tw, th)) gPrevSeq++;
+        if (mode == 2) {
+            if (!filesGranted()) { needFiles(); return; }
+            std::string path; bool fb; FILE *f = openOut("png", path, fb);
+            if (!f) { toast("Erro ao salvar"); return; }
+            vkWritePngFile(f, px, tw, th); fclose(f); saved(path, fb);
+        }
+    }
+}
+
 void api_vk_frame(EngVkFrame &out, int w, int h) {
     if (!ready) return;
     W = w; H = h;
@@ -2391,6 +2479,7 @@ void api_vk_frame(EngVkFrame &out, int w, int h) {
         if (tm < a_) tm = b_;
         applyAnim();
     }
+    if (gVid.on || gCapReq || gAutoPng) vkJobs();   // render, previa e video (fora da tela)
     gVkSeg = 0; gVkDepth = false;
     frame();
     gVkSeg = 1; gVkDepth = false;

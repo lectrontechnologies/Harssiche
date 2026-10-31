@@ -96,6 +96,8 @@ public:
     Q_INVOKABLE void command(int cmd, qreal a = 0, qreal b = 0);
     // true se (x, y), em px logicos da janela, esta sobre uma janela/botao desenhado pelo motor
     Q_INVOKABLE bool uiHit(qreal x, qreal y) const;
+    // thread de render: renderiza fora da tela e le os pixels (0 = ok, 1 = tenta no proximo quadro, 2 = indisponivel)
+    int captureFrame(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px);
 
 signals:
     void timelineChanged();

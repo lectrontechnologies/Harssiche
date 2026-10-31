@@ -24,6 +24,9 @@ public:
     void release();
     bool ready() const { return m_ready; }
     bool failed() const { return m_failed; }
+    // renderiza as ordens de cena fora da tela (4x MSAA quando o aparelho aceita) e le os pixels (RGBA8, de baixo para cima)
+    // 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel
+    int capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px);
     const char *why() const { return m_why; }  // motivo da falha (diagnostico)
 
 private:
@@ -61,7 +64,11 @@ private:
     bool findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out);
     bool mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage);
     void freeBuf(Buf &b);
-    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv);
+    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss);
+    VkPipeline meshPipeOff(int l, int d, int k, int u);
+    bool capInit(QQuickWindow *w);
+    bool offTargets(int w, int h);
+    void freeOff();
     VkPipeline meshPipe(int l, int d, int k, int u);  // pipelines de malha criados sob demanda
     bool create(QQuickWindow *w);
     bool uploadArray(QQuickWindow *w, Img &im, const std::vector<const unsigned char *> &layers, int sz, bool mips);
@@ -102,6 +109,27 @@ private:
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
     VkSampler m_samp = VK_NULL_HANDLE;
     VkDescriptorSet m_setTex = VK_NULL_HANDLE;
+    struct Off {  // alvos da captura fora da tela
+        int w = 0, h = 0;
+        VkImage cm = VK_NULL_HANDLE, dp = VK_NULL_HANDLE, res = VK_NULL_HANDLE;
+        VkDeviceMemory mcm = VK_NULL_HANDLE, mdp = VK_NULL_HANDLE, mres = VK_NULL_HANDLE;
+        VkImageView vcm = VK_NULL_HANDLE, vdp = VK_NULL_HANDLE, vres = VK_NULL_HANDLE;
+        VkFramebuffer fb = VK_NULL_HANDLE;
+        Buf rb;  // leitura (visivel pela CPU)
+    };
+    Off m_off;
+    Slot m_cap;  // ordens e paletas da captura
+    VkQueue m_queue = VK_NULL_HANDLE;
+    VkCommandPool m_cpool = VK_NULL_HANDLE;
+    VkCommandBuffer m_ccb = VK_NULL_HANDLE;
+    VkFence m_cfence = VK_NULL_HANDLE;
+    VkRenderPass m_rpOff = VK_NULL_HANDLE;
+    VkSampleCountFlagBits m_offS = VK_SAMPLE_COUNT_1_BIT;
+    VkFormat m_offDepth = VK_FORMAT_UNDEFINED;
+    uint32_t m_maxDim = 0;
+    bool m_capInit = false, m_capFail = false;
+    VkPipeline m_pMeshOff[2][2][2][2] = {};
+    bool m_pOffTried[2][2][2][2] = {};
     Img m_fontImg;
     Img m_gzImg;
     Img m_texImg, m_dummyImg;  // texturas de material / imagem vazia (1 x 1)

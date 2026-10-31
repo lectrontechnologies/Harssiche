@@ -274,6 +274,22 @@ void EngineView::renderEngineUi() {
     m_rects.swap(r);
 }
 
+int EngineView::captureFrame(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px) {
+#if QT_CONFIG(vulkan)
+    QQuickWindow *win = window();
+    if (!m_vulkan || !win || !m_vkr || !m_vkr->ready()) return 1;
+    return m_vkr->capture(win, f, w, h, px);
+#else
+    Q_UNUSED(f) Q_UNUSED(w) Q_UNUSED(h) Q_UNUSED(px)
+    return 2;
+#endif
+}
+
+int plat_vk_capture(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px) {
+    EngineView *v = EngineView::instance();
+    return v ? v->captureFrame(f, w, h, px) : 2;
+}
+
 bool EngineView::uiHit(qreal x, qreal y) const {
     const qreal dpr = window() ? window()->devicePixelRatio() : 1.0;
     const float px = float(x * dpr), py = float(y * dpr);

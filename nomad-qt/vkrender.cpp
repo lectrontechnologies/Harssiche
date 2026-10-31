@@ -79,7 +79,7 @@ void VkRend::freeBuf(Buf &b) {
     b = Buf();
 }
 
-VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv) {
+VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss) {
     VkPipelineShaderStageCreateInfo st[2] = {};
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -134,7 +134,7 @@ VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms = {};
     ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = ss;
     VkPipelineDepthStencilStateCreateInfo ds = {};
     ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     ds.depthTestEnable = depth ? VK_TRUE : VK_FALSE;
@@ -183,7 +183,7 @@ VkPipeline VkRend::meshPipe(int l, int d, int k, int u) {
     VkPipeline &p = m_pMesh[l][d][k][u];
     if (!p && !m_pTried[l][d][k][u]) {
         m_pTried[l][d][k][u] = true;
-        p = mkPipe(m_mv, m_mf, m_plMesh, m_rp, false, l == 1, d == 1, k == 1, false, u == 1);
+        p = mkPipe(m_mv, m_mf, m_plMesh, m_rp, false, l == 1, d == 1, k == 1, false, u == 1, VK_SAMPLE_COUNT_1_BIT);
     }
     return p;
 }
@@ -269,11 +269,11 @@ bool VkRend::create(QQuickWindow *w) {
         for (int l = 0; l < 2 && ok; ++l)
             for (int d = 0; d < 2 && ok; ++d) ok = meshPipe(l, d, 0, 0) != VK_NULL_HANDLE;
         if (ok) {
-            m_pText = mkPipe(tv, tf, m_plText, m_rp, true, false, false, false, false, false);
+            m_pText = mkPipe(tv, tf, m_plText, m_rp, true, false, false, false, false, false, VK_SAMPLE_COUNT_1_BIT);
             ok = m_pText != VK_NULL_HANDLE;
         }
         if (ok) {
-            m_pGz = mkPipe(gv, gf, m_plGz, m_rp, false, false, false, false, true, false);
+            m_pGz = mkPipe(gv, gf, m_plGz, m_rp, false, false, false, false, true, false, VK_SAMPLE_COUNT_1_BIT);
             ok = m_pGz != VK_NULL_HANDLE;
         }
     }
@@ -284,12 +284,12 @@ bool VkRend::create(QQuickWindow *w) {
     // descritores, buffers por slot e amostrador
     VkDescriptorPoolSize ps[2] = {};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = kMaxSlots * 2;
+    ps[0].descriptorCount = kMaxSlots * 2 + 2;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = 1 + 2 * kMaxSlots;
+    ps[1].descriptorCount = 2 + 2 * kMaxSlots;
     VkDescriptorPoolCreateInfo dpi = {};
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpi.maxSets = 3 * kMaxSlots + 1;
+    dpi.maxSets = 3 * kMaxSlots + 4;
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
@@ -891,8 +891,371 @@ void VkRend::drawUi(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
     replay(w, pw, ph, f.ui, m_sceneMeshes, f, true);
 }
 
+
+// ---------------------------------------------------------------------------
+// Captura fora da tela (render de imagem, previa e video)
+// ---------------------------------------------------------------------------
+VkPipeline VkRend::meshPipeOff(int l, int d, int k, int u) {
+    VkPipeline &p = m_pMeshOff[l][d][k][u];
+    if (!p && !m_pOffTried[l][d][k][u]) {
+        m_pOffTried[l][d][k][u] = true;
+        p = mkPipe(m_mv, m_mf, m_plMesh, m_rpOff, false, l == 1, d == 1, k == 1, false, u == 1, m_offS);
+    }
+    return p;
+}
+
+bool VkRend::capInit(QQuickWindow *w) {
+    QSGRendererInterface *rif = w->rendererInterface();
+    void *pq = rif->getResource(w, QSGRendererInterface::CommandQueueResource);
+    void *pf = rif->getResource(w, QSGRendererInterface::GraphicsQueueFamilyIndexResource);
+    if (!pq || !pf) return false;
+    m_queue = *reinterpret_cast<VkQueue *>(pq);
+    const uint32_t fam = *reinterpret_cast<uint32_t *>(pf);
+
+    VkPhysicalDeviceProperties pp;
+    m_if->vkGetPhysicalDeviceProperties(m_phys, &pp);
+    m_maxDim = pp.limits.maxImageDimension2D;
+    const VkSampleCountFlags cnt = pp.limits.framebufferColorSampleCounts & pp.limits.framebufferDepthSampleCounts;
+    m_offS = (cnt & VK_SAMPLE_COUNT_4_BIT) ? VK_SAMPLE_COUNT_4_BIT : VK_SAMPLE_COUNT_1_BIT;
+    VkFormatProperties fp;
+    m_if->vkGetPhysicalDeviceFormatProperties(m_phys, VK_FORMAT_D32_SFLOAT, &fp);
+    if (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+        m_offDepth = VK_FORMAT_D32_SFLOAT;
+    } else {
+        m_if->vkGetPhysicalDeviceFormatProperties(m_phys, VK_FORMAT_D16_UNORM, &fp);
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) return false;
+        m_offDepth = VK_FORMAT_D16_UNORM;
+    }
+
+    const bool ms = m_offS != VK_SAMPLE_COUNT_1_BIT;
+    VkAttachmentDescription at[3] = {};
+    at[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+    at[0].samples = m_offS;
+    at[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    at[0].storeOp = ms ? VK_ATTACHMENT_STORE_OP_DONT_CARE : VK_ATTACHMENT_STORE_OP_STORE;
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at[0].finalLayout = ms ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    at[1].format = m_offDepth;
+    at[1].samples = m_offS;
+    at[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    at[2].format = VK_FORMAT_R8G8B8A8_UNORM;
+    at[2].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[2].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[2].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[2].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    at[2].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    const VkAttachmentReference cr = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    const VkAttachmentReference dr = {1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    const VkAttachmentReference rr = {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription sp = {};
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &cr;
+    sp.pDepthStencilAttachment = &dr;
+    sp.pResolveAttachments = ms ? &rr : nullptr;
+    VkRenderPassCreateInfo rci = {};
+    rci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rci.attachmentCount = ms ? 3 : 2;
+    rci.pAttachments = at;
+    rci.subpassCount = 1;
+    rci.pSubpasses = &sp;
+    if (m_df->vkCreateRenderPass(m_dev, &rci, nullptr, &m_rpOff) != VK_SUCCESS) return false;
+
+    VkCommandPoolCreateInfo pci = {};
+    pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pci.queueFamilyIndex = fam;
+    if (m_df->vkCreateCommandPool(m_dev, &pci, nullptr, &m_cpool) != VK_SUCCESS) return false;
+    VkCommandBufferAllocateInfo cai = {};
+    cai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cai.commandPool = m_cpool;
+    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cai.commandBufferCount = 1;
+    if (m_df->vkAllocateCommandBuffers(m_dev, &cai, &m_ccb) != VK_SUCCESS) return false;
+    VkFenceCreateInfo fci = {};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    if (m_df->vkCreateFence(m_dev, &fci, nullptr, &m_cfence) != VK_SUCCESS) return false;
+
+    // ordens e paletas proprias da captura (nao mexem nos buffers dos quadros em andamento)
+    if (!mkBuf(m_cap.ops, VkDeviceSize(kMaxOps) * sizeof(GpuOp), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) return false;
+    if (!mkBuf(m_cap.pal, VkDeviceSize(kEngVkMaxMats) * 64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)) return false;
+    VkDescriptorSetAllocateInfo ai = {};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &m_lOps;
+    if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &m_cap.set) != VK_SUCCESS) return false;
+    ai.pSetLayouts = &m_lTex;
+    if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &m_cap.texSet) != VK_SUCCESS) return false;
+    VkDescriptorBufferInfo bi[2] = {{m_cap.ops.b, 0, VK_WHOLE_SIZE}, {m_cap.pal.b, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet wr[2] = {};
+    for (int q = 0; q < 2; ++q) {
+        wr[q].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[q].dstSet = m_cap.set;
+        wr[q].dstBinding = uint32_t(q);
+        wr[q].descriptorCount = 1;
+        wr[q].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr[q].pBufferInfo = &bi[q];
+    }
+    m_df->vkUpdateDescriptorSets(m_dev, 2, wr, 0, nullptr);
+    m_cap.texVer = ~0u;  // forca a ligacao das texturas na primeira captura
+    return true;
+}
+
+void VkRend::freeOff() {
+    if (!m_df || !m_dev) return;
+    if (m_off.fb) m_df->vkDestroyFramebuffer(m_dev, m_off.fb, nullptr);
+    for (VkImageView v : {m_off.vcm, m_off.vdp, m_off.vres})
+        if (v) m_df->vkDestroyImageView(m_dev, v, nullptr);
+    for (VkImage i : {m_off.cm, m_off.dp, m_off.res})
+        if (i) m_df->vkDestroyImage(m_dev, i, nullptr);
+    for (VkDeviceMemory m : {m_off.mcm, m_off.mdp, m_off.mres})
+        if (m) m_df->vkFreeMemory(m_dev, m, nullptr);
+    freeBuf(m_off.rb);
+    m_off = Off();
+}
+
+bool VkRend::offTargets(int w, int h) {
+    if (m_off.fb && m_off.w == w && m_off.h == h) return true;
+    freeOff();
+    const bool ms = m_offS != VK_SAMPLE_COUNT_1_BIT;
+    auto mk = [&](VkFormat fmt, VkImageUsageFlags usage, VkSampleCountFlagBits ss, VkImageAspectFlags aspect, bool lazy, VkImage &img, VkDeviceMemory &mem, VkImageView &view) {
+        VkImageCreateInfo ic = {};
+        ic.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ic.imageType = VK_IMAGE_TYPE_2D;
+        ic.format = fmt;
+        ic.extent = {uint32_t(w), uint32_t(h), 1};
+        ic.mipLevels = 1;
+        ic.arrayLayers = 1;
+        ic.samples = ss;
+        ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ic.usage = usage;
+        ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (m_df->vkCreateImage(m_dev, &ic, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements mr;
+        m_df->vkGetImageMemoryRequirements(m_dev, img, &mr);
+        uint32_t mt = 0;
+        if (!(lazy && findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, mt)) &&
+            !findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mt))
+            return false;
+        VkMemoryAllocateInfo ai = {};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = mt;
+        if (m_df->vkAllocateMemory(m_dev, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        if (m_df->vkBindImageMemory(m_dev, img, mem, 0) != VK_SUCCESS) return false;
+        VkImageViewCreateInfo vc = {};
+        vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vc.image = img;
+        vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vc.format = fmt;
+        vc.subresourceRange = {aspect, 0, 1, 0, 1};
+        return m_df->vkCreateImageView(m_dev, &vc, nullptr, &view) == VK_SUCCESS;
+    };
+    bool ok = true;
+    VkImageView views[3] = {};
+    if (ms) {  // cor e profundidade multiamostradas (transitorias: ficam no cache do bloco) + cor resolvida
+        ok = mk(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, m_offS, VK_IMAGE_ASPECT_COLOR_BIT, true, m_off.cm, m_off.mcm, m_off.vcm) &&
+             mk(m_offDepth, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, m_offS, VK_IMAGE_ASPECT_DEPTH_BIT, true, m_off.dp, m_off.mdp, m_off.vdp) &&
+             mk(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, false, m_off.res, m_off.mres, m_off.vres);
+        views[0] = m_off.vcm;
+        views[1] = m_off.vdp;
+        views[2] = m_off.vres;
+    } else {
+        ok = mk(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT, false, m_off.cm, m_off.mcm, m_off.vcm) &&
+             mk(m_offDepth, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, false, m_off.dp, m_off.mdp, m_off.vdp);
+        views[0] = m_off.vcm;
+        views[1] = m_off.vdp;
+    }
+    if (ok) ok = mkBuf(m_off.rb, VkDeviceSize(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    if (ok) {
+        VkFramebufferCreateInfo fi = {};
+        fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass = m_rpOff;
+        fi.attachmentCount = ms ? 3 : 2;
+        fi.pAttachments = views;
+        fi.width = uint32_t(w);
+        fi.height = uint32_t(h);
+        fi.layers = 1;
+        ok = m_df->vkCreateFramebuffer(m_dev, &fi, nullptr, &m_off.fb) == VK_SUCCESS;
+    }
+    if (!ok) {
+        freeOff();
+        return false;
+    }
+    m_off.w = w;
+    m_off.h = h;
+    return true;
+}
+
+int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px) {
+    if (m_failed) return 2;
+    if (!m_ready || !m_dummyOk || m_frame < 1) return 1;
+    {   // texturas novas so valem depois que o quadro que as enviou foi para a fila
+        int sz = 0;
+        unsigned ver = 0;
+        const int n = eng_vk_tex_count(sz, ver);
+        if (n > 0 && (m_texVer != ver || m_texUpFrame >= m_frame)) return m_texTried == ver && m_texVer != ver ? 2 : 1;
+    }
+    if (m_capFail) return 2;
+    if (!m_capInit) {
+        if (!capInit(w)) {
+            m_capFail = true;
+            return 2;
+        }
+        m_capInit = true;
+    }
+    if (uint32_t(cw) > m_maxDim || uint32_t(ch) > m_maxDim) return 2;
+    if (!offTargets(cw, ch)) return 2;
+
+    // texturas ligadas ao conjunto da captura (a captura anterior ja terminou: pode atualizar)
+    {
+        const unsigned want = m_texImg.view ? m_texVer : 0;
+        if (m_cap.texVer != want) {
+            VkDescriptorImageInfo ii = {m_sampRep, m_texImg.view ? m_texImg.view : m_dummyImg.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet wr = {};
+            wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet = m_cap.texSet;
+            wr.dstBinding = 0;
+            wr.descriptorCount = 1;
+            wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr.pImageInfo = &ii;
+            m_df->vkUpdateDescriptorSets(m_dev, 1, &wr, 0, nullptr);
+            m_cap.texVer = want;
+        }
+    }
+
+    // ordens -> buffers da captura
+    GpuOp *dst = static_cast<GpuOp *>(m_cap.ops.p);
+    uint32_t k = 0;
+    for (const EngVkOp &op : f.scene) {
+        if (op.kind != 0 || !op.cpu || op.n <= 0) continue;
+        if (k >= kMaxOps) break;
+        const MeshBuf *mbp = meshFor(op);
+        GpuOp &g = dst[k++];
+        std::memcpy(g.mvp, op.mvp, sizeof g.mvp);
+        std::memcpy(g.mod, op.mod, sizeof g.mod);
+        std::memcpy(g.col, op.col, sizeof g.col);
+        std::memcpy(g.a, op.a, sizeof g.a);
+        std::memcpy(g.b, op.b, sizeof g.b);
+        std::memcpy(g.tl, op.tl, sizeof g.tl);
+        if (!(mbp && mbp->uv.b)) {
+            g.tl[0] = g.tl[1] = g.tl[2] = -1.f;
+            g.tl[3] = 0.f;
+        }
+    }
+    const size_t np = std::min<size_t>(f.pal.size(), size_t(kEngVkMaxMats) * 16);
+    if (np) std::memcpy(m_cap.pal.p, f.pal.data(), np * 4);
+
+    // comandos
+    VkCommandBuffer cb = m_ccb;
+    m_df->vkResetCommandBuffer(cb, 0);
+    VkCommandBufferBeginInfo bi = {};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return 2;
+    VkClearValue cv[2] = {};
+    cv[0].color = {{0.f, 0.f, 0.f, 1.f}};
+    cv[1].depthStencil = {1.f, 0};
+    VkRenderPassBeginInfo rb = {};
+    rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rb.renderPass = m_rpOff;
+    rb.framebuffer = m_off.fb;
+    rb.renderArea = {{0, 0}, {uint32_t(cw), uint32_t(ch)}};
+    rb.clearValueCount = 2;
+    rb.pClearValues = cv;
+    m_df->vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    const VkViewport vp = {0.f, 0.f, float(cw), float(ch), 0.f, 1.f};
+    const VkRect2D full = {{0, 0}, {uint32_t(cw), uint32_t(ch)}};
+    m_df->vkCmdSetViewport(cb, 0, 1, &vp);
+    m_df->vkCmdSetScissor(cb, 0, 1, &full);
+    MeshPC mpc = {};
+    std::memcpy(mpc.cam, f.cam, sizeof mpc.cam);
+    std::memcpy(mpc.mcR, f.mcR, sizeof mpc.mcR);
+    std::memcpy(mpc.mcU, f.mcU, sizeof mpc.mcU);
+    std::memcpy(mpc.mcB, f.mcB, sizeof mpc.mcB);
+    mpc.mcR[3] = float(ch);
+    const VkDescriptorSet sets[2] = {m_cap.set, m_cap.texSet};
+    m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 2, sets, 0, nullptr);
+    m_df->vkCmdPushConstants(cb, m_plMesh, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mpc, &mpc);
+    VkPipeline cur = VK_NULL_HANDLE;
+    uint32_t idx = 0;
+    for (const EngVkOp &op : f.scene) {
+        if (op.kind != 0 || !op.cpu || op.n <= 0) continue;
+        const uint32_t myIdx = idx++;
+        if (myIdx >= kMaxOps) continue;
+        MeshBuf *mb = meshFor(op);
+        if (!mb) continue;
+        const bool skinned = op.skin != nullptr;
+        if (skinned && !mb->skin.b) continue;
+        const bool hasUv = op.uv != nullptr && mb->uv.b;
+        VkPipeline want = meshPipeOff(op.lines ? 1 : 0, op.depth ? 1 : 0, skinned ? 1 : 0, hasUv ? 1 : 0);
+        if (!want) continue;
+        if (want != cur) {
+            m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+            cur = want;
+        }
+        const VkDeviceSize off0 = 0;
+        m_df->vkCmdBindVertexBuffers(cb, 0, 1, &mb->b.b, &off0);
+        if (skinned) m_df->vkCmdBindVertexBuffers(cb, 1, 1, &mb->skin.b, &off0);
+        if (hasUv) m_df->vkCmdBindVertexBuffers(cb, 2, 1, &mb->uv.b, &off0);
+        m_df->vkCmdDraw(cb, uint32_t(op.n), 1, 0, myIdx);
+    }
+    m_df->vkCmdEndRenderPass(cb);
+
+    VkMemoryBarrier mbar = {};
+    mbar.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    mbar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    mbar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mbar, 0, nullptr, 0, nullptr);
+    VkBufferImageCopy cp = {};
+    cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    cp.imageExtent = {uint32_t(cw), uint32_t(ch), 1};
+    const VkImage outImg = m_offS != VK_SAMPLE_COUNT_1_BIT ? m_off.res : m_off.cm;
+    m_df->vkCmdCopyImageToBuffer(cb, outImg, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_off.rb.b, 1, &cp);
+    mbar.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mbar.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mbar, 0, nullptr, 0, nullptr);
+    if (m_df->vkEndCommandBuffer(cb) != VK_SUCCESS) return 2;
+
+    VkSubmitInfo si = {};
+    si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    m_df->vkResetFences(m_dev, 1, &m_cfence);
+    if (m_df->vkQueueSubmit(m_queue, 1, &si, m_cfence) != VK_SUCCESS) return 2;
+    if (m_df->vkWaitForFences(m_dev, 1, &m_cfence, VK_TRUE, 10ull * 1000 * 1000 * 1000) != VK_SUCCESS) return 2;
+
+    // a imagem sai de cima para baixo; o motor espera de baixo para cima (como glReadPixels)
+    px.resize(size_t(cw) * size_t(ch) * 4);
+    const unsigned char *src = static_cast<const unsigned char *>(m_off.rb.p);
+    for (int y = 0; y < ch; ++y) std::memcpy(&px[size_t(ch - 1 - y) * size_t(cw) * 4], src + size_t(y) * size_t(cw) * 4, size_t(cw) * 4);
+    return 0;
+}
+
 void VkRend::release() {
     if (m_df && m_dev) {
+        freeOff();
+        freeBuf(m_cap.ops);
+        freeBuf(m_cap.pal);
+        for (int l = 0; l < 2; ++l)
+            for (int d = 0; d < 2; ++d)
+                for (int k = 0; k < 2; ++k)
+                    for (int u = 0; u < 2; ++u)
+                        if (m_pMeshOff[l][d][k][u]) m_df->vkDestroyPipeline(m_dev, m_pMeshOff[l][d][k][u], nullptr);
+        if (m_cfence) m_df->vkDestroyFence(m_dev, m_cfence, nullptr);
+        if (m_cpool) m_df->vkDestroyCommandPool(m_dev, m_cpool, nullptr);  // libera tambem o buffer de comandos
+        if (m_rpOff) m_df->vkDestroyRenderPass(m_dev, m_rpOff, nullptr);
         for (auto &kv : m_meshes) {
             freeBuf(kv.second.b);
             freeBuf(kv.second.skin);
@@ -939,6 +1302,19 @@ void VkRend::release() {
                 }
     m_mv = m_mf = VK_NULL_HANDLE;
     m_sampRep = VK_NULL_HANDLE;
+    for (int l = 0; l < 2; ++l)
+        for (int d = 0; d < 2; ++d)
+            for (int k = 0; k < 2; ++k)
+                for (int u = 0; u < 2; ++u) {
+                    m_pMeshOff[l][d][k][u] = VK_NULL_HANDLE;
+                    m_pOffTried[l][d][k][u] = false;
+                }
+    m_cfence = VK_NULL_HANDLE;
+    m_cpool = VK_NULL_HANDLE;
+    m_ccb = VK_NULL_HANDLE;
+    m_rpOff = VK_NULL_HANDLE;
+    m_capInit = m_capFail = false;
+    m_cap = Slot();
     m_created = m_dummyOk = false;
     m_texVer = m_texTried = 0;
     m_pText = VK_NULL_HANDLE;
