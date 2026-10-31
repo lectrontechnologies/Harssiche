@@ -369,12 +369,13 @@ void initGL(){
  glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);buildMeshes();for(size_t i=6;i<meshes.size();i++){std::vector<float> c=meshes[i].cpu,sk=meshes[i].skin,uvv=meshes[i].uv;float r=meshes[i].rad;meshes[i]=upload(c,GL_TRIANGLES);meshes[i].rad=r;if(!sk.empty())attachSkin(meshes[i],sk);if(!uvv.empty())attachUV(meshes[i],uvv);}initText();initPost();initMC();initTexArr();}
 
 // ---------- gravacao de ordens para o backend Vulkan ----------
-EngVkFrame*gVkOut=nullptr;bool gVkDepth=false;int gVkSeg=0;
+EngVkFrame*gVkOut=nullptr;bool gVkDepth=false;int gVkSeg=0;int gVkPal=-1;
 static void vkPush(EngVkOp&o){if(!gVkOut)return;o.depth=gVkSeg==0&&gVkDepth?1:0;(gVkSeg==0?gVkOut->scene:gVkOut->ui).push_back(o);}
 void vkRecMesh(const Mesh&m,const M&mvp,const M&mod,float r,float g,float b,float a,float lit){
  if(!gVkOut||m.cpu.empty())return;EngVkOp o;o.kind=0;o.vid=m.vid;o.n=m.n;o.cpu=m.cpu.data();o.lines=m.mode==GL_LINES?1:0;
  memcpy(o.mvp,mvp.m,64);memcpy(o.mod,mod.m,64);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=a;
  o.a[0]=lit;o.a[1]=gS[0];o.a[2]=gS[1];o.a[3]=gS[2];o.b[0]=gMR[0];o.b[1]=gMR[1];o.b[2]=gSk;
+ if(gSk>.5f&&m.skinned&&gVkPal>=0&&m.skin.size()>=(size_t)m.n*8){o.skin=m.skin.data();o.b[3]=(float)gVkPal;}else o.b[2]=0;
  o.tl[0]=gTL[0];o.tl[1]=gTL[1];o.tl[2]=gTL[2];o.tl[3]=gTL[3];vkPush(o);}
 void vkScissor(float x,float y,float w,float h){if(!gVkOut)return;EngVkOp o;o.kind=2;o.sc[0]=x;o.sc[1]=y;o.sc[2]=w;o.sc[3]=h;vkPush(o);}
 void vkSetCam(V e,V r,V u,V f,float mc){if(!gVkOut)return;gVkOut->cam[0]=e.x;gVkOut->cam[1]=e.y;gVkOut->cam[2]=e.z;gVkOut->cam[3]=mc;
@@ -1594,8 +1595,9 @@ void pickPath(const std::string&p){
  if(gPick==0){importPath(p);return;}
  if(gPick==1){if(loadMAD(p,true)){size_t sl=p.rfind('/');std::string n=sl==std::string::npos?p:p.substr(sl+1);size_t dt=n.rfind('.');if(dt!=std::string::npos)n=n.substr(0,dt);gProj=n;}}
  else loadMAD(p,false);}
-bool setJoints(int si){if(gVK)return false;if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
+bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
  for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
+ if(gVK){if(!gVkOut||n<=0||(int)(gVkOut->pal.size()/16)+n>kEngVkMaxMats){gVkPal=-1;return false;}gVkPal=(int)(gVkOut->pal.size()/16);for(int k=0;k<n;k++)gVkOut->pal.insert(gVkOut->pal.end(),J[k].m,J[k].m+16);return true;}
  glUniformMatrix4fv(uJL,n,GL_FALSE,J[0].m);return true;}
 // ---------- controles do rig: formas personalizadas (custom shapes) ----------
 const char*gShapeN[6]={"Cubo","Circulo","Esfera","Diamante","Cruz","Quadrado"};
@@ -1931,6 +1933,27 @@ if(gNameOpen){ // caixa "Nomeie o projeto" (o teclado e o do Android)
 // ---------- gizmos (ImGuizmo) ----------
 // So os gizmos de mover/girar/escalar usam o ImGuizmo. O resto da interface continua como estava.
 bool gGzEdited=false;bool gGzOK=false,gGzBackend=false,gGzUsing=false,gGzClear=false;float gGzLen0=1;
+std::vector<unsigned char> gGzAtlas;int gGzAW=0,gGzAH=0,gGzABpp=0;unsigned gGzAVer=0;
+void gzInitVK(){ // backend Vulkan: sem GL; o renderizador Vulkan desenha as listas do ImGui
+ if(ImGui::GetCurrentContext())ImGui::DestroyContext();
+ ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;
+ io.BackendFlags|=ImGuiBackendFlags_RendererHasTextures|ImGuiBackendFlags_RendererHasVtxOffset;
+ ImGui::GetPlatformIO().Renderer_TextureMaxWidth=ImGui::GetPlatformIO().Renderer_TextureMaxHeight=4096;
+ gGzAtlas.clear();gGzAW=gGzAH=gGzABpp=0;gGzAVer++;gGzBackend=false;gGzOK=true;gGzUsing=false;gGzClear=false;}
+void gzCapture(){ // depois de ImGui::Render(): atende os pedidos de textura e copia as listas para o quadro
+ ImDrawData*dd=ImGui::GetDrawData();if(!dd||!gVkOut)return;
+ if(dd->Textures)for(ImTextureData*t:*dd->Textures){
+  if(t->Status==ImTextureStatus_WantCreate||t->Status==ImTextureStatus_WantUpdates){
+   if(t->Pixels&&t->Width>0&&t->Height>0){gGzAW=t->Width;gGzAH=t->Height;gGzABpp=t->BytesPerPixel;gGzAtlas.assign(t->Pixels,t->Pixels+(size_t)t->Width*t->Height*t->BytesPerPixel);gGzAVer++;}
+   t->SetTexID((ImTextureID)1);t->SetStatus(ImTextureStatus_OK);}
+  else if(t->Status==ImTextureStatus_WantDestroy&&t->UnusedFrames>0){t->SetTexID(ImTextureID_Invalid);t->SetStatus(ImTextureStatus_Destroyed);}}
+ EngVkGz&g=gVkOut->gz;g.nv=0;g.vtx.clear();g.idx.clear();g.cmds.clear();
+ for(int n=0;n<dd->CmdListsCount;n++){const ImDrawList*cl=dd->CmdLists[n];const int vb=g.nv,ib=(int)g.idx.size();
+  const unsigned char*vp=(const unsigned char*)cl->VtxBuffer.Data;
+  g.vtx.insert(g.vtx.end(),vp,vp+(size_t)cl->VtxBuffer.Size*sizeof(ImDrawVert));
+  g.idx.insert(g.idx.end(),cl->IdxBuffer.Data,cl->IdxBuffer.Data+cl->IdxBuffer.Size);g.nv+=cl->VtxBuffer.Size;
+  for(int c=0;c<cl->CmdBuffer.Size;c++){const ImDrawCmd&pc=cl->CmdBuffer[c];if(pc.UserCallback||pc.ElemCount==0)continue;
+   EngVkGzCmd k;k.clip[0]=pc.ClipRect.x;k.clip[1]=pc.ClipRect.y;k.clip[2]=pc.ClipRect.z;k.clip[3]=pc.ClipRect.w;k.vtxOff=vb+(int)pc.VtxOffset;k.idxOff=ib+(int)pc.IdxOffset;k.count=(int)pc.ElemCount;g.cmds.push_back(k);}}}
 void gzInit(){
  if(ImGui::GetCurrentContext()){if(gGzBackend)ImGui_ImplOpenGL3_Shutdown();ImGui::DestroyContext();gGzBackend=false;} // GL novo: recria tudo
  ImGui::CreateContext();ImGuiIO&io=ImGui::GetIO();io.IniFilename=nullptr;io.LogFilename=nullptr;io.ConfigFlags|=ImGuiConfigFlags_NoMouseCursorChange;
@@ -1950,7 +1973,7 @@ void gzApply(const M&res){gGzEdited=true;Obj&ob=objs[sel];M P=ob.parent>=0?world
 void gzRun(bool draw){
  ImGuiIO&io=ImGui::GetIO();io.DisplaySize=ImVec2((float)W,(float)H);io.DeltaTime=std::clamp(gDt,.001f,.1f);
  float k=std::max(1.f,H/540.f);ImGui::GetStyle().FontScaleMain=k;
- ImGui_ImplOpenGL3_NewFrame();ImGui::NewFrame();ImGuizmo::BeginFrame();
+ if(!gVK)ImGui_ImplOpenGL3_NewFrame();ImGui::NewFrame();ImGuizmo::BeginFrame();
  if(gGzClear&&!io.MouseDown[0]){io.AddMousePosEvent(-FLT_MAX,-FLT_MAX);gGzClear=false;} // dedo saiu: apaga o destaque
  ImGuizmo::SetOrthographic(false);ImGuizmo::Enable(true);ImGuizmo::AllowAxisFlip(false);ImGuizmo::SetGizmoSizeClipSpace(.17f);
  ImGuizmo::Style&st=ImGuizmo::GetStyle();st.TranslationLineThickness=3.f*k;st.TranslationLineArrowSize=7.f*k;st.RotationLineThickness=2.f*k;st.RotationOuterLineThickness=3.f*k;
@@ -1967,7 +1990,7 @@ void gzRun(bool draw){
  gGzUsing=use;
  if(use&&draw)gzApply(mat);
  ImGui::End();ImGui::PopStyleVar(2);
- if(draw){ImGui::Render();ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());}else ImGui::EndFrame();}
+ if(draw){ImGui::Render();if(gVK)gzCapture();else ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());}else ImGui::EndFrame();}
 float gGzOX=0,gGzOY=0; // deslocamento do dedo ate o ponto que acertou o gizmo (tolerancia de toque)
 bool gzProbe(float x,float y){if(!gzActive())return false;ImGuiIO&io=ImGui::GetIO();
  float r=16.f*std::max(1.f,H/540.f);static const float ox[9]={0,1,-1,0,0,.7f,-.7f,.7f,-.7f},oy[9]={0,0,0,1,-1,.7f,.7f,-.7f,-.7f};
@@ -2154,7 +2177,7 @@ void api_init(const char *dir, int w, int h) {
     }
     W = w; H = h;
     gBgP = 0;
-    if (gVK) initVK();
+    if (gVK) { initVK(); gzInitVK(); }
     else { initGL(); gzInit(); }
     ready = true;
     gLastT = engNow();
@@ -2354,7 +2377,7 @@ void api_frame() {
 void api_vk_frame(EngVkFrame &out, int w, int h) {
     if (!ready) return;
     W = w; H = h;
-    out.scene.clear(); out.ui.clear(); out.text.clear();
+    out.scene.clear(); out.ui.clear(); out.text.clear(); out.pal.clear(); gVkPal=-1;
     gVkOut = &out;
     gCapNow = false;
     double t = engNow(); float dt = (float)(t - gLastT); gLastT = t;
@@ -2370,6 +2393,8 @@ void api_vk_frame(EngVkFrame &out, int w, int h) {
     gVkSeg = 0; gVkDepth = false;
     frame();
     gVkSeg = 1; gVkDepth = false;
+    out.gz.nv = 0; out.gz.vtx.clear(); out.gz.idx.clear(); out.gz.cmds.clear();
+    if (gzActive()) gzRun(true);   // gizmos por baixo dos paineis do motor, como no OpenGL
     frameUI();
     gVkOut = nullptr;
 }
@@ -2419,6 +2444,10 @@ void eng_event(const EngEvent &e) { eng::api_event(e); }
 void eng_frame() { eng::api_frame(); }
 void eng_set_vk(bool on) { eng::gVK = on; }
 void eng_vk_frame(EngVkFrame &out, int w, int h) { eng::api_vk_frame(out, w, h); }
+const unsigned char *eng_vk_gz_atlas(int &w, int &h, int &bpp, unsigned &ver) {
+    w = eng::gGzAW; h = eng::gGzAH; bpp = eng::gGzABpp; ver = eng::gGzAVer;
+    return eng::gGzAtlas.empty() ? nullptr : eng::gGzAtlas.data();
+}
 const unsigned char *eng_vk_font(int &w, int &h) { w = h = 512; return eng::gAtlas.size() == 512u * 512u ? eng::gAtlas.data() : nullptr; }
 void eng_gl_lost() { eng::api_gl_lost(); }
 bool eng_dialog_open() { return eng::api_dialog_open(); }
