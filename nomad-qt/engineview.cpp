@@ -379,6 +379,7 @@ void EngineView::touchEvent(QTouchEvent *ev) {
         case QEventPoint::Pressed:
             m_ids.append(id);
             m_pos.insert(id, p.position());
+            setKeepTouchGrab(true);  // nenhum item QML rouba o toque no meio do arrasto (gizmo sumia)
             push(makeTouch(m_ids.size() == 1 ? 0 : 5));  // DOWN / POINTER_DOWN
             break;
         case QEventPoint::Updated:
