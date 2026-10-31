@@ -39,6 +39,8 @@ private:
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorSet gzSet = VK_NULL_HANDLE;  // atlas do ImGui
         unsigned gzVer = 0;                      // versao do atlas ligada a este conjunto
+        VkDescriptorSet texSet = VK_NULL_HANDLE; // array de texturas de material
+        unsigned texVer = 0;                     // versao do array ligada a este conjunto (0 = imagem vazia)
     };
     struct Img {  // imagem + memoria + visao + buffer de copia
         VkImage img = VK_NULL_HANDLE;
@@ -50,6 +52,7 @@ private:
     struct MeshBuf {
         Buf b;
         Buf skin;  // indices e pesos de osso (so malhas com esqueleto)
+        Buf uv;    // coordenadas de textura (so malhas com textura)
         int n = 0;
         uint64_t last = 0;  // ultimo quadro em que foi usada (para liberar malhas que sumiram)
     };
@@ -58,7 +61,11 @@ private:
     bool findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out);
     bool mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage);
     void freeBuf(Buf &b);
-    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz);
+    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv);
+    VkPipeline meshPipe(int l, int d, int k, int u);  // pipelines de malha criados sob demanda
+    bool create(QQuickWindow *w);
+    bool uploadArray(QQuickWindow *w, Img &im, const std::vector<const unsigned char *> &layers, int sz, bool mips);
+    void syncTex(QQuickWindow *w);
     bool uploadFont(QQuickWindow *w);
     bool uploadImg(QQuickWindow *w, Img &im, const unsigned char *px, int fw, int fh, VkFormat fmt, int bpp, bool alphaSwz);
     void freeImg(Img &im);
@@ -86,7 +93,9 @@ private:
 
     VkDescriptorSetLayout m_lOps = VK_NULL_HANDLE, m_lTex = VK_NULL_HANDLE;
     VkPipelineLayout m_plMesh = VK_NULL_HANDLE, m_plText = VK_NULL_HANDLE;
-    VkPipeline m_pMesh[2][2][2] = {};  // [linhas][profundidade][esqueleto]
+    VkPipeline m_pMesh[2][2][2][2] = {};  // [linhas][profundidade][esqueleto][uv]
+    bool m_pTried[2][2][2][2] = {};
+    VkShaderModule m_mv = VK_NULL_HANDLE, m_mf = VK_NULL_HANDLE;
     VkPipeline m_pText = VK_NULL_HANDLE;
     VkPipeline m_pGz = VK_NULL_HANDLE;
     VkPipelineLayout m_plGz = VK_NULL_HANDLE;
@@ -95,6 +104,12 @@ private:
     VkDescriptorSet m_setTex = VK_NULL_HANDLE;
     Img m_fontImg;
     Img m_gzImg;
+    Img m_texImg, m_dummyImg;  // texturas de material / imagem vazia (1 x 1)
+    VkSampler m_sampRep = VK_NULL_HANDLE;
+    unsigned m_texVer = 0, m_texTried = 0;
+    uint64_t m_texUpFrame = 0;
+    bool m_created = false, m_dummyOk = false;
+    int m_dummyTries = 0, m_fontTries = 0;
     std::vector<Img> m_retire;  // imagens substituidas, liberadas depois de alguns quadros
     unsigned m_gzVer = 0, m_gzTried = 0;
     bool m_gzDraw = false;

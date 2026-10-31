@@ -5,6 +5,7 @@ layout(location = 0) in vec3 aP;
 layout(location = 1) in vec3 aN;
 layout(location = 2) in vec4 aJ;  // so em malhas com esqueleto: indices de osso
 layout(location = 3) in vec4 aW;  // pesos
+layout(location = 4) in vec2 aUV; // so em malhas com coordenadas de textura
 
 struct Op {
     mat4 mvp;
@@ -21,6 +22,7 @@ layout(location = 0) out vec3 vN;
 layout(location = 1) out vec3 vP;
 layout(location = 2) out vec3 vW;
 layout(location = 3) flat out int vOp;
+layout(location = 4) out vec2 vUV;
 
 void main() {
     Op o = ops[gl_InstanceIndex];
@@ -41,4 +43,5 @@ void main() {
     vP = aP;
     vW = (o.mod * p).xyz;
     vOp = gl_InstanceIndex;
+    vUV = aUV;
 }

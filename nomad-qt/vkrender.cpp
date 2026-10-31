@@ -79,7 +79,7 @@ void VkRend::freeBuf(Buf &b) {
     b = Buf();
 }
 
-VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz) {
+VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv) {
     VkPipelineShaderStageCreateInfo st[2] = {};
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -90,45 +90,34 @@ VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout
     st[1].module = fs;
     st[1].pName = "main";
 
-    VkVertexInputBindingDescription bd[2] = {};
-    bd[0].binding = 0;
-    bd[0].stride = text ? 16 : 24;
-    bd[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    bd[1].binding = 1;  // indices e pesos de osso (so no pipeline de esqueleto)
-    bd[1].stride = 32;
-    bd[1].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    VkVertexInputAttributeDescription ad[4] = {};
-    ad[0].location = 0;
-    ad[0].binding = 0;
-    ad[0].format = text ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32G32B32_SFLOAT;
-    ad[0].offset = 0;
-    ad[1].location = 1;
-    ad[1].binding = 0;
-    ad[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    ad[1].offset = 12;
-    ad[2].location = 2;
-    ad[2].binding = 1;
-    ad[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    ad[2].offset = 0;
-    ad[3].location = 3;
-    ad[3].binding = 1;
-    ad[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    ad[3].offset = 16;
+    std::vector<VkVertexInputBindingDescription> bds;
+    std::vector<VkVertexInputAttributeDescription> ads;
+    const VkVertexInputRate vr = VK_VERTEX_INPUT_RATE_VERTEX;
     if (gz) {  // ImDrawVert: posicao, uv, cor RGBA8 (20 bytes)
-        bd[0].stride = 20;
-        ad[0].format = VK_FORMAT_R32G32_SFLOAT;
-        ad[1].format = VK_FORMAT_R32G32_SFLOAT;
-        ad[1].offset = 8;
-        ad[2].binding = 0;
-        ad[2].format = VK_FORMAT_R8G8B8A8_UNORM;
-        ad[2].offset = 16;
+        bds = {{0, 20, vr}};
+        ads = {{0, 0, VK_FORMAT_R32G32_SFLOAT, 0}, {1, 0, VK_FORMAT_R32G32_SFLOAT, 8}, {2, 0, VK_FORMAT_R8G8B8A8_UNORM, 16}};
+    } else if (text) {
+        bds = {{0, 16, vr}};
+        ads = {{0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 0}};
+    } else {  // malha: posicao + normal; opcionalmente osso (binding 1) e uv (binding 2)
+        bds = {{0, 24, vr}};
+        ads = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12}};
+        if (skin) {
+            bds.push_back({1, 32, vr});
+            ads.push_back({2, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0});
+            ads.push_back({3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 16});
+        }
+        if (uv) {
+            bds.push_back({2, 8, vr});
+            ads.push_back({4, 2, VK_FORMAT_R32G32_SFLOAT, 0});
+        }
     }
     VkPipelineVertexInputStateCreateInfo vi = {};
     vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vi.vertexBindingDescriptionCount = (skin && !gz) ? 2 : 1;
-    vi.pVertexBindingDescriptions = bd;
-    vi.vertexAttributeDescriptionCount = gz ? 3 : (text ? 1 : (skin ? 4 : 2));
-    vi.pVertexAttributeDescriptions = ad;
+    vi.vertexBindingDescriptionCount = uint32_t(bds.size());
+    vi.pVertexBindingDescriptions = bds.data();
+    vi.vertexAttributeDescriptionCount = uint32_t(ads.size());
+    vi.pVertexAttributeDescriptions = ads.data();
 
     VkPipelineInputAssemblyStateCreateInfo ia = {};
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -190,10 +179,17 @@ VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout
     return p;
 }
 
-bool VkRend::prepare(QQuickWindow *w) {
-    if (m_ready) return true;
-    if (m_failed) return false;
+VkPipeline VkRend::meshPipe(int l, int d, int k, int u) {
+    VkPipeline &p = m_pMesh[l][d][k][u];
+    if (!p && !m_pTried[l][d][k][u]) {
+        m_pTried[l][d][k][u] = true;
+        p = mkPipe(m_mv, m_mf, m_plMesh, m_rp, false, l == 1, d == 1, k == 1, false, u == 1);
+    }
+    return p;
+}
 
+// cria pipelines, descritores e buffers; devolve false se ainda nao da (tenta no proximo quadro) ou se falhou (m_failed)
+bool VkRend::create(QQuickWindow *w) {
     QSGRendererInterface *rif = w->rendererInterface();
     QVulkanInstance *inst = w->vulkanInstance();
     if (!rif || !inst) return false;  // ainda nao disponivel: tenta no proximo quadro
@@ -241,9 +237,12 @@ bool VkRend::prepare(QQuickWindow *w) {
     pl.setLayoutCount = 1;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &pcr;
-    pl.pSetLayouts = &m_lOps;
+    const VkDescriptorSetLayout meshLayouts[2] = {m_lOps, m_lTex};  // set 0: ordens e ossos; set 1: texturas
+    pl.setLayoutCount = 2;
+    pl.pSetLayouts = meshLayouts;
     pcr.size = sizeof(MeshPC);
     if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plMesh) != VK_SUCCESS) return fail("layout malha");
+    pl.setLayoutCount = 1;
     pl.pSetLayouts = &m_lTex;
     pcr.size = sizeof(TextPC);
     if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plText) != VK_SUCCESS) return fail("layout texto");
@@ -263,24 +262,22 @@ bool VkRend::prepare(QQuickWindow *w) {
     VkShaderModule mv = mod(k_mesh_vert, k_mesh_vert_size), mf = mod(k_mesh_frag, k_mesh_frag_size);
     VkShaderModule tv = mod(k_text_vert, k_text_vert_size), tf = mod(k_text_frag, k_text_frag_size);
     VkShaderModule gv = mod(k_gz_vert, k_gz_vert_size), gf = mod(k_gz_frag, k_gz_frag_size);
+    m_mv = mv;  // as pipelines de malha sao criadas sob demanda: os modulos ficam ate o fim
+    m_mf = mf;
     bool ok = mv && mf && tv && tf && gv && gf;
     if (ok) {
         for (int l = 0; l < 2 && ok; ++l)
-            for (int d = 0; d < 2 && ok; ++d)
-                for (int k = 0; k < 2 && ok; ++k) {
-                    m_pMesh[l][d][k] = mkPipe(mv, mf, m_plMesh, m_rp, false, l == 1, d == 1, k == 1, false);
-                    ok = m_pMesh[l][d][k] != VK_NULL_HANDLE;
-                }
+            for (int d = 0; d < 2 && ok; ++d) ok = meshPipe(l, d, 0, 0) != VK_NULL_HANDLE;
         if (ok) {
-            m_pText = mkPipe(tv, tf, m_plText, m_rp, true, false, false, false, false);
+            m_pText = mkPipe(tv, tf, m_plText, m_rp, true, false, false, false, false, false);
             ok = m_pText != VK_NULL_HANDLE;
         }
         if (ok) {
-            m_pGz = mkPipe(gv, gf, m_plGz, m_rp, false, false, false, false, true);
+            m_pGz = mkPipe(gv, gf, m_plGz, m_rp, false, false, false, false, true, false);
             ok = m_pGz != VK_NULL_HANDLE;
         }
     }
-    for (VkShaderModule m : {mv, mf, tv, tf, gv, gf})
+    for (VkShaderModule m : {tv, tf, gv, gf})
         if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
     if (!ok) return fail("pipelines");
 
@@ -289,10 +286,10 @@ bool VkRend::prepare(QQuickWindow *w) {
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[0].descriptorCount = kMaxSlots * 2;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = 1 + kMaxSlots;
+    ps[1].descriptorCount = 1 + 2 * kMaxSlots;
     VkDescriptorPoolCreateInfo dpi = {};
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpi.maxSets = 2 * kMaxSlots + 1;
+    dpi.maxSets = 3 * kMaxSlots + 1;
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
@@ -312,6 +309,7 @@ bool VkRend::prepare(QQuickWindow *w) {
         if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &s.set) != VK_SUCCESS) return fail("conjunto ops");
         ai.pSetLayouts = &m_lTex;
         if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &s.gzSet) != VK_SUCCESS) return fail("conjunto gizmo");
+        if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &s.texSet) != VK_SUCCESS) return fail("conjunto texturas");
         VkDescriptorBufferInfo bi[2] = {{s.ops.b, 0, VK_WHOLE_SIZE}, {s.pal.b, 0, VK_WHOLE_SIZE}};
         VkWriteDescriptorSet wr[2] = {};
         for (int q = 0; q < 2; ++q) {
@@ -333,6 +331,10 @@ bool VkRend::prepare(QQuickWindow *w) {
     sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.maxLod = 0.f;
     if (m_df->vkCreateSampler(m_dev, &sci, nullptr, &m_samp) != VK_SUCCESS) return fail("sampler");
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;  // texturas de material: repete e usa mipmaps
+    sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.maxLod = 16.f;
+    if (m_df->vkCreateSampler(m_dev, &sci, nullptr, &m_sampRep) != VK_SUCCESS) return fail("sampler repete");
     VkDescriptorSetAllocateInfo ati = {};
     ati.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ati.descriptorPool = m_pool;
@@ -340,8 +342,44 @@ bool VkRend::prepare(QQuickWindow *w) {
     ati.pSetLayouts = &m_lTex;
     if (m_df->vkAllocateDescriptorSets(m_dev, &ati, &m_setTex) != VK_SUCCESS) return fail("conjunto tex");
 
+    m_created = true;
+    return true;
+}
+
+bool VkRend::prepare(QQuickWindow *w) {
+    if (m_ready) {
+        if (!m_font && m_fontTries < 600) {  // o texto pode esperar a lista de comandos ficar disponivel
+            ++m_fontTries;
+            uploadFont(w);
+        }
+        return true;
+    }
+    if (m_failed) return false;
+    if (!m_created && !create(w)) return false;
+    if (!m_dummyOk) {  // imagem 1 x 1 branca: valida o conjunto de texturas ate entrar uma textura de verdade
+        static const unsigned char white[4] = {255, 255, 255, 255};
+        if (!uploadArray(w, m_dummyImg, {white}, 1, false)) {
+            freeImg(m_dummyImg);
+            if (++m_dummyTries > 600) return fail("sem lista de comandos");
+            return false;
+        }
+        for (int i = 0; i < m_slots; ++i) {
+            VkDescriptorImageInfo ii = {m_sampRep, m_dummyImg.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkWriteDescriptorSet wr = {};
+            wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            wr.dstSet = m_slot[i].texSet;
+            wr.dstBinding = 0;
+            wr.descriptorCount = 1;
+            wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            wr.pImageInfo = &ii;
+            m_df->vkUpdateDescriptorSets(m_dev, 1, &wr, 0, nullptr);
+            m_slot[i].texVer = 0;
+        }
+        m_dummyOk = true;
+    }
     m_ready = true;
-    uploadFont(w);  // se falhar, o texto fica desligado (m_font = false) e as demais ordens continuam
+    ++m_fontTries;
+    uploadFont(w);  // se falhar, tenta de novo nos proximos quadros; sem texto as demais ordens continuam
     return true;
 }
 
@@ -415,6 +453,141 @@ bool VkRend::uploadImg(QQuickWindow *w, Img &im, const unsigned char *px, int fw
     m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &br);
     w->endExternalCommands();
     return true;
+}
+
+// array de texturas 2D (camadas de sz x sz, RGBA8) com mipmaps gerados na GPU
+bool VkRend::uploadArray(QQuickWindow *w, Img &im, const std::vector<const unsigned char *> &layers, int sz, bool mips) {
+    const uint32_t n = uint32_t(layers.size());
+    if (!n || sz < 1) return false;
+    uint32_t levels = 1;
+    if (mips) {
+        VkFormatProperties fp;
+        m_if->vkGetPhysicalDeviceFormatProperties(m_phys, VK_FORMAT_R8G8B8A8_UNORM, &fp);
+        const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+        if ((fp.optimalTilingFeatures & need) == need)
+            for (int q = sz; q > 1; q >>= 1) ++levels;
+    }
+    VkImageCreateInfo ic = {};
+    ic.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    ic.imageType = VK_IMAGE_TYPE_2D;
+    ic.format = VK_FORMAT_R8G8B8A8_UNORM;
+    ic.extent = {uint32_t(sz), uint32_t(sz), 1};
+    ic.mipLevels = levels;
+    ic.arrayLayers = n;
+    ic.samples = VK_SAMPLE_COUNT_1_BIT;
+    ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ic.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (m_df->vkCreateImage(m_dev, &ic, nullptr, &im.img) != VK_SUCCESS) return false;
+    VkMemoryRequirements mr;
+    m_df->vkGetImageMemoryRequirements(m_dev, im.img, &mr);
+    uint32_t mt = 0;
+    if (!findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mt)) return false;
+    VkMemoryAllocateInfo ai = {};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = mt;
+    if (m_df->vkAllocateMemory(m_dev, &ai, nullptr, &im.mem) != VK_SUCCESS) return false;
+    if (m_df->vkBindImageMemory(m_dev, im.img, im.mem, 0) != VK_SUCCESS) return false;
+    VkImageViewCreateInfo vc = {};
+    vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vc.image = im.img;
+    vc.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vc.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, levels, 0, n};
+    if (m_df->vkCreateImageView(m_dev, &vc, nullptr, &im.view) != VK_SUCCESS) return false;
+
+    const size_t layerBytes = size_t(sz) * size_t(sz) * 4;
+    if (!mkBuf(im.stage, VkDeviceSize(layerBytes) * n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        if (!layers[i]) return false;
+        std::memcpy(static_cast<unsigned char *>(im.stage.p) + layerBytes * i, layers[i], layerBytes);
+    }
+
+    QSGRendererInterface *rif = w->rendererInterface();
+    w->beginExternalCommands();
+    void *pcb = rif->getResource(w, QSGRendererInterface::CommandListResource);
+    if (!pcb) {
+        w->endExternalCommands();
+        return false;
+    }
+    VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
+    auto barrier = [&](uint32_t baseLevel, uint32_t count, VkImageLayout from, VkImageLayout to, VkAccessFlags sa, VkAccessFlags da, VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
+        VkImageMemoryBarrier br = {};
+        br.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        br.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        br.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        br.image = im.img;
+        br.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, baseLevel, count, 0, n};
+        br.srcAccessMask = sa;
+        br.dstAccessMask = da;
+        br.oldLayout = from;
+        br.newLayout = to;
+        m_df->vkCmdPipelineBarrier(cb, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &br);
+    };
+    barrier(0, levels, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkBufferImageCopy cp = {};
+    cp.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, n};
+    cp.imageExtent = {uint32_t(sz), uint32_t(sz), 1};
+    m_df->vkCmdCopyBufferToImage(cb, im.stage.b, im.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &cp);
+    for (uint32_t i = 1; i < levels; ++i) {  // cada nivel e a metade do anterior
+        barrier(i - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        const int sw = std::max(sz >> (i - 1), 1), dw = std::max(sz >> i, 1);
+        VkImageBlit bl = {};
+        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, n};
+        bl.srcOffsets[1] = {sw, sw, 1};
+        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, n};
+        bl.dstOffsets[1] = {dw, dw, 1};
+        m_df->vkCmdBlitImage(cb, im.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, im.img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_LINEAR);
+    }
+    if (levels > 1)
+        barrier(0, levels - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    barrier(levels - 1, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+    w->endExternalCommands();
+    return true;
+}
+
+// texturas de material do motor: recria o array quando entra uma nova e liga ao conjunto do slot atual
+void VkRend::syncTex(QQuickWindow *w) {
+    int sz = 0;
+    unsigned ver = 0;
+    const int n = eng_vk_tex_count(sz, ver);
+    if (n > 0 && ver != m_texVer && ver != m_texTried) {
+        m_texTried = ver;
+        std::vector<const unsigned char *> L;
+        for (int i = 0; i < n; ++i) L.push_back(eng_vk_tex_layer(i));
+        Img ni;
+        if (uploadArray(w, ni, L, sz, true)) {
+            if (m_texImg.img) {
+                m_texImg.retired = m_frame;
+                m_retire.push_back(m_texImg);
+            }
+            m_texImg = ni;
+            m_texVer = ver;
+            m_texUpFrame = m_frame;
+        } else {
+            freeImg(ni);
+        }
+    }
+    if (m_texImg.stage.b && m_frame > m_texUpFrame + 16) freeBuf(m_texImg.stage);  // a copia ja terminou
+    Slot &s = m_slot[m_cur];
+    const unsigned want = m_texImg.view ? m_texVer : 0;
+    if (s.texVer != want) {
+        VkDescriptorImageInfo ii = {m_sampRep, m_texImg.view ? m_texImg.view : m_dummyImg.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wr = {};
+        wr.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr.dstSet = s.texSet;
+        wr.dstBinding = 0;
+        wr.descriptorCount = 1;
+        wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr.pImageInfo = &ii;
+        m_df->vkUpdateDescriptorSets(m_dev, 1, &wr, 0, nullptr);
+        s.texVer = want;
+    }
 }
 
 void VkRend::freeImg(Img &im) {
@@ -491,18 +664,23 @@ void VkRend::syncGz(QQuickWindow *w) {
 
 // buffer de vertices da malha (criado na primeira vez que ela aparece)
 VkRend::MeshBuf *VkRend::meshFor(const EngVkOp &op) {
+    // buffer opcional (osso ou uv) criado quando a malha o tem e ainda nao existe
+    auto extra = [&](Buf &b, const float *src, size_t bytesPerVertex) {
+        if (!src || b.b) return;
+        if (mkBuf(b, VkDeviceSize(op.n) * bytesPerVertex, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) std::memcpy(b.p, src, size_t(op.n) * bytesPerVertex);
+        else freeBuf(b);  // sem o buffer a malha e ignorada ou desenhada sem ele
+    };
     auto it = m_meshes.find(op.vid);
     if (it != m_meshes.end() && it->second.n == op.n) {
         it->second.last = m_frame;
-        if (op.skin && !it->second.skin.b) {  // esqueleto anexado depois da malha
-            if (mkBuf(it->second.skin, VkDeviceSize(op.n) * 32, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) std::memcpy(it->second.skin.p, op.skin, size_t(op.n) * 32);
-            else freeBuf(it->second.skin);
-        }
+        extra(it->second.skin, op.skin, 32);  // esqueleto ou uv anexados depois da malha
+        extra(it->second.uv, op.uv, 8);
         return &it->second;
     }
     if (it != m_meshes.end()) {
         freeBuf(it->second.b);
         freeBuf(it->second.skin);
+        freeBuf(it->second.uv);
         m_meshes.erase(it);
     }
     MeshBuf mb;
@@ -513,10 +691,8 @@ VkRend::MeshBuf *VkRend::meshFor(const EngVkOp &op) {
         return nullptr;
     }
     std::memcpy(mb.b.p, op.cpu, size_t(op.n) * 24);
-    if (op.skin) {
-        if (mkBuf(mb.skin, VkDeviceSize(op.n) * 32, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) std::memcpy(mb.skin.p, op.skin, size_t(op.n) * 32);
-        else freeBuf(mb.skin);  // sem pesos: a malha e ignorada ao desenhar
-    }
+    extra(mb.skin, op.skin, 32);
+    extra(mb.uv, op.uv, 8);
     return &m_meshes.emplace(op.vid, mb).first->second;
 }
 
@@ -533,7 +709,7 @@ void VkRend::upload(QQuickWindow *w, const EngVkFrame &f) {
         for (const EngVkOp &op : ops) {
             if (op.kind != 0 || !op.cpu || op.n <= 0) continue;
             if (k >= kMaxOps) break;
-            meshFor(op);
+            const MeshBuf *mbp = meshFor(op);
             GpuOp &g = dst[k++];
             std::memcpy(g.mvp, op.mvp, sizeof g.mvp);
             std::memcpy(g.mod, op.mod, sizeof g.mod);
@@ -541,6 +717,10 @@ void VkRend::upload(QQuickWindow *w, const EngVkFrame &f) {
             std::memcpy(g.a, op.a, sizeof g.a);
             std::memcpy(g.b, op.b, sizeof g.b);
             std::memcpy(g.tl, op.tl, sizeof g.tl);
+            if (!(mbp && mbp->uv.b)) {  // sem coordenadas de textura nao ha o que amostrar
+                g.tl[0] = g.tl[1] = g.tl[2] = -1.f;
+                g.tl[3] = 0.f;
+            }
         }
         if (seg == 0) m_sceneMeshes = k;
     }
@@ -550,12 +730,14 @@ void VkRend::upload(QQuickWindow *w, const EngVkFrame &f) {
             if (it->second.last + 16 < m_frame) {
                 freeBuf(it->second.b);
                 freeBuf(it->second.skin);
+                freeBuf(it->second.uv);
                 it = m_meshes.erase(it);
             } else {
                 ++it;
             }
         }
     }
+    syncTex(w);
     syncGz(w);
     m_gzDraw = false;
     const EngVkGz &g = f.gz;
@@ -616,11 +798,14 @@ void VkRend::replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> 
             if (!mb) continue;
             const bool skinned = op.skin != nullptr;
             if (skinned && !mb->skin.b) continue;
+            const bool hasUv = op.uv != nullptr && mb->uv.b;
             const bool depth = !ui && op.depth;
             anyDepth = anyDepth || depth;
-            VkPipeline want = m_pMesh[op.lines ? 1 : 0][depth ? 1 : 0][skinned ? 1 : 0];
+            VkPipeline want = meshPipe(op.lines ? 1 : 0, depth ? 1 : 0, skinned ? 1 : 0, hasUv ? 1 : 0);
+            if (!want) continue;
             if (mode != 1) {
-                m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 1, &s.set, 0, nullptr);
+                const VkDescriptorSet sets[2] = {s.set, s.texSet};
+                m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 2, sets, 0, nullptr);
                 m_df->vkCmdPushConstants(cb, m_plMesh, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mpc, &mpc);
                 mode = 1;
                 cur = VK_NULL_HANDLE;
@@ -629,9 +814,10 @@ void VkRend::replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> 
                 m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
                 cur = want;
             }
-            const VkBuffer vbs[2] = {mb->b.b, mb->skin.b};
-            const VkDeviceSize offs[2] = {0, 0};
-            m_df->vkCmdBindVertexBuffers(cb, 0, skinned ? 2 : 1, vbs, offs);
+            const VkDeviceSize off0 = 0;
+            m_df->vkCmdBindVertexBuffers(cb, 0, 1, &mb->b.b, &off0);
+            if (skinned) m_df->vkCmdBindVertexBuffers(cb, 1, 1, &mb->skin.b, &off0);
+            if (hasUv) m_df->vkCmdBindVertexBuffers(cb, 2, 1, &mb->uv.b, &off0);
             m_df->vkCmdDraw(cb, uint32_t(op.n), 1, 0, myIdx);
         } else if (op.kind == 1) {
             if (!m_font || op.tcount <= 0 || size_t(op.tfirst + op.tcount) * 4 > kMaxTextFloats) continue;
@@ -710,7 +896,13 @@ void VkRend::release() {
         for (auto &kv : m_meshes) {
             freeBuf(kv.second.b);
             freeBuf(kv.second.skin);
+            freeBuf(kv.second.uv);
         }
+        freeImg(m_texImg);
+        freeImg(m_dummyImg);
+        if (m_sampRep) m_df->vkDestroySampler(m_dev, m_sampRep, nullptr);
+        if (m_mv) m_df->vkDestroyShaderModule(m_dev, m_mv, nullptr);
+        if (m_mf) m_df->vkDestroyShaderModule(m_dev, m_mf, nullptr);
         for (int i = 0; i < kMaxSlots; ++i) {
             freeBuf(m_slot[i].ops);
             freeBuf(m_slot[i].text);
@@ -725,7 +917,8 @@ void VkRend::release() {
         for (int l = 0; l < 2; ++l)
             for (int d = 0; d < 2; ++d)
                 for (int k = 0; k < 2; ++k)
-                    if (m_pMesh[l][d][k]) m_df->vkDestroyPipeline(m_dev, m_pMesh[l][d][k], nullptr);
+                    for (int u = 0; u < 2; ++u)
+                        if (m_pMesh[l][d][k][u]) m_df->vkDestroyPipeline(m_dev, m_pMesh[l][d][k][u], nullptr);
         if (m_pText) m_df->vkDestroyPipeline(m_dev, m_pText, nullptr);
         if (m_pGz) m_df->vkDestroyPipeline(m_dev, m_pGz, nullptr);
         if (m_plGz) m_df->vkDestroyPipelineLayout(m_dev, m_plGz, nullptr);
@@ -739,7 +932,15 @@ void VkRend::release() {
     m_meshes.clear();
     for (int l = 0; l < 2; ++l)
         for (int d = 0; d < 2; ++d)
-            for (int k = 0; k < 2; ++k) m_pMesh[l][d][k] = VK_NULL_HANDLE;
+            for (int k = 0; k < 2; ++k)
+                for (int u = 0; u < 2; ++u) {
+                    m_pMesh[l][d][k][u] = VK_NULL_HANDLE;
+                    m_pTried[l][d][k][u] = false;
+                }
+    m_mv = m_mf = VK_NULL_HANDLE;
+    m_sampRep = VK_NULL_HANDLE;
+    m_created = m_dummyOk = false;
+    m_texVer = m_texTried = 0;
     m_pText = VK_NULL_HANDLE;
     m_plMesh = m_plText = VK_NULL_HANDLE;
     m_pool = VK_NULL_HANDLE;

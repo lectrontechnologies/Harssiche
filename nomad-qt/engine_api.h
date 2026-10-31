@@ -59,6 +59,7 @@ struct EngVkOp {
     int vid = 0;    // malha: id estavel (muda so se a malha for recriada)
     int n = 0;      // malha: numero de vertices
     const float *cpu = nullptr;  // malha: vertices (posicao + normal, 6 floats cada); valido ate o fim do quadro
+    const float *uv = nullptr;   // malha com textura: 2 floats por vertice
     const float *skin = nullptr; // malha com esqueleto: 8 floats por vertice (4 indices de osso + 4 pesos); b[3] = primeira matriz da paleta
     float mvp[16] = {};
     float mod[16] = {};
@@ -92,6 +93,8 @@ struct EngVkFrame {
 };
 void eng_set_vk(bool on);                                // liga o modo Vulkan (antes de eng_init)
 void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
+int eng_vk_tex_count(int &size, unsigned &ver);          // texturas de material: camadas size x size RGBA8; ver muda quando entra uma nova
+const unsigned char *eng_vk_tex_layer(int i);
 const unsigned char *eng_vk_gz_atlas(int &w, int &h, int &bpp, unsigned &ver);  // atlas do ImGui (1 ou 4 bytes por pixel); ver muda quando o conteudo muda
 const unsigned char *eng_vk_font(int &w, int &h);        // atlas da fonte (R8), ou nullptr
 

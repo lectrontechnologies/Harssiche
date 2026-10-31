@@ -1,6 +1,6 @@
 #version 450
 // Porta do shader do motor (sombreamento PBR simples, matcap, retangulos arredondados, losango e fundo).
-// Ainda sem texturas de material (glTF): usa a cor base.
+// Texturas de material (glTF) em um array 2D de camadas: base (tl.x), metal/rugosidade (tl.y), normal (tl.z).
 struct Op {
     mat4 mvp;
     mat4 mod;
@@ -21,6 +21,8 @@ layout(location = 0) in vec3 vN;
 layout(location = 1) in vec3 vP;
 layout(location = 2) in vec3 vW;
 layout(location = 3) flat in int vOp;
+layout(location = 4) in vec2 vUV;
+layout(set = 1, binding = 0) uniform sampler2DArray uTexA;
 layout(location = 0) out vec4 o;
 
 vec3 shade(vec3 L, vec3 Lc, vec3 N, vec3 V, vec3 alb, vec3 F0, float met, float rou) {
@@ -37,11 +39,26 @@ vec3 shade(vec3 L, vec3 Lc, vec3 N, vec3 V, vec3 alb, vec3 F0, float met, float 
     return (kd * alb / 3.14159 + spec) * Lc * NL;
 }
 
-vec3 pbr(vec4 uC, vec2 uMR) {
+vec3 pbr(vec4 uC, vec2 uMR, vec4 tl) {
     vec3 N = normalize(vN), V = normalize(pc.cam.xyz - vW);
     if (dot(N, V) < 0.0) N = -N;
     vec3 base = uC.rgb;
     float met = uMR.x, rou = uMR.y;
+    if (tl.x >= 0.0) base *= texture(uTexA, vec3(vUV, tl.x)).rgb;
+    if (tl.y >= 0.0) {
+        vec4 mrs = texture(uTexA, vec3(vUV, tl.y));
+        rou *= mrs.g;
+        met *= mrs.b;
+    }
+    if (tl.z >= 0.0) {  // mapa de normais com tangente derivada das coordenadas de textura
+        vec3 tn = texture(uTexA, vec3(vUV, tl.z)).xyz * 2.0 - 1.0;
+        vec3 dp1 = dFdx(vW), dp2 = dFdy(vW);
+        vec2 du1 = dFdx(vUV), du2 = dFdy(vUV);
+        vec3 dp2p = cross(dp2, N), dp1p = cross(N, dp1);
+        vec3 Tt = dp2p * du1.x + dp1p * du2.x, Bt = -(dp2p * du1.y + dp1p * du2.y);
+        float iv = inversesqrt(max(dot(Tt, Tt), dot(Bt, Bt)) + 1e-20);
+        N = normalize(mat3(Tt * iv, Bt * iv, N) * tn);
+    }
     vec3 alb = pow(base, vec3(2.2));
     rou = clamp(rou, 0.05, 1.0);
     vec3 F0 = mix(vec3(0.04), alb, met);
@@ -93,7 +110,8 @@ void main() {
         return;
     }
     if (uL > 0.5) {  // malha sombreada
-        o = vec4(pc.cam.w > 0.5 ? matcap() : pbr(uC, op.b.xy), uC.a);
+        if (op.tl.w > 0.5 && op.tl.x >= 0.0 && texture(uTexA, vec3(vUV, op.tl.x)).a < 0.5) discard;
+        o = vec4(pc.cam.w > 0.5 ? matcap() : pbr(uC, op.b.xy, op.tl), uC.a);
         return;
     }
     o = vec4(uC.rgb, uC.a);

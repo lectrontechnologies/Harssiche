@@ -375,6 +375,7 @@ void vkRecMesh(const Mesh&m,const M&mvp,const M&mod,float r,float g,float b,floa
  if(!gVkOut||m.cpu.empty())return;EngVkOp o;o.kind=0;o.vid=m.vid;o.n=m.n;o.cpu=m.cpu.data();o.lines=m.mode==GL_LINES?1:0;
  memcpy(o.mvp,mvp.m,64);memcpy(o.mod,mod.m,64);o.col[0]=r;o.col[1]=g;o.col[2]=b;o.col[3]=a;
  o.a[0]=lit;o.a[1]=gS[0];o.a[2]=gS[1];o.a[3]=gS[2];o.b[0]=gMR[0];o.b[1]=gMR[1];o.b[2]=gSk;
+ if(m.uv.size()>=(size_t)m.n*2)o.uv=m.uv.data();
  if(gSk>.5f&&m.skinned&&gVkPal>=0&&m.skin.size()>=(size_t)m.n*8){o.skin=m.skin.data();o.b[3]=(float)gVkPal;}else o.b[2]=0;
  o.tl[0]=gTL[0];o.tl[1]=gTL[1];o.tl[2]=gTL[2];o.tl[3]=gTL[3];vkPush(o);}
 void vkScissor(float x,float y,float w,float h){if(!gVkOut)return;EngVkOp o;o.kind=2;o.sc[0]=x;o.sc[1]=y;o.sc[2]=w;o.sc[3]=h;vkPush(o);}
@@ -737,7 +738,7 @@ void scanFiles(){gFiles.clear();std::vector<std::pair<time_t,std::string>> v;
  scanDir("/storage/emulated/0/Download",1,v);scanDir(gDir,1,v);
  std::sort(v.rbegin(),v.rend());for(size_t i=0;i<v.size()&&i<200;i++)gFiles.push_back(v[i].second);}
 // ---------- texturas (array 1024x1024, ate 16 imagens) ----------
-const int TEXN=1024,TEXMAX=16;GLuint gTexArr=0;std::vector<std::vector<unsigned char>> gTexCpu;
+const int TEXN=1024,TEXMAX=16;GLuint gTexArr=0;std::vector<std::vector<unsigned char>> gTexCpu;unsigned gTexVer=0;
 void initTexArr(){gTexArr=0;if(gTexCpu.empty())return;glActiveTexture(GL_TEXTURE0);glGenTextures(1,&gTexArr);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);
  glTexStorage3D(GL_TEXTURE_2D_ARRAY,11,GL_RGBA8,TEXN,TEXN,TEXMAX);
  glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_LINEAR);glTexParameteri(GL_TEXTURE_2D_ARRAY,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
@@ -752,7 +753,7 @@ int addTexture(const unsigned char*data,int len){
   for(int x=0;x<TEXN;x++){float fx=(x+.5f)*w/TEXN-.5f;int x0=(int)floorf(fx);float tx_=fx-x0;int xa=std::clamp(x0,0,w-1),xb=std::clamp(x0+1,0,w-1);
    const unsigned char*p00=px+((size_t)ya*w+xa)*4,*p10=px+((size_t)ya*w+xb)*4,*p01=px+((size_t)yb*w+xa)*4,*p11=px+((size_t)yb*w+xb)*4;
    for(int k=0;k<4;k++){float a=p00[k]+(p10[k]-p00[k])*tx_,b=p01[k]+(p11[k]-p01[k])*tx_;out[((size_t)y*TEXN+x)*4+k]=(unsigned char)std::clamp(a+(b-a)*ty+.5f,0.f,255.f);}}}
- stbi_image_free(px);gTexCpu.push_back(std::move(out));int layer=(int)gTexCpu.size()-1;
+ stbi_image_free(px);gTexCpu.push_back(std::move(out));gTexVer++;int layer=(int)gTexCpu.size()-1;
  if(!gTexArr)initTexArr();else{glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D_ARRAY,gTexArr);
   glTexSubImage3D(GL_TEXTURE_2D_ARRAY,0,0,0,layer,TEXN,TEXN,1,GL_RGBA,GL_UNSIGNED_BYTE,gTexCpu[layer].data());glGenerateMipmap(GL_TEXTURE_2D_ARRAY);}
  return layer;}
@@ -2444,6 +2445,13 @@ void eng_event(const EngEvent &e) { eng::api_event(e); }
 void eng_frame() { eng::api_frame(); }
 void eng_set_vk(bool on) { eng::gVK = on; }
 void eng_vk_frame(EngVkFrame &out, int w, int h) { eng::api_vk_frame(out, w, h); }
+int eng_vk_tex_count(int &size, unsigned &ver) {
+    size = eng::TEXN; ver = eng::gTexVer;
+    return (int)eng::gTexCpu.size();
+}
+const unsigned char *eng_vk_tex_layer(int i) {
+    return (i >= 0 && i < (int)eng::gTexCpu.size()) ? eng::gTexCpu[i].data() : nullptr;
+}
 const unsigned char *eng_vk_gz_atlas(int &w, int &h, int &bpp, unsigned &ver) {
     w = eng::gGzAW; h = eng::gGzAH; bpp = eng::gGzABpp; ver = eng::gGzAVer;
     return eng::gGzAtlas.empty() ? nullptr : eng::gGzAtlas.data();
