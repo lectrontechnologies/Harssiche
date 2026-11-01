@@ -683,6 +683,8 @@ void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if
 // ---------- triangulos da cena (base do futuro path tracer em compute/Slang; o BVH sera refeito) ----------
 struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
 std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
+struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob gPtJob;   // trabalho do path tracer em andamento (varios quadros)
+int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
 bool gMcGround=false,gMcHaveCam=false;   // estado do futuro path tracer (Etapa 3): chao e invalidacao do acumulo
 int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcFrame=0;
 bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
@@ -827,6 +829,19 @@ int bvhRec(int b,int e){int id_=(int)gBN.size();gBN.push_back(BN());BN n;n.mn=V{
  V ex=cmx-cmn;int ax=(ex.x>ex.y&&ex.x>ex.z)?0:(ex.y>ex.z?1:2);int m=(b+e)/2;
  std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a,int c){return (&gCen[a].x)[ax]<(&gCen[c].x)[ax];});
  bvhRec(b,m);int r=bvhRec(m,e);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
+// ---------- path tracer: cena para o compute ----------
+static void ptBuild(EngPt&p,int spp,int bn,int night){
+ gatherTris();const int n=(int)gTD.size();
+ gCen.resize(n);gOrd.resize(n);
+ for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
+ gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
+ p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;
+ p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
+ for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];
+  for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
+  sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;}
+ for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
+  q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
 static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
 // ---------- render de video (MP4 via MediaCodec; plano B: sequencia de PNG) ----------
 struct Vid{bool on=false,png=false,mxOn=false,fb=false;int fps=24;float t0=0;int f0=1,f1=1,f=1,done=0,total=1,vw=0,vh=0,cf=21,stage=0,fd=-1,trk=-1;float tm0=0;int spp0=64,fw0=1920,bn0=6;AMediaCodec*cd=nullptr;AMediaMuxer*mx=nullptr;std::string path,dir;};
@@ -1669,6 +1684,8 @@ void api_cmd(int c, float a, float b) {
     case 15: gMcNight = a > .5f; gMcHaveCam = false; gSigS = -1; break;
     case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
     case 17: gGtao = a > .5f; break;                                  // GTAO do NanoFarm
+    case 29: gRend = std::clamp((int)roundf(a), 0, 1); gPtJob.run = false; break;   // renderizador
+    case 30: gMcSpp = std::clamp((int)roundf(a), 1, 4096); break;                  // amostras por pixel
     case 28: gAOs = std::clamp(a, 0.f, 1.f); break;                   // intensidade do GTAO
     case 18: startImage((int)roundf(a)); break;
     case 19: if (!gVid.on) vidStart(); break;
@@ -1709,20 +1726,32 @@ void api_event(const EngEvent &e) {
 // ---------- captura fora da tela (backend Vulkan) ----------
 // Renderiza o quadro atual com a camera de render (ou a do viewport, se nao houver), sem overlays e sem destaque
 // de selecao, e le os pixels. Devolve 0 = ok, 1 = tenta no proximo quadro, 2 = indisponivel.
-static int vkCaptureScene(int cw, int ch, std::vector<unsigned char> &px) {
+// trabalho do path tracer em andamento (varios quadros acumulando amostras)
+static int vkCaptureScene(int cw, int ch, std::vector<unsigned char> &px, int sppOv = 0) {
     if (!gVkOut || cw < 8 || ch < 8) return 2;
+    const bool pt = gRend == 1;
+    const int spp = sppOv > 0 ? sppOv : std::max(1, gMcSpp), bn = std::clamp(gMcBn, 2, 16), night = gMcNight ? 1 : 0;
+    if (pt && gPtJob.run && gPtJob.cw == cw && gPtJob.ch == ch && gPtJob.spp == spp && gPtJob.bn == bn && gPtJob.night == night && gPtJob.tm == tm) {
+        static EngVkFrame pf;   // continuacao: a cena ja esta na GPU
+        pf.pt.on = true; pf.pt.fresh = false; pf.pt.spp = spp; pf.pt.bounces = bn; pf.pt.night = night;
+        const int rc2 = ::plat_vk_capture(pf, cw, ch, px);
+        if (rc2 != 2) { gPtJob.run = rc2 == 3; return rc2; }
+    }
+    gPtJob.run = false;
     static EngVkFrame cf;
     EngVkFrame *sOut = gVkOut;
     const int sW = W, sH = H, sCam = gCamView, sSel = sel, sSeg = gVkSeg, sPal = gVkPal;
     const V sTgt = tgt;
     const float sYaw = yaw, sPitch = pitch, sCd = cd, sFov = FOV;
     const bool sMc = gMatcap, sCapNow = gCapNow, sDepth = gVkDepth;
-    cf.scene.clear(); cf.ui.clear(); cf.text.clear(); cf.pal.clear();
+    cf.scene.clear(); cf.ui.clear(); cf.text.clear(); cf.pal.clear(); cf.pt.on = false; cf.pt.fresh = false;
     gVkOut = &cf; gVkPal = -1; gVkSeg = 0; gVkDepth = false;
     W = cw; H = ch; gCapNow = true; gMatcap = false; sel = -1;
     { V e, f, r, u; float fv; const int ac = activeCam(); if (ac >= 0 && camRender(e, f, r, u, fv)) gCamView = ac; }
     frame();
+    if (pt) { ptBuild(cf.pt, spp, bn, night); cf.pt.on = true; cf.pt.fresh = true; }
     const int rc = ::plat_vk_capture(cf, cw, ch, px);
+    if (pt && rc == 3) { gPtJob.run = true; gPtJob.cw = cw; gPtJob.ch = ch; gPtJob.spp = spp; gPtJob.bn = bn; gPtJob.night = night; gPtJob.tm = tm; }
     gVkOut = sOut; gVkPal = sPal; gVkSeg = sSeg; gVkDepth = sDepth;
     W = sW; H = sH; gCamView = sCam; sel = sSel;
     tgt = sTgt; yaw = sYaw; pitch = sPitch; cd = sCd; FOV = sFov;
@@ -1751,6 +1780,7 @@ static void vkVidStep() {
     tm = gVid.t0 + gVid.f / (float)gVid.fps; applyAnim();
     std::vector<unsigned char> px;
     const int rc = vkCaptureScene(gVid.vw, gVid.vh, px);
+    if (rc == 3) { gVkTries = 0; return; }
     if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; toast("Falha ao capturar o frame"); vidFinish(true); } return; }
     gVkTries = 0;
     if (rc != 0) { toast("Captura indisponivel neste aparelho"); vidFinish(true); return; }
@@ -1766,7 +1796,8 @@ static void vkJobs() {
     if (gCapReq) {   // previa (tela de render): mesma proporcao do render, largura de ate 640
         const int rw = gCapW, rh = gCapH;
         const int ow = std::min(640, rw), oh = std::max(8, (int)((float)ow * rh / rw));
-        const int rc = vkCaptureScene(ow, oh, px);
+        const int rc = vkCaptureScene(ow, oh, px, 4);
+        if (rc == 3) { gVkTries = 0; return; }
         if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gCapReq = false; } return; }
         gVkTries = 0; gCapReq = false;
         if (rc == 0) { gPrevPath = std::string(gDir) + "/preview.png"; if (vkWritePng(gPrevPath, px, ow, oh)) gPrevSeq++; }
@@ -1779,6 +1810,7 @@ static void vkJobs() {
         else { const float sc = std::min(1.f, (float)gMcFinW / std::max(W, 1)); tw = (int)(W * sc); th = (int)(H * sc); }
         tw = std::clamp(tw, 16, 4096); th = std::clamp(th, 16, 4096);
         const int rc = vkCaptureScene(tw, th, px);
+        if (rc == 3) { gVkTries = 0; return; }
         if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gAutoPng = 0; toast("Falha ao capturar a imagem"); } return; }
         gVkTries = 0;
         const int mode = gAutoPng; gAutoPng = 0;
@@ -1810,7 +1842,7 @@ void api_vk_frame(EngVkFrame &out, int w, int h) {
         if (tm < a_) tm = b_;
         applyAnim();
     }
-    if (gVid.on || gCapReq || gAutoPng) vkJobs();   // render, previa e video (fora da tela)
+    if (gVid.on || gCapReq || gAutoPng) vkJobs(); else gPtJob.run = false;   // render, previa e video (fora da tela)
     gVkSeg = 0; gVkDepth = false;
     frame();
     gVkSeg = 1; gVkDepth = false;

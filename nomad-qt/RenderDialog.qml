@@ -20,6 +20,7 @@ Item {
     property bool edge: true
     property bool gtao: true
     property real gtaoS: 0.85
+    property int spp: 64
     property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
     function open() {
@@ -60,6 +61,8 @@ Item {
         view.command(16, edge ? 1 : 0)
         view.command(17, gtao ? 1 : 0)
         view.command(28, gtaoS)
+        view.command(29, renderer === 3 ? 1 : 0)
+        view.command(30, spp)
     }
 
     // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -111,9 +114,9 @@ Item {
                     Repeater {
                         model: [
                             { n: "NanoFarm", d: "padrão", on: true },
-                            { n: "UCore", d: "em breve", on: false },
+                            { n: "SeptaCore", d: "em breve", on: false },
                             { n: "DeltaXRender", d: "em breve", on: false },
-                            { n: "Parallax", d: "em breve", on: false },
+                            { n: "Parallax", d: "experimental", on: true },
                             { n: "WhiteNoise", d: "em breve", on: false }
                         ]
                         Rectangle {
@@ -138,10 +141,18 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 enabled: parent.modelData.on
-                                onClicked: dlg.renderer = parent.index
+                                onClicked: { dlg.renderer = parent.index; dlg.view.command(29, dlg.renderer === 3 ? 1 : 0) }
                             }
                         }
                     }
+                }
+
+                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Amostras"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 3 }
+                RdSeg {
+                    s: dlg.s; width: parent.width; visible: dlg.renderer === 3
+                    labels: ["16", "64", "256"]
+                    index: dlg.spp <= 16 ? 0 : (dlg.spp <= 64 ? 1 : 2)
+                    onPicked: function (i) { dlg.spp = [16, 64, 256][i]; dlg.view.command(30, dlg.spp) }
                 }
 
                 Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }

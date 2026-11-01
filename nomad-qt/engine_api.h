@@ -83,6 +83,16 @@ struct EngVkGz {
     std::vector<EngVkGzCmd> cmds;
 };
 constexpr int kEngVkMaxMats = 4096;  // limite de matrizes de osso por quadro
+// cena do path tracer (Parallax): triangulos + BVH prontos para o compute
+struct EngPt {
+    bool on = false;     // este quadro e renderizado pelo path tracer
+    bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
+    int spp = 16, bounces = 6, night = 0;
+    int ntri = 0, nnode = 0;
+    std::vector<float> pos;    // 12 floats por triangulo (p0, p1, p2 como float4)
+    std::vector<float> shade;  // 16 floats por triangulo (n0, n1, n2 [w de n2 = metal], cor [w = rugosidade])
+    std::vector<float> nodes;  // 8 floats por no (min, esq/primeiro, max, quantidade; os inteiros vao como bits de float)
+};
 struct EngVkFrame {
     std::vector<EngVkOp> scene;  // 3D (por baixo do QML)
     std::vector<EngVkOp> ui;     // interface do motor (por cima do QML)
@@ -93,6 +103,7 @@ struct EngVkFrame {
     float mcR[4] = {}, mcU[4] = {}, mcB[4] = {};  // base do matcap (w de mcR = altura da tela em px)
     float proj[4] = {};          // projecao do quadro: fov vertical (rad), aspecto, near, far (para o GTAO)
     float ao[4] = {};            // GTAO do NanoFarm: intensidade (0 = desligado), raio (unidades da cena), potencia
+    EngPt pt;                    // path tracer (so em capturas)
 };
 void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
 int eng_vk_tex_count(int &size, unsigned &ver);          // texturas de material: camadas size x size RGBA8; ver muda quando entra uma nova
@@ -112,7 +123,7 @@ void eng_ui_rects(std::vector<float> &out);  // retangulos x,y,w,h (px) ocupados
 
 // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
 // backend Vulkan: renderiza as ordens gravadas fora da tela e devolve os pixels (RGBA8, de baixo para cima).
-// 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel
+// 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel, 3 = path tracer em andamento (chame de novo no proximo quadro)
 int plat_vk_capture(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px);
 void plat_show_keyboard();
 void plat_hide_keyboard();

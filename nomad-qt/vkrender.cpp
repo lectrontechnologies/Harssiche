@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <chrono>
 #include <cmath>
 
 #include "vkshaders.h"  // gerado no build (Slang): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
@@ -285,12 +286,12 @@ bool VkRend::create(QQuickWindow *w) {
     // descritores, buffers por slot e amostrador
     VkDescriptorPoolSize ps[2] = {};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = kMaxSlots * 2 + 2;
+    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 5;  // + path tracer
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12;  // + GTAO (viewport e captura)
     VkDescriptorPoolCreateInfo dpi = {};
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpi.maxSets = 3 * kMaxSlots + 4 + 6;
+    dpi.maxSets = 3 * kMaxSlots + 4 + 6 + 1;
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
@@ -1123,6 +1124,7 @@ int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::v
         }
         m_capInit = true;
     }
+    if (f.pt.on) return capturePT(w, f, cw, ch, px);   // path tracer (Parallax)
     if (uint32_t(cw) > m_maxDim || uint32_t(ch) > m_maxDim) return 2;
     if (!offTargets(cw, ch)) return 2;
 
@@ -1678,8 +1680,233 @@ void VkRend::aoPass(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
     w->endExternalCommands();
 }
 
+// ---------------------------------------------------------------------------
+// Path tracer (Parallax): compute com acumulacao em varios passos (faixas de linhas) para nao travar a GPU
+// ---------------------------------------------------------------------------
+struct PtPC {
+    float eye[3], tanY;
+    float right[3], aspect;
+    float up[3], pad0;
+    float fwd[3], pad1;
+    int32_t w, h, y0, rows;
+    int32_t sample, bounces, night, ntri;
+};
+
+bool VkRend::ptInit() {
+    PtS &P = m_pt;
+    if (P.init) return true;
+    if (P.fail) return false;
+    P.fail = true;
+    VkDescriptorSetLayoutBinding bb[5] = {};
+    for (int i = 0; i < 5; ++i) {
+        bb[i].binding = uint32_t(i);
+        bb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bb[i].descriptorCount = 1;
+        bb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dl = {};
+    dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dl.bindingCount = 5;
+    dl.pBindings = bb;
+    if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
+    VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
+    VkPipelineLayoutCreateInfo pl = {};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &P.lay;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pcr;
+    if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &P.pl) != VK_SUCCESS) return false;
+    auto mod = [&](const uint32_t *code, size_t bytes) {
+        VkShaderModuleCreateInfo ci = {};
+        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = bytes;
+        ci.pCode = code;
+        VkShaderModule m = VK_NULL_HANDLE;
+        m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m);
+        return m;
+    };
+    P.mT = mod(k_pt_trace, k_pt_trace_size);
+    P.mR = mod(k_pt_resolve, k_pt_resolve_size);
+    if (!P.mT || !P.mR) return false;
+    for (int i = 0; i < 2; ++i) {
+        VkComputePipelineCreateInfo ci = {};
+        ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.module = i ? P.mR : P.mT;
+        ci.stage.pName = "main";
+        ci.layout = P.pl;
+        if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, i ? &P.pRes : &P.pTrace) != VK_SUCCESS) return false;
+    }
+    VkDescriptorSetAllocateInfo ai = {};
+    ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    ai.descriptorPool = m_pool;
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &P.lay;
+    if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &P.set) != VK_SUCCESS) return false;
+    P.fail = false;
+    P.init = true;
+    return true;
+}
+
+void VkRend::ptFree() {
+    PtS &P = m_pt;
+    if (m_df && m_dev) {
+        for (VkPipeline p : {P.pTrace, P.pRes})
+            if (p) m_df->vkDestroyPipeline(m_dev, p, nullptr);
+        for (VkShaderModule m : {P.mT, P.mR})
+            if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
+        if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
+        if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
+        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.acc, &P.out}) freeBuf(*b);
+    }
+    P = PtS();
+}
+
+// envia a cena (triangulos + BVH) e prepara o acumulo
+bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
+    PtS &P = m_pt;
+    const EngPt &e = f.pt;
+    if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 || e.nodes.size() < size_t(e.nnode) * 8) return false;
+    auto need = [&](Buf &b, size_t bytes) {
+        bytes = std::max<size_t>(bytes, 16);
+        if (b.b && b.size >= bytes) return true;
+        freeBuf(b);
+        return mkBuf(b, VkDeviceSize(bytes), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    };
+    const size_t nPix = size_t(cw) * size_t(ch);
+    if (!need(P.pos, size_t(e.ntri) * 48) || !need(P.shade, size_t(e.ntri) * 64) || !need(P.nodes, size_t(e.nnode) * 32) ||
+        !need(P.acc, nPix * 16) || !need(P.out, nPix * 4))
+        return false;
+    std::memcpy(P.pos.p, e.pos.data(), size_t(e.ntri) * 48);
+    std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
+    std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
+    VkDescriptorBufferInfo bi[5] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.acc.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet wr[5] = {};
+    for (int i = 0; i < 5; ++i) {
+        wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[i].dstSet = P.set;
+        wr[i].dstBinding = uint32_t(i);
+        wr[i].descriptorCount = 1;
+        wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        wr[i].pBufferInfo = &bi[i];
+    }
+    m_df->vkUpdateDescriptorSets(m_dev, 5, wr, 0, nullptr);
+    for (int i = 0; i < 3; ++i) {
+        P.eye[i] = f.cam[i];
+        P.right[i] = f.mcR[i];
+        P.up[i] = f.mcU[i];
+        P.fwd[i] = -f.mcB[i];
+    }
+    P.tanY = std::tan(std::max(f.proj[0], 0.01f) * 0.5f);
+    P.aspect = f.proj[1] > 0.f ? f.proj[1] : float(cw) / float(ch);
+    P.w = cw;
+    P.h = ch;
+    P.spp = std::max(1, e.spp);
+    P.bn = std::clamp(e.bounces, 1, 32);
+    P.night = e.night;
+    P.ntri = e.ntri;
+    P.done = 0;
+    P.row = 0;
+    P.band = std::clamp(P.band, 8, std::max(ch, 8));
+    P.active = true;
+    return true;
+}
+
+int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px) {
+    if (!m_capInit || !m_ccb || !m_cfence) return 2;
+    if (uint32_t(cw) > m_maxDim || uint32_t(ch) > m_maxDim) return 2;
+    if (!ptInit()) return 2;
+    PtS &P = m_pt;
+    if (f.pt.fresh) {
+        P.active = false;
+        if (!ptScene(f, cw, ch)) return 2;
+    } else if (!P.active) {
+        return 2;  // continuacao sem trabalho em andamento: o motor recomeca com a cena
+    }
+    using Clk = std::chrono::steady_clock;
+    auto secs = [](Clk::time_point a, Clk::time_point b) { return std::chrono::duration<double>(b - a).count(); };
+
+    // um comando: uma faixa de linhas de uma amostra (ou a conversao final)
+    auto run = [&](bool resolve, int y0, int rows) -> bool {
+        PtPC pc = {};
+        for (int i = 0; i < 3; ++i) {
+            pc.eye[i] = P.eye[i];
+            pc.right[i] = P.right[i];
+            pc.up[i] = P.up[i];
+            pc.fwd[i] = P.fwd[i];
+        }
+        pc.tanY = P.tanY;
+        pc.aspect = P.aspect;
+        pc.w = P.w;
+        pc.h = P.h;
+        pc.y0 = y0;
+        pc.rows = rows;
+        pc.sample = P.done;
+        pc.bounces = P.bn;
+        pc.night = P.night;
+        pc.ntri = P.ntri;
+        VkCommandBuffer cb = m_ccb;
+        m_df->vkResetCommandBuffer(cb, 0);
+        VkCommandBufferBeginInfo bi = {};
+        bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return false;
+        m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolve ? P.pRes : P.pTrace);
+        m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, P.pl, 0, 1, &P.set, 0, nullptr);
+        m_df->vkCmdPushConstants(cb, P.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+        m_df->vkCmdDispatch(cb, uint32_t((P.w + 7) / 8), uint32_t((rows + 7) / 8), 1);
+        VkMemoryBarrier mb = {};
+        mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+        mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        if (m_df->vkEndCommandBuffer(cb) != VK_SUCCESS) return false;
+        VkSubmitInfo si = {};
+        si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cb;
+        m_df->vkResetFences(m_dev, 1, &m_cfence);
+        if (m_df->vkQueueSubmit(m_queue, 1, &si, m_cfence) != VK_SUCCESS) return false;
+        return m_df->vkWaitForFences(m_dev, 1, &m_cfence, VK_TRUE, 20ull * 1000 * 1000 * 1000) == VK_SUCCESS;
+    };
+
+    const auto t0 = Clk::now();
+    while (P.done < P.spp) {
+        const int rows = std::min(P.band, P.h - P.row);
+        const auto ta = Clk::now();
+        if (!run(false, P.row, rows)) {
+            P.active = false;
+            return 2;
+        }
+        const double dt = std::max(secs(ta, Clk::now()), 1e-4);
+        // ajusta o tamanho da faixa para ~60 ms por submissao (limite de tempo da GPU em aparelhos moveis)
+        const double k = std::clamp(0.06 / dt, 0.5, 2.0);
+        P.band = std::clamp(int(double(rows) * k) / 8 * 8, 8, std::max(P.h, 8));
+        P.row += rows;
+        if (P.row >= P.h) {
+            P.row = 0;
+            ++P.done;
+        }
+        if (secs(t0, Clk::now()) > 0.05) break;
+    }
+    if (P.done < P.spp) return 3;
+
+    if (!run(true, 0, P.h)) {
+        P.active = false;
+        return 2;
+    }
+    px.resize(size_t(cw) * size_t(ch) * 4);
+    const unsigned char *src = static_cast<const unsigned char *>(P.out.p);
+    for (int y = 0; y < ch; ++y) std::memcpy(&px[size_t(ch - 1 - y) * size_t(cw) * 4], src + size_t(y) * size_t(cw) * 4, size_t(cw) * 4);
+    P.active = false;
+    return 0;
+}
+
 void VkRend::release() {
     if (m_df && m_dev) {
+        ptFree();
         freeOff();
         aoFree(m_aoV);
         aoFree(m_aoC);

@@ -136,6 +136,22 @@ private:
         Buf rb;  // leitura (visivel pela CPU)
     };
     Off m_off;
+    // path tracer (Parallax)
+    struct PtS {
+        Buf pos, shade, nodes, acc, out;
+        VkDescriptorSetLayout lay = VK_NULL_HANDLE;
+        VkPipelineLayout pl = VK_NULL_HANDLE;
+        VkPipeline pTrace = VK_NULL_HANDLE, pRes = VK_NULL_HANDLE;
+        VkShaderModule mT = VK_NULL_HANDLE, mR = VK_NULL_HANDLE;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        bool init = false, fail = false, active = false;
+        int w = 0, h = 0, spp = 0, bn = 0, night = 0, done = 0, row = 0, band = 16, ntri = 0;
+        float eye[3] = {}, right[3] = {}, up[3] = {}, fwd[3] = {}, tanY = 1.f, aspect = 1.f;
+    } m_pt;
+    bool ptInit();
+    void ptFree();
+    bool ptScene(const EngVkFrame &f, int cw, int ch);
+    int capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px);
     AoT m_aoV, m_aoC;  // GTAO do viewport (meia resolucao) e da captura (resolucao total)
     bool m_aoInit = false, m_aoFail = false, m_aoActiveV = false;
     VkRenderPass m_rpDp = VK_NULL_HANDLE, m_rpAo = VK_NULL_HANDLE, m_rpAoClr = VK_NULL_HANDLE;
