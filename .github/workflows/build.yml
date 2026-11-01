@@ -1745,6 +1745,7 @@ jobs:
               property bool edge: true
               property bool gtao: true
               property real gtaoS: 0.85
+              property int spp: 64
               property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
               function open() {
@@ -1785,6 +1786,8 @@ jobs:
                   view.command(16, edge ? 1 : 0)
                   view.command(17, gtao ? 1 : 0)
                   view.command(28, gtaoS)
+                  view.command(29, renderer === 3 ? 1 : 0)
+                  view.command(30, spp)
               }
 
               // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -1836,9 +1839,9 @@ jobs:
                               Repeater {
                                   model: [
                                       { n: "NanoFarm", d: "padrão", on: true },
-                                      { n: "UCore", d: "em breve", on: false },
+                                      { n: "SeptaCore", d: "em breve", on: false },
                                       { n: "DeltaXRender", d: "em breve", on: false },
-                                      { n: "Parallax", d: "em breve", on: false },
+                                      { n: "Parallax", d: "experimental", on: true },
                                       { n: "WhiteNoise", d: "em breve", on: false }
                                   ]
                                   Rectangle {
@@ -1863,10 +1866,18 @@ jobs:
                                       MouseArea {
                                           anchors.fill: parent
                                           enabled: parent.modelData.on
-                                          onClicked: dlg.renderer = parent.index
+                                          onClicked: { dlg.renderer = parent.index; dlg.view.command(29, dlg.renderer === 3 ? 1 : 0) }
                                       }
                                   }
                               }
+                          }
+
+                          Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Amostras"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 3 }
+                          RdSeg {
+                              s: dlg.s; width: parent.width; visible: dlg.renderer === 3
+                              labels: ["16", "64", "256"]
+                              index: dlg.spp <= 16 ? 0 : (dlg.spp <= 64 ? 1 : 2)
+                              onPicked: function (i) { dlg.spp = [16, 64, 256][i]; dlg.view.command(30, dlg.spp) }
                           }
 
                           Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
@@ -2148,6 +2159,16 @@ jobs:
               std::vector<EngVkGzCmd> cmds;
           };
           constexpr int kEngVkMaxMats = 4096;  // limite de matrizes de osso por quadro
+          // cena do path tracer (Parallax): triangulos + BVH prontos para o compute
+          struct EngPt {
+              bool on = false;     // este quadro e renderizado pelo path tracer
+              bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
+              int spp = 16, bounces = 6, night = 0;
+              int ntri = 0, nnode = 0;
+              std::vector<float> pos;    // 12 floats por triangulo (p0, p1, p2 como float4)
+              std::vector<float> shade;  // 16 floats por triangulo (n0, n1, n2 [w de n2 = metal], cor [w = rugosidade])
+              std::vector<float> nodes;  // 8 floats por no (min, esq/primeiro, max, quantidade; os inteiros vao como bits de float)
+          };
           struct EngVkFrame {
               std::vector<EngVkOp> scene;  // 3D (por baixo do QML)
               std::vector<EngVkOp> ui;     // interface do motor (por cima do QML)
@@ -2158,6 +2179,7 @@ jobs:
               float mcR[4] = {}, mcU[4] = {}, mcB[4] = {};  // base do matcap (w de mcR = altura da tela em px)
               float proj[4] = {};          // projecao do quadro: fov vertical (rad), aspecto, near, far (para o GTAO)
               float ao[4] = {};            // GTAO do NanoFarm: intensidade (0 = desligado), raio (unidades da cena), potencia
+              EngPt pt;                    // path tracer (so em capturas)
           };
           void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
           int eng_vk_tex_count(int &size, unsigned &ver);          // texturas de material: camadas size x size RGBA8; ver muda quando entra uma nova
@@ -2177,7 +2199,7 @@ jobs:
 
           // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
           // backend Vulkan: renderiza as ordens gravadas fora da tela e devolve os pixels (RGBA8, de baixo para cima).
-          // 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel
+          // 0 = ok, 1 = ainda nao da (tenta no proximo quadro), 2 = indisponivel, 3 = path tracer em andamento (chame de novo no proximo quadro)
           int plat_vk_capture(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px);
           void plat_show_keyboard();
           void plat_hide_keyboard();
@@ -3514,6 +3536,8 @@ jobs:
           // ---------- triangulos da cena (base do futuro path tracer em compute/Slang; o BVH sera refeito) ----------
           struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
           std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
+          struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob gPtJob;   // trabalho do path tracer em andamento (varios quadros)
+          int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
           bool gMcGround=false,gMcHaveCam=false;   // estado do futuro path tracer (Etapa 3): chao e invalidacao do acumulo
           int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcFrame=0;
           bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
@@ -3658,6 +3682,19 @@ jobs:
            V ex=cmx-cmn;int ax=(ex.x>ex.y&&ex.x>ex.z)?0:(ex.y>ex.z?1:2);int m=(b+e)/2;
            std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a,int c){return (&gCen[a].x)[ax]<(&gCen[c].x)[ax];});
            bvhRec(b,m);int r=bvhRec(m,e);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
+          // ---------- path tracer: cena para o compute ----------
+          static void ptBuild(EngPt&p,int spp,int bn,int night){
+           gatherTris();const int n=(int)gTD.size();
+           gCen.resize(n);gOrd.resize(n);
+           for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
+           gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
+           p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;
+           p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
+           for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];
+            for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
+            sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;}
+           for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
+            q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
           static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
           // ---------- render de video (MP4 via MediaCodec; plano B: sequencia de PNG) ----------
           struct Vid{bool on=false,png=false,mxOn=false,fb=false;int fps=24;float t0=0;int f0=1,f1=1,f=1,done=0,total=1,vw=0,vh=0,cf=21,stage=0,fd=-1,trk=-1;float tm0=0;int spp0=64,fw0=1920,bn0=6;AMediaCodec*cd=nullptr;AMediaMuxer*mx=nullptr;std::string path,dir;};
@@ -4500,6 +4537,8 @@ jobs:
               case 15: gMcNight = a > .5f; gMcHaveCam = false; gSigS = -1; break;
               case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
               case 17: gGtao = a > .5f; break;                                  // GTAO do NanoFarm
+              case 29: gRend = std::clamp((int)roundf(a), 0, 1); gPtJob.run = false; break;   // renderizador
+              case 30: gMcSpp = std::clamp((int)roundf(a), 1, 4096); break;                  // amostras por pixel
               case 28: gAOs = std::clamp(a, 0.f, 1.f); break;                   // intensidade do GTAO
               case 18: startImage((int)roundf(a)); break;
               case 19: if (!gVid.on) vidStart(); break;
@@ -4540,20 +4579,32 @@ jobs:
           // ---------- captura fora da tela (backend Vulkan) ----------
           // Renderiza o quadro atual com a camera de render (ou a do viewport, se nao houver), sem overlays e sem destaque
           // de selecao, e le os pixels. Devolve 0 = ok, 1 = tenta no proximo quadro, 2 = indisponivel.
-          static int vkCaptureScene(int cw, int ch, std::vector<unsigned char> &px) {
+          // trabalho do path tracer em andamento (varios quadros acumulando amostras)
+          static int vkCaptureScene(int cw, int ch, std::vector<unsigned char> &px, int sppOv = 0) {
               if (!gVkOut || cw < 8 || ch < 8) return 2;
+              const bool pt = gRend == 1;
+              const int spp = sppOv > 0 ? sppOv : std::max(1, gMcSpp), bn = std::clamp(gMcBn, 2, 16), night = gMcNight ? 1 : 0;
+              if (pt && gPtJob.run && gPtJob.cw == cw && gPtJob.ch == ch && gPtJob.spp == spp && gPtJob.bn == bn && gPtJob.night == night && gPtJob.tm == tm) {
+                  static EngVkFrame pf;   // continuacao: a cena ja esta na GPU
+                  pf.pt.on = true; pf.pt.fresh = false; pf.pt.spp = spp; pf.pt.bounces = bn; pf.pt.night = night;
+                  const int rc2 = ::plat_vk_capture(pf, cw, ch, px);
+                  if (rc2 != 2) { gPtJob.run = rc2 == 3; return rc2; }
+              }
+              gPtJob.run = false;
               static EngVkFrame cf;
               EngVkFrame *sOut = gVkOut;
               const int sW = W, sH = H, sCam = gCamView, sSel = sel, sSeg = gVkSeg, sPal = gVkPal;
               const V sTgt = tgt;
               const float sYaw = yaw, sPitch = pitch, sCd = cd, sFov = FOV;
               const bool sMc = gMatcap, sCapNow = gCapNow, sDepth = gVkDepth;
-              cf.scene.clear(); cf.ui.clear(); cf.text.clear(); cf.pal.clear();
+              cf.scene.clear(); cf.ui.clear(); cf.text.clear(); cf.pal.clear(); cf.pt.on = false; cf.pt.fresh = false;
               gVkOut = &cf; gVkPal = -1; gVkSeg = 0; gVkDepth = false;
               W = cw; H = ch; gCapNow = true; gMatcap = false; sel = -1;
               { V e, f, r, u; float fv; const int ac = activeCam(); if (ac >= 0 && camRender(e, f, r, u, fv)) gCamView = ac; }
               frame();
+              if (pt) { ptBuild(cf.pt, spp, bn, night); cf.pt.on = true; cf.pt.fresh = true; }
               const int rc = ::plat_vk_capture(cf, cw, ch, px);
+              if (pt && rc == 3) { gPtJob.run = true; gPtJob.cw = cw; gPtJob.ch = ch; gPtJob.spp = spp; gPtJob.bn = bn; gPtJob.night = night; gPtJob.tm = tm; }
               gVkOut = sOut; gVkPal = sPal; gVkSeg = sSeg; gVkDepth = sDepth;
               W = sW; H = sH; gCamView = sCam; sel = sSel;
               tgt = sTgt; yaw = sYaw; pitch = sPitch; cd = sCd; FOV = sFov;
@@ -4582,6 +4633,7 @@ jobs:
               tm = gVid.t0 + gVid.f / (float)gVid.fps; applyAnim();
               std::vector<unsigned char> px;
               const int rc = vkCaptureScene(gVid.vw, gVid.vh, px);
+              if (rc == 3) { gVkTries = 0; return; }
               if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; toast("Falha ao capturar o frame"); vidFinish(true); } return; }
               gVkTries = 0;
               if (rc != 0) { toast("Captura indisponivel neste aparelho"); vidFinish(true); return; }
@@ -4597,7 +4649,8 @@ jobs:
               if (gCapReq) {   // previa (tela de render): mesma proporcao do render, largura de ate 640
                   const int rw = gCapW, rh = gCapH;
                   const int ow = std::min(640, rw), oh = std::max(8, (int)((float)ow * rh / rw));
-                  const int rc = vkCaptureScene(ow, oh, px);
+                  const int rc = vkCaptureScene(ow, oh, px, 4);
+                  if (rc == 3) { gVkTries = 0; return; }
                   if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gCapReq = false; } return; }
                   gVkTries = 0; gCapReq = false;
                   if (rc == 0) { gPrevPath = std::string(gDir) + "/preview.png"; if (vkWritePng(gPrevPath, px, ow, oh)) gPrevSeq++; }
@@ -4610,6 +4663,7 @@ jobs:
                   else { const float sc = std::min(1.f, (float)gMcFinW / std::max(W, 1)); tw = (int)(W * sc); th = (int)(H * sc); }
                   tw = std::clamp(tw, 16, 4096); th = std::clamp(th, 16, 4096);
                   const int rc = vkCaptureScene(tw, th, px);
+                  if (rc == 3) { gVkTries = 0; return; }
                   if (rc == 1) { if (++gVkTries > 600) { gVkTries = 0; gAutoPng = 0; toast("Falha ao capturar a imagem"); } return; }
                   gVkTries = 0;
                   const int mode = gAutoPng; gAutoPng = 0;
@@ -4641,7 +4695,7 @@ jobs:
                   if (tm < a_) tm = b_;
                   applyAnim();
               }
-              if (gVid.on || gCapReq || gAutoPng) vkJobs();   // render, previa e video (fora da tela)
+              if (gVid.on || gCapReq || gAutoPng) vkJobs(); else gPtJob.run = false;   // render, previa e video (fora da tela)
               gVkSeg = 0; gVkDepth = false;
               frame();
               gVkSeg = 1; gVkDepth = false;
@@ -5015,6 +5069,22 @@ jobs:
                   Buf rb;  // leitura (visivel pela CPU)
               };
               Off m_off;
+              // path tracer (Parallax)
+              struct PtS {
+                  Buf pos, shade, nodes, acc, out;
+                  VkDescriptorSetLayout lay = VK_NULL_HANDLE;
+                  VkPipelineLayout pl = VK_NULL_HANDLE;
+                  VkPipeline pTrace = VK_NULL_HANDLE, pRes = VK_NULL_HANDLE;
+                  VkShaderModule mT = VK_NULL_HANDLE, mR = VK_NULL_HANDLE;
+                  VkDescriptorSet set = VK_NULL_HANDLE;
+                  bool init = false, fail = false, active = false;
+                  int w = 0, h = 0, spp = 0, bn = 0, night = 0, done = 0, row = 0, band = 16, ntri = 0;
+                  float eye[3] = {}, right[3] = {}, up[3] = {}, fwd[3] = {}, tanY = 1.f, aspect = 1.f;
+              } m_pt;
+              bool ptInit();
+              void ptFree();
+              bool ptScene(const EngVkFrame &f, int cw, int ch);
+              int capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px);
               AoT m_aoV, m_aoC;  // GTAO do viewport (meia resolucao) e da captura (resolucao total)
               bool m_aoInit = false, m_aoFail = false, m_aoActiveV = false;
               VkRenderPass m_rpDp = VK_NULL_HANDLE, m_rpAo = VK_NULL_HANDLE, m_rpAoClr = VK_NULL_HANDLE;
@@ -5063,6 +5133,7 @@ jobs:
           #include <algorithm>
           #include <cstdint>
           #include <cstring>
+          #include <chrono>
           #include <cmath>
 
           #include "vkshaders.h"  // gerado no build (Slang): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
@@ -5343,12 +5414,12 @@ jobs:
               // descritores, buffers por slot e amostrador
               VkDescriptorPoolSize ps[2] = {};
               ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-              ps[0].descriptorCount = kMaxSlots * 2 + 2;
+              ps[0].descriptorCount = kMaxSlots * 2 + 2 + 5;  // + path tracer
               ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
               ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12;  // + GTAO (viewport e captura)
               VkDescriptorPoolCreateInfo dpi = {};
               dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-              dpi.maxSets = 3 * kMaxSlots + 4 + 6;
+              dpi.maxSets = 3 * kMaxSlots + 4 + 6 + 1;
               dpi.poolSizeCount = 2;
               dpi.pPoolSizes = ps;
               if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
@@ -6181,6 +6252,7 @@ jobs:
                   }
                   m_capInit = true;
               }
+              if (f.pt.on) return capturePT(w, f, cw, ch, px);   // path tracer (Parallax)
               if (uint32_t(cw) > m_maxDim || uint32_t(ch) > m_maxDim) return 2;
               if (!offTargets(cw, ch)) return 2;
 
@@ -6736,8 +6808,233 @@ jobs:
               w->endExternalCommands();
           }
 
+          // ---------------------------------------------------------------------------
+          // Path tracer (Parallax): compute com acumulacao em varios passos (faixas de linhas) para nao travar a GPU
+          // ---------------------------------------------------------------------------
+          struct PtPC {
+              float eye[3], tanY;
+              float right[3], aspect;
+              float up[3], pad0;
+              float fwd[3], pad1;
+              int32_t w, h, y0, rows;
+              int32_t sample, bounces, night, ntri;
+          };
+
+          bool VkRend::ptInit() {
+              PtS &P = m_pt;
+              if (P.init) return true;
+              if (P.fail) return false;
+              P.fail = true;
+              VkDescriptorSetLayoutBinding bb[5] = {};
+              for (int i = 0; i < 5; ++i) {
+                  bb[i].binding = uint32_t(i);
+                  bb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                  bb[i].descriptorCount = 1;
+                  bb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+              }
+              VkDescriptorSetLayoutCreateInfo dl = {};
+              dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+              dl.bindingCount = 5;
+              dl.pBindings = bb;
+              if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
+              VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
+              VkPipelineLayoutCreateInfo pl = {};
+              pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+              pl.setLayoutCount = 1;
+              pl.pSetLayouts = &P.lay;
+              pl.pushConstantRangeCount = 1;
+              pl.pPushConstantRanges = &pcr;
+              if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &P.pl) != VK_SUCCESS) return false;
+              auto mod = [&](const uint32_t *code, size_t bytes) {
+                  VkShaderModuleCreateInfo ci = {};
+                  ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+                  ci.codeSize = bytes;
+                  ci.pCode = code;
+                  VkShaderModule m = VK_NULL_HANDLE;
+                  m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m);
+                  return m;
+              };
+              P.mT = mod(k_pt_trace, k_pt_trace_size);
+              P.mR = mod(k_pt_resolve, k_pt_resolve_size);
+              if (!P.mT || !P.mR) return false;
+              for (int i = 0; i < 2; ++i) {
+                  VkComputePipelineCreateInfo ci = {};
+                  ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+                  ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                  ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                  ci.stage.module = i ? P.mR : P.mT;
+                  ci.stage.pName = "main";
+                  ci.layout = P.pl;
+                  if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, i ? &P.pRes : &P.pTrace) != VK_SUCCESS) return false;
+              }
+              VkDescriptorSetAllocateInfo ai = {};
+              ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+              ai.descriptorPool = m_pool;
+              ai.descriptorSetCount = 1;
+              ai.pSetLayouts = &P.lay;
+              if (m_df->vkAllocateDescriptorSets(m_dev, &ai, &P.set) != VK_SUCCESS) return false;
+              P.fail = false;
+              P.init = true;
+              return true;
+          }
+
+          void VkRend::ptFree() {
+              PtS &P = m_pt;
+              if (m_df && m_dev) {
+                  for (VkPipeline p : {P.pTrace, P.pRes})
+                      if (p) m_df->vkDestroyPipeline(m_dev, p, nullptr);
+                  for (VkShaderModule m : {P.mT, P.mR})
+                      if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
+                  if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
+                  if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
+                  for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.acc, &P.out}) freeBuf(*b);
+              }
+              P = PtS();
+          }
+
+          // envia a cena (triangulos + BVH) e prepara o acumulo
+          bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
+              PtS &P = m_pt;
+              const EngPt &e = f.pt;
+              if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 || e.nodes.size() < size_t(e.nnode) * 8) return false;
+              auto need = [&](Buf &b, size_t bytes) {
+                  bytes = std::max<size_t>(bytes, 16);
+                  if (b.b && b.size >= bytes) return true;
+                  freeBuf(b);
+                  return mkBuf(b, VkDeviceSize(bytes), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+              };
+              const size_t nPix = size_t(cw) * size_t(ch);
+              if (!need(P.pos, size_t(e.ntri) * 48) || !need(P.shade, size_t(e.ntri) * 64) || !need(P.nodes, size_t(e.nnode) * 32) ||
+                  !need(P.acc, nPix * 16) || !need(P.out, nPix * 4))
+                  return false;
+              std::memcpy(P.pos.p, e.pos.data(), size_t(e.ntri) * 48);
+              std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
+              std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
+              VkDescriptorBufferInfo bi[5] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.acc.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
+              VkWriteDescriptorSet wr[5] = {};
+              for (int i = 0; i < 5; ++i) {
+                  wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                  wr[i].dstSet = P.set;
+                  wr[i].dstBinding = uint32_t(i);
+                  wr[i].descriptorCount = 1;
+                  wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                  wr[i].pBufferInfo = &bi[i];
+              }
+              m_df->vkUpdateDescriptorSets(m_dev, 5, wr, 0, nullptr);
+              for (int i = 0; i < 3; ++i) {
+                  P.eye[i] = f.cam[i];
+                  P.right[i] = f.mcR[i];
+                  P.up[i] = f.mcU[i];
+                  P.fwd[i] = -f.mcB[i];
+              }
+              P.tanY = std::tan(std::max(f.proj[0], 0.01f) * 0.5f);
+              P.aspect = f.proj[1] > 0.f ? f.proj[1] : float(cw) / float(ch);
+              P.w = cw;
+              P.h = ch;
+              P.spp = std::max(1, e.spp);
+              P.bn = std::clamp(e.bounces, 1, 32);
+              P.night = e.night;
+              P.ntri = e.ntri;
+              P.done = 0;
+              P.row = 0;
+              P.band = std::clamp(P.band, 8, std::max(ch, 8));
+              P.active = true;
+              return true;
+          }
+
+          int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::vector<unsigned char> &px) {
+              if (!m_capInit || !m_ccb || !m_cfence) return 2;
+              if (uint32_t(cw) > m_maxDim || uint32_t(ch) > m_maxDim) return 2;
+              if (!ptInit()) return 2;
+              PtS &P = m_pt;
+              if (f.pt.fresh) {
+                  P.active = false;
+                  if (!ptScene(f, cw, ch)) return 2;
+              } else if (!P.active) {
+                  return 2;  // continuacao sem trabalho em andamento: o motor recomeca com a cena
+              }
+              using Clk = std::chrono::steady_clock;
+              auto secs = [](Clk::time_point a, Clk::time_point b) { return std::chrono::duration<double>(b - a).count(); };
+
+              // um comando: uma faixa de linhas de uma amostra (ou a conversao final)
+              auto run = [&](bool resolve, int y0, int rows) -> bool {
+                  PtPC pc = {};
+                  for (int i = 0; i < 3; ++i) {
+                      pc.eye[i] = P.eye[i];
+                      pc.right[i] = P.right[i];
+                      pc.up[i] = P.up[i];
+                      pc.fwd[i] = P.fwd[i];
+                  }
+                  pc.tanY = P.tanY;
+                  pc.aspect = P.aspect;
+                  pc.w = P.w;
+                  pc.h = P.h;
+                  pc.y0 = y0;
+                  pc.rows = rows;
+                  pc.sample = P.done;
+                  pc.bounces = P.bn;
+                  pc.night = P.night;
+                  pc.ntri = P.ntri;
+                  VkCommandBuffer cb = m_ccb;
+                  m_df->vkResetCommandBuffer(cb, 0);
+                  VkCommandBufferBeginInfo bi = {};
+                  bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+                  bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+                  if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return false;
+                  m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolve ? P.pRes : P.pTrace);
+                  m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, P.pl, 0, 1, &P.set, 0, nullptr);
+                  m_df->vkCmdPushConstants(cb, P.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
+                  m_df->vkCmdDispatch(cb, uint32_t((P.w + 7) / 8), uint32_t((rows + 7) / 8), 1);
+                  VkMemoryBarrier mb = {};
+                  mb.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+                  mb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                  mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+                  m_df->vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+                  if (m_df->vkEndCommandBuffer(cb) != VK_SUCCESS) return false;
+                  VkSubmitInfo si = {};
+                  si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                  si.commandBufferCount = 1;
+                  si.pCommandBuffers = &cb;
+                  m_df->vkResetFences(m_dev, 1, &m_cfence);
+                  if (m_df->vkQueueSubmit(m_queue, 1, &si, m_cfence) != VK_SUCCESS) return false;
+                  return m_df->vkWaitForFences(m_dev, 1, &m_cfence, VK_TRUE, 20ull * 1000 * 1000 * 1000) == VK_SUCCESS;
+              };
+
+              const auto t0 = Clk::now();
+              while (P.done < P.spp) {
+                  const int rows = std::min(P.band, P.h - P.row);
+                  const auto ta = Clk::now();
+                  if (!run(false, P.row, rows)) {
+                      P.active = false;
+                      return 2;
+                  }
+                  const double dt = std::max(secs(ta, Clk::now()), 1e-4);
+                  // ajusta o tamanho da faixa para ~60 ms por submissao (limite de tempo da GPU em aparelhos moveis)
+                  const double k = std::clamp(0.06 / dt, 0.5, 2.0);
+                  P.band = std::clamp(int(double(rows) * k) / 8 * 8, 8, std::max(P.h, 8));
+                  P.row += rows;
+                  if (P.row >= P.h) {
+                      P.row = 0;
+                      ++P.done;
+                  }
+                  if (secs(t0, Clk::now()) > 0.05) break;
+              }
+              if (P.done < P.spp) return 3;
+
+              if (!run(true, 0, P.h)) {
+                  P.active = false;
+                  return 2;
+              }
+              px.resize(size_t(cw) * size_t(ch) * 4);
+              const unsigned char *src = static_cast<const unsigned char *>(P.out.p);
+              for (int y = 0; y < ch; ++y) std::memcpy(&px[size_t(ch - 1 - y) * size_t(cw) * 4], src + size_t(y) * size_t(cw) * 4, size_t(cw) * 4);
+              P.active = false;
+              return 0;
+          }
+
           void VkRend::release() {
               if (m_df && m_dev) {
+                  ptFree();
                   freeOff();
                   aoFree(m_aoV);
                   aoFree(m_aoC);
@@ -7253,6 +7550,358 @@ jobs:
               return sum / max(ws, 1e-4);
           }
           NOMADEOF
+          cat > nomad-qt/vk/pt.slang <<'NOMADEOF'
+          // Parallax: path tracer em compute (nucleo da Etapa 3)
+          // cena: triangulos + BVH binaria (construida na CPU); sol com sombra suave + ceu; material difuso + GGX (metal/rugosidade)
+          struct PC {
+              float3 eye;
+              float tanY;
+              float3 right;
+              float aspect;
+              float3 up;
+              float pad0;
+              float3 fwd;
+              float pad1;
+              int w;
+              int h;
+              int y0;
+              int rows;
+              int sample;
+              int bounces;
+              int night;
+              int ntri;
+          };
+          [[vk::push_constant]] ConstantBuffer<PC> pc;
+
+          [[vk::binding(0, 0)]] StructuredBuffer<float4> bPos;    // 3 float4 por triangulo (p0, p1, p2)
+          [[vk::binding(1, 0)]] StructuredBuffer<float4> bShade;  // 4 float4: n0, n1, n2 (w de n2 = metal), cor (w = rugosidade)
+          [[vk::binding(2, 0)]] StructuredBuffer<float4> bNode;   // 2 float4 por no: (min, esq/primeiro), (max, quantidade)
+          [[vk::binding(3, 0)]] RWStructuredBuffer<float4> bAcc;  // soma das amostras (rgb) e contagem (a)
+          [[vk::binding(4, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
+
+          static const float PI = 3.14159265;
+
+          uint pcg(uint v)
+          {
+              uint s = v * 747796405u + 2891336453u;
+              uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+              return (w >> 22u) ^ w;
+          }
+          float rnd(inout uint st)
+          {
+              st = pcg(st);
+              return float(st >> 8) * (1.0 / 16777216.0);
+          }
+
+          float sinv(float x)
+          {
+              return 1.0 / (abs(x) < 1e-8 ? (x < 0.0 ? -1e-8 : 1e-8) : x);
+          }
+
+          bool hitTri(float3 o, float3 d, int ti, inout float tmax, out float bu, out float bv)
+          {
+              bu = 0.0;
+              bv = 0.0;
+              float3 p0 = bPos[ti * 3].xyz;
+              float3 e1 = bPos[ti * 3 + 1].xyz - p0;
+              float3 e2 = bPos[ti * 3 + 2].xyz - p0;
+              float3 pv = cross(d, e2);
+              float det = dot(e1, pv);
+              if (abs(det) < 1e-12) return false;
+              float inv = 1.0 / det;
+              float3 tv = o - p0;
+              float u = dot(tv, pv) * inv;
+              if (u < 0.0 || u > 1.0) return false;
+              float3 qv = cross(tv, e1);
+              float v = dot(d, qv) * inv;
+              if (v < 0.0 || u + v > 1.0) return false;
+              float t = dot(e2, qv) * inv;
+              if (t <= 1e-6 || t >= tmax) return false;
+              tmax = t;
+              bu = u;
+              bv = v;
+              return true;
+          }
+
+          // percorre a BVH; anyHit = so quer saber se algo bloqueia (sombra)
+          bool traverse(float3 o, float3 d, inout float tmax, out int hit, out float hu, out float hv, bool anyHit)
+          {
+              float3 inv = float3(sinv(d.x), sinv(d.y), sinv(d.z));
+              int stack[32];
+              int sp = 0;
+              int node = 0;
+              hit = -1;
+              hu = 0.0;
+              hv = 0.0;
+              while (true) {
+                  float4 a = bNode[node * 2];
+                  float4 b = bNode[node * 2 + 1];
+                  float3 t0 = (a.xyz - o) * inv;
+                  float3 t1 = (b.xyz - o) * inv;
+                  float3 tmn = min(t0, t1);
+                  float3 tmx = max(t0, t1);
+                  float tn = max(max(tmn.x, tmn.y), max(tmn.z, 0.0));
+                  float tf = min(min(tmx.x, tmx.y), min(tmx.z, tmax));
+                  bool inside = tn <= tf;
+                  int cnt = asint(b.w);
+                  if (inside) {
+                      if (cnt > 0) {
+                          int first = asint(a.w);
+                          for (int i = 0; i < cnt; i++) {
+                              float u, v;
+                              if (hitTri(o, d, first + i, tmax, u, v)) {
+                                  hit = first + i;
+                                  hu = u;
+                                  hv = v;
+                                  if (anyHit) return true;
+                              }
+                          }
+                      } else {
+                          if (sp < 31) stack[sp++] = asint(a.w);
+                          node = node + 1;
+                          continue;
+                      }
+                  }
+                  if (sp == 0) break;
+                  node = stack[--sp];
+              }
+              return hit >= 0;
+          }
+
+          float3 sunDir()
+          {
+              return normalize(float3(0.45, 0.75, 0.35));
+          }
+          float3 sunIrr(int night)
+          {
+              return night != 0 ? float3(0.10, 0.13, 0.22) : float3(2.6, 2.45, 2.2);
+          }
+          float3 skyRad(float3 d, int night)
+          {
+              float t = saturate(d.y);
+              if (night != 0) {
+                  float3 s = lerp(float3(0.020, 0.028, 0.050), float3(0.004, 0.007, 0.020), sqrt(t));
+                  return d.y < 0.0 ? s * 0.5 : s;
+              }
+              float3 hor = float3(0.85, 0.90, 1.00);
+              float3 zen = float3(0.28, 0.50, 0.95);
+              if (d.y < 0.0) return lerp(hor, float3(0.30, 0.28, 0.26), saturate(-d.y * 4.0));
+              return lerp(hor, zen, sqrt(t));
+          }
+
+          void basis(float3 n, out float3 t, out float3 b)
+          {
+              float s = n.z >= 0.0 ? 1.0 : -1.0;
+              float a = -1.0 / (s + n.z);
+              float bb = n.x * n.y * a;
+              t = float3(1.0 + s * n.x * n.x * a, s * bb, -s * n.x);
+              b = float3(bb, s + n.y * n.y * a, -n.y);
+          }
+
+          struct Mat {
+              float3 cd;
+              float3 f0;
+              float a;
+              float pSpec;
+          };
+
+          float Dggx(float nh, float a2)
+          {
+              float d = nh * nh * (a2 - 1.0) + 1.0;
+              return a2 / (PI * d * d);
+          }
+          float G1(float nv, float a2)
+          {
+              return 2.0 * nv / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
+          }
+
+          // wo e wi no espaco local (z = normal)
+          float3 evalBsdf(Mat m, float3 wo, float3 wi, out float pdf)
+          {
+              pdf = 0.0;
+              if (wi.z <= 0.0 || wo.z <= 0.0) return float3(0.0);
+              float3 h = normalize(wo + wi);
+              float nh = h.z;
+              float vh = saturate(dot(wo, h));
+              float nl = wi.z;
+              float nv = wo.z;
+              float a2 = m.a * m.a;
+              float D = Dggx(nh, a2);
+              float g1v = G1(nv, a2);
+              float g1l = G1(nl, a2);
+              float fm = pow(1.0 - vh, 5.0);
+              float3 F = m.f0 + (1.0 - m.f0) * fm;
+              float3 spec = F * (D * g1v * g1l / (4.0 * nv * nl));
+              float3 diff = m.cd * (1.0 / PI);
+              pdf = (1.0 - m.pSpec) * nl / PI + m.pSpec * D * g1v / (4.0 * nv);
+              return diff + spec;
+          }
+
+          float3 sampleVNDF(float3 Ve, float a, float u1, float u2)
+          {
+              float3 Vh = normalize(float3(a * Ve.x, a * Ve.y, Ve.z));
+              float lensq = Vh.x * Vh.x + Vh.y * Vh.y;
+              float3 T1 = lensq > 0.0 ? float3(-Vh.y, Vh.x, 0.0) * rsqrt(lensq) : float3(1.0, 0.0, 0.0);
+              float3 T2 = cross(Vh, T1);
+              float r = sqrt(u1);
+              float phi = 2.0 * PI * u2;
+              float t1 = r * cos(phi);
+              float t2 = r * sin(phi);
+              float s = 0.5 * (1.0 + Vh.z);
+              t2 = (1.0 - s) * sqrt(max(0.0, 1.0 - t1 * t1)) + s * t2;
+              float3 Nh = t1 * T1 + t2 * T2 + sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2)) * Vh;
+              return normalize(float3(a * Nh.x, a * Nh.y, max(0.0, Nh.z)));
+          }
+
+          bool sampleBsdf(Mat m, float3 wo, float u0, float u1, float u2, out float3 wi)
+          {
+              if (u0 < m.pSpec) {
+                  float3 h = sampleVNDF(wo, m.a, u1, u2);
+                  wi = 2.0 * dot(wo, h) * h - wo;
+              } else {
+                  float r = sqrt(u1);
+                  float phi = 2.0 * PI * u2;
+                  wi = float3(r * cos(phi), r * sin(phi), sqrt(max(0.0, 1.0 - u1)));
+              }
+              return wi.z > 0.0;
+          }
+
+          [numthreads(8, 8, 1)]
+          void csTrace(uint3 id : SV_DispatchThreadID)
+          {
+              int px = int(id.x);
+              int py = pc.y0 + int(id.y);
+              if (px >= pc.w || int(id.y) >= pc.rows || py >= pc.h) return;
+              uint st = pcg(uint(px) + pcg(uint(py) + pcg(uint(pc.sample) + 0x9e3779b9u)));
+              float jx = rnd(st);
+              float jy = rnd(st);
+              float nx = (float(px) + jx) / float(pc.w) * 2.0 - 1.0;
+              float ny = 1.0 - (float(py) + jy) / float(pc.h) * 2.0;
+              float3 d = normalize(pc.fwd + pc.right * (nx * pc.tanY * pc.aspect) + pc.up * (ny * pc.tanY));
+              float3 o = pc.eye;
+              float3 L = float3(0.0);
+              float3 beta = float3(1.0);
+              float3 sunD = sunDir();
+              float3 sunE = sunIrr(pc.night);
+              // cone do sol (abertura angular ~1,7 grau: sombras suaves)
+              const float cosMax = 0.99955;
+
+              for (int bounce = 0; bounce < pc.bounces; bounce++) {
+                  float tmax = 1e30;
+                  int ti;
+                  float hu, hv;
+                  if (!traverse(o, d, tmax, ti, hu, hv, false)) {
+                      L += beta * skyRad(d, pc.night);
+                      break;
+                  }
+                  float w0 = 1.0 - hu - hv;
+                  float4 s0 = bShade[ti * 4];
+                  float4 s1 = bShade[ti * 4 + 1];
+                  float4 s2 = bShade[ti * 4 + 2];
+                  float4 s3 = bShade[ti * 4 + 3];
+                  float3 p = o + d * tmax;
+                  float3 e1 = bPos[ti * 3 + 1].xyz - bPos[ti * 3].xyz;
+                  float3 e2 = bPos[ti * 3 + 2].xyz - bPos[ti * 3].xyz;
+                  float3 ng = normalize(cross(e1, e2));
+                  float3 ns = w0 * s0.xyz + hu * s1.xyz + hv * s2.xyz;
+                  float nl2 = dot(ns, ns);
+                  ns = nl2 > 1e-12 ? ns * rsqrt(nl2) : ng;
+                  if (dot(ns, d) > 0.0) ns = -ns;      // sempre do lado de quem olha
+                  if (dot(ng, ns) < 0.0) ng = -ng;
+                  float metal = saturate(s2.w);
+                  float rou = clamp(s3.w, 0.04, 1.0);
+                  float3 col = saturate(s3.xyz);
+                  Mat m;
+                  m.cd = col * (1.0 - metal);
+                  m.f0 = lerp(float3(0.04), col, metal);
+                  m.a = rou * rou;
+                  float ls = dot(m.f0, float3(0.3, 0.6, 0.1));
+                  float ld_ = dot(m.cd, float3(0.3, 0.6, 0.1));
+                  m.pSpec = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
+
+                  float3 T, B;
+                  basis(ns, T, B);
+                  float3 wo = float3(dot(-d, T), dot(-d, B), dot(-d, ns));
+                  float eps = 1e-4 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
+                  float3 org = p + ng * eps;
+
+                  // luz direta: sol (cone) com raio de sombra
+                  {
+                      float u1 = rnd(st);
+                      float u2 = rnd(st);
+                      float cz = 1.0 - u1 * (1.0 - cosMax);
+                      float sz = sqrt(max(0.0, 1.0 - cz * cz));
+                      float ph = 2.0 * PI * u2;
+                      float3 st1, st2;
+                      basis(sunD, st1, st2);
+                      float3 ldir = normalize(st1 * (sz * cos(ph)) + st2 * (sz * sin(ph)) + sunD * cz);
+                      float3 wl = float3(dot(ldir, T), dot(ldir, B), dot(ldir, ns));
+                      if (wl.z > 0.0 && dot(ldir, ng) > 0.0) {
+                          float tm2 = 1e30;
+                          int sh;
+                          float su, sv;
+                          if (!traverse(org, ldir, tm2, sh, su, sv, true)) {
+                              float pdf0;
+                              float3 f = evalBsdf(m, wo, wl, pdf0);
+                              L += beta * f * (wl.z) * sunE;
+                          }
+                      }
+                  }
+
+                  // proxima direcao
+                  float u0 = rnd(st);
+                  float v1 = rnd(st);
+                  float v2 = rnd(st);
+                  float3 wi;
+                  if (!sampleBsdf(m, wo, u0, v1, v2, wi)) break;
+                  float pdf;
+                  float3 f = evalBsdf(m, wo, wi, pdf);
+                  if (pdf < 1e-7) break;
+                  beta *= f * (wi.z / pdf);
+                  if (bounce >= 3) {
+                      float q = clamp(max(beta.x, max(beta.y, beta.z)), 0.05, 0.95);
+                      if (rnd(st) > q) break;
+                      beta /= q;
+                  }
+                  d = normalize(wi.x * T + wi.y * B + wi.z * ns);
+                  o = org;
+              }
+              if (any(isnan(L)) || any(isinf(L))) L = float3(0.0);
+              L = min(L, float3(30.0));
+              uint idx = uint(py) * uint(pc.w) + uint(px);
+              float4 prev = pc.sample == 0 ? float4(0.0) : bAcc[idx];
+              bAcc[idx] = prev + float4(L, 1.0);
+          }
+
+          float3 shoulder(float3 c)
+          {
+              // linear ate 0,8; acima disso comprime suavemente (sem mudar os tons medios)
+              float3 hi = 0.8 + 0.2 * tanh((c - 0.8) / 0.2);
+              return float3(c.x < 0.8 ? c.x : hi.x, c.y < 0.8 ? c.y : hi.y, c.z < 0.8 ? c.z : hi.z);
+          }
+          float3 toSrgb(float3 c)
+          {
+              float3 lo = c * 12.92;
+              float3 hi = 1.055 * pow(max(c, float3(0.0031308)), float3(1.0 / 2.4)) - 0.055;
+              return float3(c.x <= 0.0031308 ? lo.x : hi.x, c.y <= 0.0031308 ? lo.y : hi.y, c.z <= 0.0031308 ? lo.z : hi.z);
+          }
+
+          [numthreads(8, 8, 1)]
+          void csResolve(uint3 id : SV_DispatchThreadID)
+          {
+              int px = int(id.x);
+              int py = int(id.y);
+              if (px >= pc.w || py >= pc.h) return;
+              uint idx = uint(py) * uint(pc.w) + uint(px);
+              float4 a = bAcc[idx];
+              float3 c = a.xyz / max(a.w, 1.0);
+              c = saturate(toSrgb(saturate(shoulder(max(c, float3(0.0))))));
+              uint r = uint(c.x * 255.0 + 0.5);
+              uint g = uint(c.y * 255.0 + 0.5);
+              uint b = uint(c.z * 255.0 + 0.5);
+              bOut[idx] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+          }
+          NOMADEOF
 
       - name: Baixar bibliotecas (stb, cgltf)
         run: |
@@ -7398,6 +8047,8 @@ jobs:
             "$SLANGC" "nomad-qt/vk/$n.slang" -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry vsMain -stage vertex -O2 -o "$RUNNER_TEMP/spv/$n.vert.spv"
             "$SLANGC" "nomad-qt/vk/$n.slang" -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry fsMain -stage fragment -O2 -o "$RUNNER_TEMP/spv/$n.frag.spv"
           done
+          "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csTrace -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.trace.spv"
+          "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csResolve -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.resolve.spv"
           python3 - <<'PY'
           import glob, os, struct
           out = ["// gerado no build (Slang): SPIR-V dos shaders do viewport Vulkan", "#pragma once", "#include <cstddef>", "#include <cstdint>"]
