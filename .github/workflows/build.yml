@@ -1746,6 +1746,7 @@ jobs:
               property bool gtao: true
               property real gtaoS: 0.85
               property int spp: 64
+              property bool denoise: true
               property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
               function open() {
@@ -1788,6 +1789,7 @@ jobs:
                   view.command(28, gtaoS)
                   view.command(29, renderer === 3 ? 1 : 0)
                   view.command(30, spp)
+                  view.command(31, denoise ? 1 : 0)
               }
 
               // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -1878,6 +1880,16 @@ jobs:
                               labels: ["16", "64", "256"]
                               index: dlg.spp <= 16 ? 0 : (dlg.spp <= 64 ? 1 : 2)
                               onPicked: function (i) { dlg.spp = [16, 64, 256][i]; dlg.view.command(30, dlg.spp) }
+                          }
+
+                          Item {
+                              width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 3
+                              Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Denoise"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                              Rectangle {
+                                  x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                                  Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.denoise }
+                                  MouseArea { anchors.fill: parent; onClicked: { dlg.denoise = !dlg.denoise; dlg.view.command(31, dlg.denoise ? 1 : 0) } }
+                              }
                           }
 
                           Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
@@ -2165,9 +2177,12 @@ jobs:
               bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
               int spp = 16, bounces = 6, night = 0;
               int ntri = 0, nnode = 0;
+              int denoise = 1;   // denoise a-trous na imagem final
+              int ntex = 0;      // camadas de textura de material disponiveis
               std::vector<float> pos;    // 12 floats por triangulo (p0, p1, p2 como float4)
               std::vector<float> shade;  // 16 floats por triangulo (n0, n1, n2 [w de n2 = metal], cor [w = rugosidade])
               std::vector<float> nodes;  // 8 floats por no (min, esq/primeiro, max, quantidade; os inteiros vao como bits de float)
+              std::vector<float> texi;   // 12 floats por triangulo: (u0,v0,u1,v1), (u2,v2,camada base,camada metal/rugosidade), (camada normal,recorte,0,0)
           };
           struct EngVkFrame {
               std::vector<EngVkOp> scene;  // 3D (por baixo do QML)
@@ -3537,6 +3552,7 @@ jobs:
           struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
           std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
           struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob gPtJob;   // trabalho do path tracer em andamento (varios quadros)
+          bool gDn=true;   // denoise do path tracer
           int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
           bool gMcGround=false,gMcHaveCam=false;   // estado do futuro path tracer (Etapa 3): chao e invalidacao do acumulo
           int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcFrame=0;
@@ -3665,8 +3681,8 @@ jobs:
            for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
             for(size_t k=0;k<sk.j.size();k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<sk.fz.size()?sk.fz[k]:id());JS[s2][k]=mul(jw,sk.ibm[k]);}}
            for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide||o.nor)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
-            M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
-            for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;
+            M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned;const bool hasUv=m.uv.size()>=(m.cpu.size()/6)*2;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
+            for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=hasUv?(float)o.tb:-1.f;t.tm=hasUv?(float)o.tm:-1.f;t.tn=hasUv?(float)o.tn:-1.f;t.ac=o.ac;
              for(int k=0;k<3;k++){const float*c=&m.cpu[v+6*k];V pp{c[0],c[1],c[2]},nn{c[3],c[4],c[5]};
               if(sk){const float*sw=&m.skin[(v/6+k)*8];V ap,an;for(int q=0;q<4;q++){float wq=sw[4+q];if(wq<=0)continue;int ji=(int)sw[q];if(ji>=(int)JS[o.skin].size())continue;
                 ap=ap+xf(JS[o.skin][ji],pp)*wq;an=an+xn(JS[o.skin][ji],nn)*wq;}pp=ap;nn=an;}
@@ -3683,16 +3699,20 @@ jobs:
            std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a,int c){return (&gCen[a].x)[ax]<(&gCen[c].x)[ax];});
            bvhRec(b,m);int r=bvhRec(m,e);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
           // ---------- path tracer: cena para o compute ----------
-          static void ptBuild(EngPt&p,int spp,int bn,int night){
+          static void ptBuild(EngPt&p,int spp,int bn,int night,int dn){
            gatherTris();const int n=(int)gTD.size();
            gCen.resize(n);gOrd.resize(n);
            for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
            gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
-           p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;
-           p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
+           int tsz=0;unsigned tver=0;p.ntex=eng_vk_tex_count(tsz,tver);
+           p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;p.denoise=dn;
+           p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);p.texi.assign((size_t)n*12,0.f);
            for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];
             for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
-            sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;}
+            sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;
+            float*ti=&p.texi[(size_t)i*12];auto lay=[&](float l){return(l>=0&&(int)l<p.ntex)?l:-1.f;};
+            ti[0]=t.uv[0][0];ti[1]=t.uv[0][1];ti[2]=t.uv[1][0];ti[3]=t.uv[1][1];ti[4]=t.uv[2][0];ti[5]=t.uv[2][1];
+            ti[6]=lay(t.tb);ti[7]=lay(t.tm);ti[8]=lay(t.tn);ti[9]=t.ac>.5f?1.f:0.f;}
            for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
             q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
           static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
@@ -4538,6 +4558,7 @@ jobs:
               case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
               case 17: gGtao = a > .5f; break;                                  // GTAO do NanoFarm
               case 29: gRend = std::clamp((int)roundf(a), 0, 1); gPtJob.run = false; break;   // renderizador
+              case 31: gDn = a > .5f; gPtJob.run = false; break;                           // denoise do path tracer
               case 30: gMcSpp = std::clamp((int)roundf(a), 1, 4096); break;                  // amostras por pixel
               case 28: gAOs = std::clamp(a, 0.f, 1.f); break;                   // intensidade do GTAO
               case 18: startImage((int)roundf(a)); break;
@@ -4602,7 +4623,7 @@ jobs:
               W = cw; H = ch; gCapNow = true; gMatcap = false; sel = -1;
               { V e, f, r, u; float fv; const int ac = activeCam(); if (ac >= 0 && camRender(e, f, r, u, fv)) gCamView = ac; }
               frame();
-              if (pt) { ptBuild(cf.pt, spp, bn, night); cf.pt.on = true; cf.pt.fresh = true; }
+              if (pt) { ptBuild(cf.pt, spp, bn, night, gDn ? 1 : 0); cf.pt.on = true; cf.pt.fresh = true; }
               const int rc = ::plat_vk_capture(cf, cw, ch, px);
               if (pt && rc == 3) { gPtJob.run = true; gPtJob.cw = cw; gPtJob.ch = ch; gPtJob.spp = spp; gPtJob.bn = bn; gPtJob.night = night; gPtJob.tm = tm; }
               gVkOut = sOut; gVkPal = sPal; gVkSeg = sSeg; gVkDepth = sDepth;
@@ -5071,13 +5092,13 @@ jobs:
               Off m_off;
               // path tracer (Parallax)
               struct PtS {
-                  Buf pos, shade, nodes, acc, out;
+                  Buf pos, shade, nodes, texi, acc, tmp, out;
                   VkDescriptorSetLayout lay = VK_NULL_HANDLE;
                   VkPipelineLayout pl = VK_NULL_HANDLE;
-                  VkPipeline pTrace = VK_NULL_HANDLE, pRes = VK_NULL_HANDLE;
-                  VkShaderModule mT = VK_NULL_HANDLE, mR = VK_NULL_HANDLE;
+                  VkPipeline pTrace = VK_NULL_HANDLE, pRes = VK_NULL_HANDLE, pDi = VK_NULL_HANDLE, pAt = VK_NULL_HANDLE;
+                  VkShaderModule mT = VK_NULL_HANDLE, mR = VK_NULL_HANDLE, mD = VK_NULL_HANDLE, mA = VK_NULL_HANDLE;
                   VkDescriptorSet set = VK_NULL_HANDLE;
-                  bool init = false, fail = false, active = false;
+                  bool init = false, fail = false, active = false, dn = false;
                   int w = 0, h = 0, spp = 0, bn = 0, night = 0, done = 0, row = 0, band = 16, ntri = 0;
                   float eye[3] = {}, right[3] = {}, up[3] = {}, fwd[3] = {}, tanY = 1.f, aspect = 1.f;
               } m_pt;
@@ -5414,9 +5435,9 @@ jobs:
               // descritores, buffers por slot e amostrador
               VkDescriptorPoolSize ps[2] = {};
               ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-              ps[0].descriptorCount = kMaxSlots * 2 + 2 + 5;  // + path tracer
+              ps[0].descriptorCount = kMaxSlots * 2 + 2 + 7;  // + path tracer
               ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-              ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12;  // + GTAO (viewport e captura)
+              ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12 + 1;  // + GTAO (viewport e captura) + path tracer
               VkDescriptorPoolCreateInfo dpi = {};
               dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
               dpi.maxSets = 3 * kMaxSlots + 4 + 6 + 1;
@@ -6818,6 +6839,8 @@ jobs:
               float fwd[3], pad1;
               int32_t w, h, y0, rows;
               int32_t sample, bounces, night, ntri;
+              int32_t dn, step, src;
+              float phi;
           };
 
           bool VkRend::ptInit() {
@@ -6825,16 +6848,19 @@ jobs:
               if (P.init) return true;
               if (P.fail) return false;
               P.fail = true;
-              VkDescriptorSetLayoutBinding bb[5] = {};
-              for (int i = 0; i < 5; ++i) {
+              VkPhysicalDeviceProperties pdp;
+              m_if->vkGetPhysicalDeviceProperties(m_phys, &pdp);
+              if (pdp.limits.maxPerStageDescriptorStorageBuffers < 8) return false;
+              VkDescriptorSetLayoutBinding bb[8] = {};
+              for (int i = 0; i < 8; ++i) {
                   bb[i].binding = uint32_t(i);
-                  bb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                  bb[i].descriptorType = i < 7 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                   bb[i].descriptorCount = 1;
                   bb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
               }
               VkDescriptorSetLayoutCreateInfo dl = {};
               dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-              dl.bindingCount = 5;
+              dl.bindingCount = 8;
               dl.pBindings = bb;
               if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
               VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
@@ -6856,16 +6882,20 @@ jobs:
               };
               P.mT = mod(k_pt_trace, k_pt_trace_size);
               P.mR = mod(k_pt_resolve, k_pt_resolve_size);
-              if (!P.mT || !P.mR) return false;
-              for (int i = 0; i < 2; ++i) {
+              P.mD = mod(k_pt_dninit, k_pt_dninit_size);
+              P.mA = mod(k_pt_atrous, k_pt_atrous_size);
+              if (!P.mT || !P.mR || !P.mD || !P.mA) return false;
+              const VkShaderModule mods[4] = {P.mT, P.mR, P.mD, P.mA};
+              VkPipeline *pipes[4] = {&P.pTrace, &P.pRes, &P.pDi, &P.pAt};
+              for (int i = 0; i < 4; ++i) {
                   VkComputePipelineCreateInfo ci = {};
                   ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
                   ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
                   ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-                  ci.stage.module = i ? P.mR : P.mT;
+                  ci.stage.module = mods[i];
                   ci.stage.pName = "main";
                   ci.layout = P.pl;
-                  if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, i ? &P.pRes : &P.pTrace) != VK_SUCCESS) return false;
+                  if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, pipes[i]) != VK_SUCCESS) return false;
               }
               VkDescriptorSetAllocateInfo ai = {};
               ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -6881,13 +6911,13 @@ jobs:
           void VkRend::ptFree() {
               PtS &P = m_pt;
               if (m_df && m_dev) {
-                  for (VkPipeline p : {P.pTrace, P.pRes})
+                  for (VkPipeline p : {P.pTrace, P.pRes, P.pDi, P.pAt})
                       if (p) m_df->vkDestroyPipeline(m_dev, p, nullptr);
-                  for (VkShaderModule m : {P.mT, P.mR})
+                  for (VkShaderModule m : {P.mT, P.mR, P.mD, P.mA})
                       if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
                   if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
                   if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
-                  for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.acc, &P.out}) freeBuf(*b);
+                  for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out}) freeBuf(*b);
               }
               P = PtS();
           }
@@ -6896,7 +6926,7 @@ jobs:
           bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
               PtS &P = m_pt;
               const EngPt &e = f.pt;
-              if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 || e.nodes.size() < size_t(e.nnode) * 8) return false;
+              if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 || e.nodes.size() < size_t(e.nnode) * 8 || e.texi.size() < size_t(e.ntri) * 12) return false;
               auto need = [&](Buf &b, size_t bytes) {
                   bytes = std::max<size_t>(bytes, 16);
                   if (b.b && b.size >= bytes) return true;
@@ -6904,15 +6934,18 @@ jobs:
                   return mkBuf(b, VkDeviceSize(bytes), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
               };
               const size_t nPix = size_t(cw) * size_t(ch);
-              if (!need(P.pos, size_t(e.ntri) * 48) || !need(P.shade, size_t(e.ntri) * 64) || !need(P.nodes, size_t(e.nnode) * 32) ||
-                  !need(P.acc, nPix * 16) || !need(P.out, nPix * 4))
+              P.dn = e.denoise != 0 && nPix <= 5000000;   // acima disso o buffer extra do filtro ficaria grande demais
+              if (!need(P.pos, size_t(e.ntri) * 48) || !need(P.shade, size_t(e.ntri) * 64) || !need(P.nodes, size_t(e.nnode) * 32) || !need(P.texi, size_t(e.ntri) * 48) ||
+                  !need(P.acc, nPix * 48) || !need(P.tmp, P.dn ? nPix * 32 : 16) || !need(P.out, nPix * 4))
                   return false;
               std::memcpy(P.pos.p, e.pos.data(), size_t(e.ntri) * 48);
               std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
               std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
-              VkDescriptorBufferInfo bi[5] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.acc.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
-              VkWriteDescriptorSet wr[5] = {};
-              for (int i = 0; i < 5; ++i) {
+              std::memcpy(P.texi.p, e.texi.data(), size_t(e.ntri) * 48);
+              VkDescriptorBufferInfo bi[7] = {{P.pos.b, 0, VK_WHOLE_SIZE},  {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.texi.b, 0, VK_WHOLE_SIZE},
+                                              {P.acc.b, 0, VK_WHOLE_SIZE}, {P.tmp.b, 0, VK_WHOLE_SIZE},   {P.out.b, 0, VK_WHOLE_SIZE}};
+              VkWriteDescriptorSet wr[8] = {};
+              for (int i = 0; i < 7; ++i) {
                   wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                   wr[i].dstSet = P.set;
                   wr[i].dstBinding = uint32_t(i);
@@ -6920,7 +6953,15 @@ jobs:
                   wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                   wr[i].pBufferInfo = &bi[i];
               }
-              m_df->vkUpdateDescriptorSets(m_dev, 5, wr, 0, nullptr);
+              // texturas de material (o mesmo array do viewport); sem texturas, a imagem de 1 pixel
+              const VkDescriptorImageInfo ti = {m_sampRep, m_texImg.view ? m_texImg.view : m_dummyImg.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+              wr[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+              wr[7].dstSet = P.set;
+              wr[7].dstBinding = 7;
+              wr[7].descriptorCount = 1;
+              wr[7].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+              wr[7].pImageInfo = &ti;
+              m_df->vkUpdateDescriptorSets(m_dev, 8, wr, 0, nullptr);
               for (int i = 0; i < 3; ++i) {
                   P.eye[i] = f.cam[i];
                   P.right[i] = f.mcR[i];
@@ -6957,7 +6998,8 @@ jobs:
               auto secs = [](Clk::time_point a, Clk::time_point b) { return std::chrono::duration<double>(b - a).count(); };
 
               // um comando: uma faixa de linhas de uma amostra (ou a conversao final)
-              auto run = [&](bool resolve, int y0, int rows) -> bool {
+              // pipe: 0 = caminhos, 1 = conversao final, 2 = prepara o filtro, 3 = passo do filtro
+              auto run = [&](int pipe, int y0, int rows, int step = 1, int src = 0, float phi = 1.f) -> bool {
                   PtPC pc = {};
                   for (int i = 0; i < 3; ++i) {
                       pc.eye[i] = P.eye[i];
@@ -6975,13 +7017,17 @@ jobs:
                   pc.bounces = P.bn;
                   pc.night = P.night;
                   pc.ntri = P.ntri;
+                  pc.dn = P.dn ? 1 : 0;
+                  pc.step = step;
+                  pc.src = src;
+                  pc.phi = phi;
                   VkCommandBuffer cb = m_ccb;
                   m_df->vkResetCommandBuffer(cb, 0);
                   VkCommandBufferBeginInfo bi = {};
                   bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
                   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
                   if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return false;
-                  m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolve ? P.pRes : P.pTrace);
+                  m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe == 0 ? P.pTrace : (pipe == 1 ? P.pRes : (pipe == 2 ? P.pDi : P.pAt)));
                   m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, P.pl, 0, 1, &P.set, 0, nullptr);
                   m_df->vkCmdPushConstants(cb, P.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
                   m_df->vkCmdDispatch(cb, uint32_t((P.w + 7) / 8), uint32_t((rows + 7) / 8), 1);
@@ -7004,7 +7050,7 @@ jobs:
               while (P.done < P.spp) {
                   const int rows = std::min(P.band, P.h - P.row);
                   const auto ta = Clk::now();
-                  if (!run(false, P.row, rows)) {
+                  if (!run(0, P.row, rows)) {
                       P.active = false;
                       return 2;
                   }
@@ -7021,7 +7067,19 @@ jobs:
               }
               if (P.done < P.spp) return 3;
 
-              if (!run(true, 0, P.h)) {
+              int finalSrc = 0;
+              if (P.dn) {
+                  // denoise a-trous: 5 passos (1, 2, 4, 8, 16 px) sobre a iluminacao desmodulada pelo albedo
+                  bool ok = run(2, 0, P.h);
+                  const float phi0 = std::clamp(4.f / std::sqrt(float(P.spp)), 0.2f, 1.5f);
+                  for (int it = 0; ok && it < 5; ++it) ok = run(3, 0, P.h, 1 << it, it & 1, phi0 * std::pow(0.7f, float(it)));
+                  finalSrc = 5 & 1;
+                  if (!ok) {
+                      P.active = false;
+                      return 2;
+                  }
+              }
+              if (!run(1, 0, P.h, 1, finalSrc)) {
                   P.active = false;
                   return 2;
               }
@@ -7570,14 +7628,21 @@ jobs:
               int bounces;
               int night;
               int ntri;
+              int dn;     // denoise ligado
+              int step;   // passo do filtro a-trous (1, 2, 4, 8, 16)
+              int src;    // qual metade de bTmp ler (0 ou 1)
+              float phi;  // tolerancia de cor do filtro
           };
           [[vk::push_constant]] ConstantBuffer<PC> pc;
 
           [[vk::binding(0, 0)]] StructuredBuffer<float4> bPos;    // 3 float4 por triangulo (p0, p1, p2)
           [[vk::binding(1, 0)]] StructuredBuffer<float4> bShade;  // 4 float4: n0, n1, n2 (w de n2 = metal), cor (w = rugosidade)
           [[vk::binding(2, 0)]] StructuredBuffer<float4> bNode;   // 2 float4 por no: (min, esq/primeiro), (max, quantidade)
-          [[vk::binding(3, 0)]] RWStructuredBuffer<float4> bAcc;  // soma das amostras (rgb) e contagem (a)
-          [[vk::binding(4, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
+          [[vk::binding(3, 0)]] StructuredBuffer<float4> bTexI;   // 3 float4 por triangulo: (u0,v0,u1,v1), (u2,v2,base,metal/rug), (normal,recorte,0,0)
+          [[vk::binding(4, 0)]] RWStructuredBuffer<float4> bAcc;  // 3 float4 por pixel: cor (rgb, contagem), normal (xyz, profundidade), albedo (rgb, contagem)
+          [[vk::binding(5, 0)]] RWStructuredBuffer<float4> bTmp;  // 2 float4 por pixel: ping-pong do denoise
+          [[vk::binding(6, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
+          [[vk::binding(7, 0)]] Sampler2DArray gTex;              // texturas de material do motor (camadas)
 
           static const float PI = 3.14159265;
 
@@ -7617,6 +7682,16 @@ jobs:
               if (v < 0.0 || u + v > 1.0) return false;
               float t = dot(e2, qv) * inv;
               if (t <= 0.0 || t >= tmax) return false;
+              float4 C = bTexI[ti * 3 + 2];
+              if (C.y > 0.5) {
+                  // recorte por alpha (folhagem, grades): ignora o ponto se a textura base for transparente
+                  float4 A = bTexI[ti * 3];
+                  float4 B = bTexI[ti * 3 + 1];
+                  if (B.z >= 0.0) {
+                      float2 uv0 = (1.0 - u - v) * A.xy + u * A.zw + v * B.xy;
+                      if (gTex.SampleLevel(float3(uv0, B.z), 0.0).a < 0.5) return false;
+                  }
+              }
               tmax = t;
               bu = u;
               bv = v;
@@ -7696,6 +7771,17 @@ jobs:
               float bb = n.x * n.y * a;
               t = float3(1.0 + s * n.x * n.x * a, s * bb, -s * n.x);
               b = float3(bb, s + n.y * n.y * a, -n.y);
+          }
+
+          // mapa de normais com a mesma tangente do viewport (derivada das coordenadas de textura), por triangulo
+          float3 mapNormal(float3 N, float3 tn, float3 e1, float3 e2, float2 du1, float2 du2)
+          {
+              float3 dp2p = cross(e2, N);
+              float3 dp1p = cross(N, e1);
+              float3 Tt = dp2p * du1.x + dp1p * du2.x;
+              float3 Bt = -(dp2p * du1.y + dp1p * du2.y);
+              float iv = rsqrt(max(dot(Tt, Tt), dot(Bt, Bt)) + 1e-20);
+              return normalize(tn.x * Tt * iv + tn.y * Bt * iv + tn.z * N);
           }
 
           struct Mat {
@@ -7783,6 +7869,8 @@ jobs:
               float3 beta = float3(1.0);
               float3 sunD = sunDir();
               float3 sunE = sunIrr(pc.night);
+              float4 aovN = float4(0.0, 0.0, 0.0, 1e4);   // ceu: sem normal, profundidade enorme
+              float4 aovA = float4(1.0);
               // cone do sol (abertura angular ~1,7 grau: sombras suaves)
               const float cosMax = 0.99955;
 
@@ -7809,8 +7897,32 @@ jobs:
                   if (dot(ns, d) > 0.0) ns = -ns;      // sempre do lado de quem olha
                   if (dot(ng, ns) < 0.0) ng = -ng;
                   float metal = saturate(s2.w);
-                  float rou = clamp(s3.w, 0.04, 1.0);
+                  float rou = s3.w;
                   float3 col = saturate(s3.xyz);
+                  float3 nGuide = ns;
+                  {
+                      float4 tA = bTexI[ti * 3];
+                      float4 tB = bTexI[ti * 3 + 1];
+                      float4 tC = bTexI[ti * 3 + 2];
+                      float2 uv = w0 * tA.xy + hu * tA.zw + hv * tB.xy;
+                      if (tB.z >= 0.0) col *= pow(gTex.SampleLevel(float3(uv, tB.z), 0.0).rgb, float3(2.2));
+                      if (tB.w >= 0.0) {
+                          float4 mrs = gTex.SampleLevel(float3(uv, tB.w), 0.0);
+                          rou *= mrs.g;
+                          metal *= mrs.b;
+                      }
+                      if (tC.x >= 0.0) {
+                          float3 tn = gTex.SampleLevel(float3(uv, tC.x), 0.0).xyz * 2.0 - 1.0;
+                          ns = mapNormal(ns, tn, e1, e2, tA.zw - tA.xy, tB.xy - tA.xy);
+                      }
+                  }
+                  col = saturate(col);
+                  metal = saturate(metal);
+                  rou = clamp(rou, 0.04, 1.0);
+                  if (bounce == 0) {
+                      aovN = float4(nGuide, tmax);
+                      aovA = float4(col, 1.0);
+                  }
                   Mat m;
                   m.cd = col * (1.0 - metal);
                   m.f0 = lerp(float3(0.04), col, metal);
@@ -7869,8 +7981,73 @@ jobs:
               if (any(isnan(L)) || any(isinf(L))) L = float3(0.0);
               L = min(L, float3(30.0));
               uint idx = uint(py) * uint(pc.w) + uint(px);
-              float4 prev = pc.sample == 0 ? float4(0.0) : bAcc[idx];
-              bAcc[idx] = prev + float4(L, 1.0);
+              float4 pc0 = pc.sample == 0 ? float4(0.0) : bAcc[idx * 3];
+              float4 pn0 = pc.sample == 0 ? float4(0.0) : bAcc[idx * 3 + 1];
+              float4 pa0 = pc.sample == 0 ? float4(0.0) : bAcc[idx * 3 + 2];
+              bAcc[idx * 3] = pc0 + float4(L, 1.0);
+              bAcc[idx * 3 + 1] = pn0 + aovN;
+              bAcc[idx * 3 + 2] = pa0 + float4(aovA.xyz, 1.0);
+          }
+
+          // desmodula pelo albedo: o filtro age so na iluminacao e preserva o detalhe das texturas
+          [numthreads(8, 8, 1)]
+          void csDnInit(uint3 id : SV_DispatchThreadID)
+          {
+              int px = int(id.x);
+              int py = int(id.y);
+              if (px >= pc.w || py >= pc.h) return;
+              uint idx = uint(py) * uint(pc.w) + uint(px);
+              float4 a = bAcc[idx * 3];
+              float cnt = max(a.w, 1.0);
+              float3 alb = bAcc[idx * 3 + 2].xyz / cnt;
+              float3 c = (a.xyz / cnt) / max(alb, float3(0.02));
+              bTmp[idx * 2] = float4(c, 1.0);
+          }
+
+          // filtro a-trous 5x5 (B3-spline) com paradas por normal, profundidade e cor relativa
+          [numthreads(8, 8, 1)]
+          void csAtrous(uint3 id : SV_DispatchThreadID)
+          {
+              int px = int(id.x);
+              int py = int(id.y);
+              if (px >= pc.w || py >= pc.h) return;
+              uint idx = uint(py) * uint(pc.w) + uint(px);
+              float4 c0v = bTmp[idx * 2 + uint(pc.src)];
+              float cnt0 = max(bAcc[idx * 3].w, 1.0);
+              float4 n0v = bAcc[idx * 3 + 1];
+              float d0 = n0v.w / cnt0;
+              if (d0 > 5000.0) {
+                  bTmp[idx * 2 + uint(1 - pc.src)] = c0v;   // ceu: sem filtro
+                  return;
+              }
+              float3 n0 = normalize(n0v.xyz / cnt0 + float3(1e-6));
+              float3 c0 = c0v.xyz;
+              const float k[5] = {0.0625, 0.25, 0.375, 0.25, 0.0625};
+              float3 sum = float3(0.0);
+              float wsum = 0.0;
+              for (int dy = -2; dy <= 2; dy++) {
+                  for (int dx = -2; dx <= 2; dx++) {
+                      int qx = px + dx * pc.step;
+                      int qy = py + dy * pc.step;
+                      if (qx < 0 || qy < 0 || qx >= pc.w || qy >= pc.h) continue;
+                      uint j = uint(qy) * uint(pc.w) + uint(qx);
+                      float4 cv = bTmp[j * 2 + uint(pc.src)];
+                      float cntj = max(bAcc[j * 3].w, 1.0);
+                      float4 nv = bAcc[j * 3 + 1];
+                      float dj = nv.w / cntj;
+                      float3 nj = normalize(nv.xyz / cntj + float3(1e-6));
+                      float wn = pow(max(dot(n0, nj), 0.0), 24.0);
+                      float wd = exp(-abs(dj - d0) / (0.15 * d0 + 1e-4));
+                      float3 df = cv.xyz - c0;
+                      float rel = length(df) / (length(c0) + 0.05);
+                      float wc = exp(-(rel * rel) / (pc.phi * pc.phi));
+                      float wgt = k[dx + 2] * k[dy + 2] * wn * wd * wc;
+                      sum += cv.xyz * wgt;
+                      wsum += wgt;
+                  }
+              }
+              float3 r = wsum > 1e-8 ? sum / wsum : c0;
+              bTmp[idx * 2 + uint(1 - pc.src)] = float4(r, 1.0);
           }
 
           float3 shoulder(float3 c)
@@ -7893,8 +8070,13 @@ jobs:
               int py = int(id.y);
               if (px >= pc.w || py >= pc.h) return;
               uint idx = uint(py) * uint(pc.w) + uint(px);
-              float4 a = bAcc[idx];
-              float3 c = a.xyz / max(a.w, 1.0);
+              float4 a = bAcc[idx * 3];
+              float cnt = max(a.w, 1.0);
+              float3 c = a.xyz / cnt;
+              if (pc.dn != 0) {
+                  float3 alb = bAcc[idx * 3 + 2].xyz / cnt;
+                  c = bTmp[idx * 2 + uint(pc.src)].xyz * max(alb, float3(0.02));
+              }
               c = saturate(toSrgb(saturate(shoulder(max(c, float3(0.0))))));
               uint r = uint(c.x * 255.0 + 0.5);
               uint g = uint(c.y * 255.0 + 0.5);
@@ -8049,6 +8231,8 @@ jobs:
           done
           "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csTrace -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.trace.spv"
           "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csResolve -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.resolve.spv"
+          "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csDnInit -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.dninit.spv"
+          "$SLANGC" nomad-qt/vk/pt.slang -target spirv -profile spirv_1_3 -matrix-layout-column-major -entry csAtrous -stage compute -O2 -o "$RUNNER_TEMP/spv/pt.atrous.spv"
           python3 - <<'PY'
           import glob, os, struct
           out = ["// gerado no build (Slang): SPIR-V dos shaders do viewport Vulkan", "#pragma once", "#include <cstddef>", "#include <cstdint>"]
