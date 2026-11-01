@@ -54,7 +54,7 @@ bool hitTri(float3 o, float3 d, int ti, inout float tmax, out float bu, out floa
     float3 e2 = bPos[ti * 3 + 2].xyz - p0;
     float3 pv = cross(d, e2);
     float det = dot(e1, pv);
-    if (abs(det) < 1e-12) return false;
+    if (abs(det) < 1e-30) return false;   // sem limiar relativo: triangulos de scan sao minusculos
     float inv = 1.0 / det;
     float3 tv = o - p0;
     float u = dot(tv, pv) * inv;
@@ -63,7 +63,7 @@ bool hitTri(float3 o, float3 d, int ti, inout float tmax, out float bu, out floa
     float v = dot(d, qv) * inv;
     if (v < 0.0 || u + v > 1.0) return false;
     float t = dot(e2, qv) * inv;
-    if (t <= 1e-6 || t >= tmax) return false;
+    if (t <= 0.0 || t >= tmax) return false;
     tmax = t;
     bu = u;
     bv = v;
@@ -269,7 +269,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float3 T, B;
         basis(ns, T, B);
         float3 wo = float3(dot(-d, T), dot(-d, B), dot(-d, ns));
-        float eps = 1e-4 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
+        float eps = 2e-6 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
         float3 org = p + ng * eps;
 
         // luz direta: sol (cone) com raio de sombra
