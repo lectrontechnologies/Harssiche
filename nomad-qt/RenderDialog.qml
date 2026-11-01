@@ -18,6 +18,9 @@ Item {
     property int toF: 120
     property bool night: false
     property bool edge: true
+    property bool gtao: true
+    property real gtaoS: 0.85
+    property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
     function open() {
         fromF = view.anyKeys ? view.keyFirst : view.frameStart
@@ -55,6 +58,8 @@ Item {
         view.command(14, fromF, toF)
         view.command(15, night ? 1 : 0)
         view.command(16, edge ? 1 : 0)
+        view.command(17, gtao ? 1 : 0)
+        view.command(28, gtaoS)
     }
 
     // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -98,6 +103,46 @@ Item {
                 width: 152 * dlg.s
                 spacing: 8 * dlg.s
                 topPadding: 12 * dlg.s
+
+                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Renderizador"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
+                Column {
+                    width: parent.width
+                    spacing: 2 * dlg.s
+                    Repeater {
+                        model: [
+                            { n: "NanoFarm", d: "padrão", on: true },
+                            { n: "UCore", d: "em breve", on: false },
+                            { n: "DeltaXRender", d: "em breve", on: false },
+                            { n: "Parallax", d: "em breve", on: false },
+                            { n: "WhiteNoise", d: "em breve", on: false }
+                        ]
+                        Rectangle {
+                            required property var modelData
+                            required property int index
+                            width: parent.width
+                            height: 22 * dlg.s
+                            radius: 3 * dlg.s
+                            color: dlg.renderer === index ? "#4a4a4a" : "#222222"
+                            Text {
+                                x: 8 * dlg.s; anchors.verticalCenter: parent.verticalCenter
+                                text: parent.modelData.n
+                                color: parent.modelData.on ? "#eeeeee" : "#777777"
+                                font.pixelSize: 12 * dlg.s
+                            }
+                            Text {
+                                anchors.right: parent.right; anchors.rightMargin: 8 * dlg.s; anchors.verticalCenter: parent.verticalCenter
+                                text: parent.modelData.d
+                                color: "#777777"
+                                font.pixelSize: 10 * dlg.s
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: parent.modelData.on
+                                onClicked: dlg.renderer = parent.index
+                            }
+                        }
+                    }
+                }
 
                 Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
                 RdSeg {
@@ -169,6 +214,22 @@ Item {
                         Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.edge }
                         MouseArea { anchors.fill: parent; onClicked: dlg.edge = !dlg.edge }
                     }
+                }
+
+                Item {
+                    width: parent.width; height: 28 * dlg.s
+                    Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Oclusão (GTAO)"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                    Rectangle {
+                        x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                        Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.gtao }
+                        MouseArea { anchors.fill: parent; onClicked: { dlg.gtao = !dlg.gtao; dlg.view.command(17, dlg.gtao ? 1 : 0) } }
+                    }
+                }
+                RdSeg {
+                    s: dlg.s; width: parent.width; visible: dlg.gtao
+                    labels: ["Fraco", "Médio", "Forte"]
+                    index: dlg.gtaoS < 0.7 ? 0 : (dlg.gtaoS < 0.95 ? 1 : 2)
+                    onPicked: function (i) { dlg.gtaoS = [0.5, 0.85, 1.0][i]; dlg.view.command(28, dlg.gtaoS) }
                 }
 
                 Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; topPadding: 6 * dlg.s; text: "Outro"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }

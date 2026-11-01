@@ -17,13 +17,14 @@ struct PushConst
 {
     float4 cam;  // xyz = posicao da camera, w = matcap ligado
     float4 mcR;  // base do matcap; w = altura da tela
-    float4 mcU;
-    float4 mcB;
+    float4 mcU;  // base do matcap; w = largura da tela
+    float4 mcB;  // base do matcap; w = intensidade do GTAO (0 = desligado)
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<Op> ops;
 [[vk::binding(1, 0)]] StructuredBuffer<float4x4> pal;
 [[vk::binding(0, 1)]] Sampler2DArray uTexA;
+[[vk::binding(0, 2)]] Sampler2D uAO;  // oclusao ambiente do NanoFarm (GTAO): visibilidade 0..1
 [[vk::push_constant]] ConstantBuffer<PushConst> pc;
 
 struct VsIn
@@ -176,7 +177,19 @@ float4 fsMain(VsOut v) : SV_Target
     {
         // malha sombreada
         if (op.tl.w > 0.5 && op.tl.x >= 0.0 && uTexA.Sample(float3(v.vUV, op.tl.x)).a < 0.5) discard;
-        return float4(pc.cam.w > 0.5 ? matcap(v) : pbr(v, uC, op.b.xy, op.tl), uC.a);
+        float3 shaded = pc.cam.w > 0.5 ? matcap(v) : pbr(v, uC, op.b.xy, op.tl);
+        if (pc.mcB.w > 0.001)
+        {
+            float ao = uAO.SampleLevel(v.pos.xy / float2(max(pc.mcU.w, 1.0), max(pc.mcR.w, 1.0)), 0).x;
+            shaded *= lerp(1.0, ao, pc.mcB.w);
+        }
+        return float4(shaded, uC.a);
     }
     return float4(uC.rgb, uC.a);
+}
+
+// so profundidade (pre-passe do GTAO): sem cor
+[shader("fragment")]
+void fsDepth(VsOut v)
+{
 }

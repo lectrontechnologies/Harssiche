@@ -3,7 +3,7 @@ import Nomad
 
 Window {
     id: win
-    // a janela e mostrada pelo main.cpp (depois de escolher OpenGL ou Vulkan)
+    // a janela e mostrada pelo main.cpp (depois de criar a instancia Vulkan)
     title: "Nomad Animator"
     color: "black"
 
@@ -50,40 +50,24 @@ Window {
     }
 
 
-    // Diagnostico/escolha do backend grafico (temporario, durante a migracao para Vulkan).
-    // Fica logo acima do painel de reproducao, no canto inferior esquerdo.
+    // Aviso se o Vulkan nao estiver disponivel (o app usa so Vulkan) ou se o renderizador falhar.
     Rectangle {
         id: backendChip
         readonly property real k: win.height > 0 ? win.height / 1080 : 1
+        visible: engineView.vkFailed || engineView.vkInfo.indexOf("falha") >= 0
         x: 109 * k
         y: 767 * k - height - 10 * k
-        width: Math.max(chipA.implicitWidth, chipB.implicitWidth) + 24
-        height: chipCol.implicitHeight + 16
+        width: chipA.implicitWidth + 24
+        height: chipA.implicitHeight + 16
         radius: 6
         color: "#d0101010"
         border.color: "#505050"
-        Column {
-            id: chipCol
+        Text {
+            id: chipA
             anchors.centerIn: parent
-            spacing: 2
-            Text {
-                id: chipA
-                color: engineView.vkFailed ? "#ff9a8a" : "#dddddd"
-                font.pixelSize: 13
-                text: engineView.vkFailed ? "Vulkan falhou, voltou ao OpenGL"
-                    : engineView.backend === "vulkan" ? "Vulkan " + engineView.vkInfo.split(" | ").filter(function (p, i) { return i < 2 || p.indexOf("falhou") >= 0 }).join(" | ") : "OpenGL ES"
-            }
-            Text {
-                id: chipB
-                color: "#7fd0ff"
-                font.pixelSize: 13
-                text: engineView.savedBackend !== engineView.backend ? "reabra o app"
-                    : engineView.backend === "vulkan" ? "[usar OpenGL]" : "[testar Vulkan]"
-            }
-        }
-        MouseArea {
-            anchors.fill: parent
-            onClicked: engineView.setBackend(engineView.savedBackend === "vulkan" ? "opengl" : "vulkan")
+            color: "#ff9a8a"
+            font.pixelSize: 13
+            text: engineView.vkFailed ? "Vulkan indisponível neste aparelho" : "Vulkan: " + engineView.vkInfo.split(" | ").filter(function (p) { return p.indexOf("falha") >= 0 }).join(" | ")
         }
     }
 

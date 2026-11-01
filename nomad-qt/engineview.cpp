@@ -7,7 +7,6 @@
 #include <QInputMethod>
 #include <QInputMethodEvent>
 #include <QKeyEvent>
-#include <QQuickOpenGLUtils>
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QTouchEvent>
@@ -47,22 +46,6 @@ static QString markerFile(const char *name) {
 
 EngineView *EngineView::instance() { return s_instance.data(); }
 
-QString EngineView::savedBackend() const {
-    return QFile::exists(markerFile("backend_vulkan")) ? QStringLiteral("vulkan") : QStringLiteral("opengl");
-}
-
-void EngineView::setBackend(const QString &b) {
-    QFile::remove(markerFile("vk_failed"));
-    QFile::remove(markerFile("vk_trying"));
-    if (b == QLatin1String("vulkan")) {
-        QFile f(markerFile("backend_vulkan"));
-        f.open(QIODevice::WriteOnly);
-    } else {
-        QFile::remove(markerFile("backend_vulkan"));
-    }
-    emit backendSavedChanged();
-}
-
 void EngineView::vulkanPrepare() {
 #if QT_CONFIG(vulkan)
     QQuickWindow *w = window();
@@ -72,11 +55,7 @@ void EngineView::vulkanPrepare() {
     if (pw < 2 || ph < 2) return;
     if (!m_vkr) m_vkr = new VkRend;
 
-    // o motor roda aqui, fora do passe de renderizacao: so grava ordens de desenho (sem OpenGL)
-    if (!m_vkEngine) {
-        eng_set_vk(true);
-        m_vkEngine = true;
-    }
+    // o motor roda aqui, fora do passe de renderizacao: so grava ordens de desenho
     if (!eng_ready()) eng_init(m_dir.c_str(), pw, ph);
     else eng_resize(pw, ph);
 
@@ -105,6 +84,7 @@ void EngineView::vulkanPrepare() {
 
     m_vkr->prepare(w);
     if (m_vkr->ready()) m_vkr->upload(w, m_vkFrame);
+    if (m_vkr->ready()) m_vkr->aoPass(w, pw, ph, m_vkFrame);
     if (m_vkr->failed() && !m_vkFailMsg) {
         m_vkFailMsg = true;
         const QString why = QString::fromUtf8(m_vkr->why());
@@ -119,8 +99,7 @@ void EngineView::vulkanPrepare() {
 #endif
 }
 
-// Backend Vulkan (migracao em andamento): por enquanto so le as capacidades do aparelho uma vez e
-// mostra no chip de diagnostico. A cena 3D e a interface do motor ainda sao OpenGL e ficam desligadas.
+// Le as capacidades do aparelho uma vez e mostra no chip de diagnostico (so aparece se houver falha).
 void EngineView::vulkanInfo(QQuickWindow *w) {
     if (m_vkDone) return;
     m_vkDone = true;
@@ -149,8 +128,6 @@ void EngineView::vulkanInfo(QQuickWindow *w) {
     Q_UNUSED(w)
     info = QStringLiteral("indisponivel neste Qt");
 #endif
-    // primeiro quadro em Vulkan chegou: a abertura nao travou
-    QFile::remove(markerFile("vk_trying"));
     QMetaObject::invokeMethod(
         this,
         [this, info] {
@@ -192,7 +169,7 @@ void EngineView::onWindowChanged(QQuickWindow *w) {
     connect(w, &QQuickWindow::beforeRendering, this, &EngineView::vulkanPrepare, Qt::DirectConnection);
     connect(w, &QQuickWindow::beforeRenderPassRecording, this, &EngineView::renderEngine, Qt::DirectConnection);
     connect(w, &QQuickWindow::afterRenderPassRecording, this, &EngineView::renderEngineUi, Qt::DirectConnection);
-    connect(w, &QQuickWindow::sceneGraphInvalidated, this, &EngineView::glLost, Qt::DirectConnection);
+    connect(w, &QQuickWindow::sceneGraphInvalidated, this, &EngineView::rendererLost, Qt::DirectConnection);
     // renderizacao continua: pede outro quadro a cada quadro apresentado
     connect(
         w, &QQuickWindow::frameSwapped, w, [w] { QMetaObject::invokeMethod(w, "update", Qt::QueuedConnection); },
@@ -220,58 +197,18 @@ void EngineView::renderEngine() {
     QQuickWindow *w = window();
     if (!w) return;
     const int pw = m_pw.load(), ph = m_ph.load();
-    if (m_vulkan) {
 #if QT_CONFIG(vulkan)
-        if (m_vkr && m_vkr->ready() && pw >= 2 && ph >= 2) m_vkr->drawScene(w, pw, ph, m_vkFrame);
+    if (m_vkr && m_vkr->ready() && pw >= 2 && ph >= 2) m_vkr->drawScene(w, pw, ph, m_vkFrame);
 #endif
-        return;
-    }
-    if (pw < 2 || ph < 2) return;
-
-    w->beginExternalCommands();
-    if (!eng_ready()) eng_init(m_dir.c_str(), pw, ph);
-    else eng_resize(pw, ph);
-
-    std::vector<EngEvent> evs;
-    {
-        QMutexLocker l(&m_mutex);
-        evs.swap(m_queue);
-    }
-    for (const EngEvent &e : evs) eng_event(e);
-
-    eng_frame();
-    w->endExternalCommands();
-    QQuickOpenGLUtils::resetOpenGLState();
-
-    // estado da timeline -> QML (so quando muda)
-    EngTimeline t;
-    eng_timeline(t);
-    if (!sameTl(t, m_lastTl)) {
-        m_lastTl = t;
-        QMetaObject::invokeMethod(this, [this, t] { applyTimeline(t); }, Qt::QueuedConnection);
-    }
 }
 
 // Interface do proprio motor (janelas, paineis, dialogos): desenhada depois do Qt Quick,
 // por isso aparece por cima da timeline e das barras em QML.
 void EngineView::renderEngineUi() {
-    QQuickWindow *w = window();
-    if (m_vulkan) {
 #if QT_CONFIG(vulkan)
-        if (w && m_vkr && m_vkr->ready()) m_vkr->drawUi(w, m_pw.load(), m_ph.load(), m_vkFrame);
+    QQuickWindow *w = window();
+    if (w && m_vkr && m_vkr->ready()) m_vkr->drawUi(w, m_pw.load(), m_ph.load(), m_vkFrame);
 #endif
-        return;
-    }
-    if (!w || !eng_ready()) return;
-    w->beginExternalCommands();
-    eng_frame_ui();
-    w->endExternalCommands();
-    QQuickOpenGLUtils::resetOpenGLState();
-
-    std::vector<float> r;
-    eng_ui_rects(r);
-    QMutexLocker l(&m_rectMutex);
-    m_rects.swap(r);
 }
 
 int EngineView::captureFrame(const EngVkFrame &f, int w, int h, std::vector<unsigned char> &px) {
@@ -337,16 +274,12 @@ void EngineView::command(int cmd, qreal a, qreal b) {
     if (window()) window()->update();
 }
 
-void EngineView::glLost() {
-    if (m_vulkan) {
+void EngineView::rendererLost() {
 #if QT_CONFIG(vulkan)
-        delete m_vkr;
-        m_vkr = nullptr;
-        m_vkFailMsg = false;
+    delete m_vkr;
+    m_vkr = nullptr;
+    m_vkFailMsg = false;
 #endif
-    } else {
-        eng_gl_lost();
-    }
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ public:
     void upload(QQuickWindow *w, const EngVkFrame &f);  // antes do passe: copia as ordens para o slot atual
     void drawScene(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);  // dentro do passe, antes do QML
     void drawUi(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);     // dentro do passe, depois do QML
+    void aoPass(QQuickWindow *w, int pw, int ph, const EngVkFrame &f);     // antes do passe: pre-passe de profundidade + GTAO (NanoFarm)
     void release();
     bool ready() const { return m_ready; }
     bool failed() const { return m_failed; }
@@ -57,6 +58,7 @@ private:
         Buf skin;  // indices e pesos de osso (so malhas com esqueleto)
         Buf uv;    // coordenadas de textura (so malhas com textura)
         int n = 0;
+        int ver = 0;        // versao dos vertices enviada (a malha foi editada se mudar)
         uint64_t last = 0;  // ultimo quadro em que foi usada (para liberar malhas que sumiram)
     };
 
@@ -64,7 +66,23 @@ private:
     bool findMem(uint32_t bits, VkMemoryPropertyFlags want, uint32_t &out);
     bool mkBuf(Buf &b, VkDeviceSize size, VkBufferUsageFlags usage);
     void freeBuf(Buf &b);
-    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss);
+    VkPipeline mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss, bool noColor = false);
+    // GTAO: alvos (profundidade + duas imagens de visibilidade), passes e pipelines
+    struct AoT {
+        int w = 0, h = 0;
+        VkImage dimg = VK_NULL_HANDLE, ia = VK_NULL_HANDLE, ib = VK_NULL_HANDLE;
+        VkDeviceMemory mdp = VK_NULL_HANDLE, ma = VK_NULL_HANDLE, mb = VK_NULL_HANDLE;
+        VkImageView vd = VK_NULL_HANDLE, va = VK_NULL_HANDLE, vb = VK_NULL_HANDLE;
+        VkFramebuffer fd = VK_NULL_HANDLE, fa = VK_NULL_HANDLE, fb = VK_NULL_HANDLE;
+        VkDescriptorSet sGtao = VK_NULL_HANDLE, sBlur = VK_NULL_HANDLE, sFinal = VK_NULL_HANDLE;
+        bool cleared = false;  // a imagem final ja tem layout valido (limpa para 1.0)
+    };
+    bool aoInit();
+    bool aoTargets(AoT &t, int w, int h);
+    void aoFree(AoT &t);
+    void aoClear(VkCommandBuffer cb, AoT &t);
+    void aoRecord(VkCommandBuffer cb, AoT &t, VkDescriptorSet opsSet, const std::vector<EngVkOp> &ops, const EngVkFrame &f);
+    VkPipeline mkPipeFs(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp);
     VkPipeline meshPipeOff(int l, int d, int k, int u);
     bool capInit(QQuickWindow *w);
     bool offTargets(int w, int h);
@@ -118,6 +136,15 @@ private:
         Buf rb;  // leitura (visivel pela CPU)
     };
     Off m_off;
+    AoT m_aoV, m_aoC;  // GTAO do viewport (meia resolucao) e da captura (resolucao total)
+    bool m_aoInit = false, m_aoFail = false, m_aoActiveV = false;
+    VkRenderPass m_rpDp = VK_NULL_HANDLE, m_rpAo = VK_NULL_HANDLE, m_rpAoClr = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_lAo = VK_NULL_HANDLE;
+    VkPipelineLayout m_plAo = VK_NULL_HANDLE;
+    VkPipeline m_pDepth[2] = {};  // [esqueleto]
+    VkPipeline m_pGtao = VK_NULL_HANDLE, m_pBlur = VK_NULL_HANDLE;
+    VkShaderModule m_mdf = VK_NULL_HANDLE, m_av = VK_NULL_HANDLE, m_ag = VK_NULL_HANDLE, m_ab = VK_NULL_HANDLE;
+    VkSampler m_sampNear = VK_NULL_HANDLE;
     Slot m_cap;  // ordens e paletas da captura
     VkQueue m_queue = VK_NULL_HANDLE;
     VkCommandPool m_cpool = VK_NULL_HANDLE;

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 
 #include "vkshaders.h"  // gerado no build (Slang): k_mesh_vert/k_mesh_frag/k_text_vert/k_text_frag
 
@@ -79,7 +80,7 @@ void VkRend::freeBuf(Buf &b) {
     b = Buf();
 }
 
-VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss) {
+VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp, bool text, bool lines, bool depth, bool skin, bool gz, bool uv, VkSampleCountFlagBits ss, bool noColor) {
     VkPipelineShaderStageCreateInfo st[2] = {};
     st[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -151,8 +152,8 @@ VkPipeline VkRend::mkPipe(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout
     cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
     VkPipelineColorBlendStateCreateInfo cb = {};
     cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    cb.attachmentCount = 1;
-    cb.pAttachments = &cba;
+    cb.attachmentCount = noColor ? 0 : 1;
+    cb.pAttachments = noColor ? nullptr : &cba;
     const VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy = {};
     dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -237,8 +238,8 @@ bool VkRend::create(QQuickWindow *w) {
     pl.setLayoutCount = 1;
     pl.pushConstantRangeCount = 1;
     pl.pPushConstantRanges = &pcr;
-    const VkDescriptorSetLayout meshLayouts[2] = {m_lOps, m_lTex};  // set 0: ordens e ossos; set 1: texturas
-    pl.setLayoutCount = 2;
+    const VkDescriptorSetLayout meshLayouts[3] = {m_lOps, m_lTex, m_lTex};  // set 0: ordens e ossos; set 1: texturas; set 2: oclusao ambiente (GTAO)
+    pl.setLayoutCount = 3;
     pl.pSetLayouts = meshLayouts;
     pcr.size = sizeof(MeshPC);
     if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plMesh) != VK_SUCCESS) return fail("layout malha");
@@ -286,10 +287,10 @@ bool VkRend::create(QQuickWindow *w) {
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[0].descriptorCount = kMaxSlots * 2 + 2;
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = 2 + 2 * kMaxSlots;
+    ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12;  // + GTAO (viewport e captura)
     VkDescriptorPoolCreateInfo dpi = {};
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    dpi.maxSets = 3 * kMaxSlots + 4;
+    dpi.maxSets = 3 * kMaxSlots + 4 + 6;
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     if (m_df->vkCreateDescriptorPool(m_dev, &dpi, nullptr, &m_pool) != VK_SUCCESS) return fail("pool");
@@ -673,6 +674,10 @@ VkRend::MeshBuf *VkRend::meshFor(const EngVkOp &op) {
     auto it = m_meshes.find(op.vid);
     if (it != m_meshes.end() && it->second.n == op.n) {
         it->second.last = m_frame;
+        if (it->second.ver != op.ver) {  // malha editada (escultura): reenvia os vertices
+            std::memcpy(it->second.b.p, op.cpu, size_t(op.n) * 24);
+            it->second.ver = op.ver;
+        }
         extra(it->second.skin, op.skin, 32);  // esqueleto ou uv anexados depois da malha
         extra(it->second.uv, op.uv, 8);
         return &it->second;
@@ -686,6 +691,7 @@ VkRend::MeshBuf *VkRend::meshFor(const EngVkOp &op) {
     MeshBuf mb;
     mb.n = op.n;
     mb.last = m_frame;
+    mb.ver = op.ver;
     if (!mkBuf(mb.b, VkDeviceSize(op.n) * 24, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
         freeBuf(mb.b);
         return nullptr;
@@ -774,6 +780,8 @@ void VkRend::replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> 
     std::memcpy(mpc.mcU, f.mcU, sizeof mpc.mcU);
     std::memcpy(mpc.mcB, f.mcB, sizeof mpc.mcB);
     mpc.mcR[3] = float(ph);
+    mpc.mcU[3] = float(pw);
+    mpc.mcB[3] = (!ui && m_aoActiveV) ? f.ao[0] : 0.f;  // intensidade do GTAO
 
     int mode = 0;  // 0 nada ligado, 1 malha, 2 texto
     VkPipeline cur = VK_NULL_HANDLE;
@@ -804,8 +812,8 @@ void VkRend::replay(QQuickWindow *w, int pw, int ph, const std::vector<EngVkOp> 
             VkPipeline want = meshPipe(op.lines ? 1 : 0, depth ? 1 : 0, skinned ? 1 : 0, hasUv ? 1 : 0);
             if (!want) continue;
             if (mode != 1) {
-                const VkDescriptorSet sets[2] = {s.set, s.texSet};
-                m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 2, sets, 0, nullptr);
+                const VkDescriptorSet sets[3] = {s.set, s.texSet, m_aoV.sFinal};
+                m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, m_aoV.sFinal ? 3 : 2, sets, 0, nullptr);
                 m_df->vkCmdPushConstants(cb, m_plMesh, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mpc, &mpc);
                 mode = 1;
                 cur = VK_NULL_HANDLE;
@@ -1157,6 +1165,9 @@ int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::v
     const size_t np = std::min<size_t>(f.pal.size(), size_t(kEngVkMaxMats) * 16);
     if (np) std::memcpy(m_cap.pal.p, f.pal.data(), np * 4);
 
+    // GTAO da captura (resolucao total) quando ligado; senao liga o conjunto do viewport com intensidade 0
+    const bool aoWant = f.ao[0] > 0.001f && f.proj[1] > 0.f && aoInit() && aoTargets(m_aoC, cw, ch);
+    aoInit();
     // comandos
     VkCommandBuffer cb = m_ccb;
     m_df->vkResetCommandBuffer(cb, 0);
@@ -1164,6 +1175,7 @@ int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::v
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return 2;
+    if (aoWant) aoRecord(cb, m_aoC, m_cap.set, f.scene, f);
     VkClearValue cv[2] = {};
     cv[0].color = {{0.f, 0.f, 0.f, 1.f}};
     cv[1].depthStencil = {1.f, 0};
@@ -1185,8 +1197,11 @@ int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::v
     std::memcpy(mpc.mcU, f.mcU, sizeof mpc.mcU);
     std::memcpy(mpc.mcB, f.mcB, sizeof mpc.mcB);
     mpc.mcR[3] = float(ch);
-    const VkDescriptorSet sets[2] = {m_cap.set, m_cap.texSet};
-    m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 2, sets, 0, nullptr);
+    mpc.mcU[3] = float(cw);
+    mpc.mcB[3] = aoWant ? f.ao[0] : 0.f;
+    const VkDescriptorSet aoSet = aoWant ? m_aoC.sFinal : m_aoV.sFinal;
+    const VkDescriptorSet sets[3] = {m_cap.set, m_cap.texSet, aoSet};
+    m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, aoSet ? 3 : 2, sets, 0, nullptr);
     m_df->vkCmdPushConstants(cb, m_plMesh, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof mpc, &mpc);
     VkPipeline cur = VK_NULL_HANDLE;
     uint32_t idx = 0;
@@ -1243,9 +1258,440 @@ int VkRend::capture(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std::v
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// GTAO do NanoFarm: pre-passe de profundidade -> visibilidade ruidosa -> filtro com profundidade
+// ---------------------------------------------------------------------------
+VkPipeline VkRend::mkPipeFs(VkShaderModule vs, VkShaderModule fs, VkPipelineLayout lay, VkRenderPass rp) {
+    VkPipelineShaderStageCreateInfo st[2] = {};
+    st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    st[0].module = vs;
+    st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    st[1].module = fs;
+    st[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vi = {};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo ia = {};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp = {};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs = {};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms = {};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState cba = {};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT;
+    VkPipelineColorBlendStateCreateInfo cb = {};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+    const VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dy = {};
+    dy.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dy.dynamicStateCount = 2;
+    dy.pDynamicStates = dyn;
+    VkGraphicsPipelineCreateInfo gp = {};
+    gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gp.stageCount = 2;
+    gp.pStages = st;
+    gp.pVertexInputState = &vi;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dy;
+    gp.layout = lay;
+    gp.renderPass = rp;
+    VkPipeline p = VK_NULL_HANDLE;
+    if (m_df->vkCreateGraphicsPipelines(m_dev, VK_NULL_HANDLE, 1, &gp, nullptr, &p) != VK_SUCCESS) return VK_NULL_HANDLE;
+    return p;
+}
+
+bool VkRend::aoInit() {
+    if (m_aoInit) return true;
+    if (m_aoFail) return false;
+    m_aoFail = true;  // so vira false no fim
+    VkFormatProperties fd, fr;
+    m_if->vkGetPhysicalDeviceFormatProperties(m_phys, VK_FORMAT_D32_SFLOAT, &fd);
+    m_if->vkGetPhysicalDeviceFormatProperties(m_phys, VK_FORMAT_R8_UNORM, &fr);
+    const VkFormatFeatureFlags needD = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    const VkFormatFeatureFlags needR = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if ((fd.optimalTilingFeatures & needD) != needD || (fr.optimalTilingFeatures & needR) != needR) return false;
+
+    // passe so de profundidade (fica legivel como textura no fim)
+    {
+        VkAttachmentDescription at = {};
+        at.format = VK_FORMAT_D32_SFLOAT;
+        at.samples = VK_SAMPLE_COUNT_1_BIT;
+        at.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        at.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        const VkAttachmentReference dr = {0, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sp = {};
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.pDepthStencilAttachment = &dr;
+        VkSubpassDependency dep[2] = {};
+        dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep[0].dstSubpass = 0;
+        dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dep[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        dep[1].srcSubpass = 0;
+        dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dep[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rci = {};
+        rci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rci.attachmentCount = 1;
+        rci.pAttachments = &at;
+        rci.subpassCount = 1;
+        rci.pSubpasses = &sp;
+        rci.dependencyCount = 2;
+        rci.pDependencies = dep;
+        if (m_df->vkCreateRenderPass(m_dev, &rci, nullptr, &m_rpDp) != VK_SUCCESS) return false;
+    }
+    // passes de cor R8 (visibilidade): um que sobrescreve tudo e outro que limpa para 1.0
+    for (int clr = 0; clr < 2; ++clr) {
+        VkAttachmentDescription at = {};
+        at.format = VK_FORMAT_R8_UNORM;
+        at.samples = VK_SAMPLE_COUNT_1_BIT;
+        at.loadOp = clr ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        at.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        at.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        at.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        at.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const VkAttachmentReference cr = {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sp = {};
+        sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        sp.colorAttachmentCount = 1;
+        sp.pColorAttachments = &cr;
+        VkSubpassDependency dep[2] = {};
+        dep[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dep[0].dstSubpass = 0;
+        dep[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep[1].srcSubpass = 0;
+        dep[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dep[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dep[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dep[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dep[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo rci = {};
+        rci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rci.attachmentCount = 1;
+        rci.pAttachments = &at;
+        rci.subpassCount = 1;
+        rci.pSubpasses = &sp;
+        rci.dependencyCount = 2;
+        rci.pDependencies = dep;
+        if (m_df->vkCreateRenderPass(m_dev, &rci, nullptr, clr ? &m_rpAoClr : &m_rpAo) != VK_SUCCESS) return false;
+    }
+    // layout dos passes do GTAO: 0 = profundidade, 1 = visibilidade (filtro)
+    VkDescriptorSetLayoutBinding bb[2] = {};
+    for (int i = 0; i < 2; ++i) {
+        bb[i].binding = uint32_t(i);
+        bb[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bb[i].descriptorCount = 1;
+        bb[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dl = {};
+    dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dl.bindingCount = 2;
+    dl.pBindings = bb;
+    if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &m_lAo) != VK_SUCCESS) return false;
+    VkPushConstantRange pcr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48};
+    VkPipelineLayoutCreateInfo pl = {};
+    pl.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pl.setLayoutCount = 1;
+    pl.pSetLayouts = &m_lAo;
+    pl.pushConstantRangeCount = 1;
+    pl.pPushConstantRanges = &pcr;
+    if (m_df->vkCreatePipelineLayout(m_dev, &pl, nullptr, &m_plAo) != VK_SUCCESS) return false;
+
+    auto mod = [&](const uint32_t *code, size_t bytes) {
+        VkShaderModuleCreateInfo ci = {};
+        ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        ci.codeSize = bytes;
+        ci.pCode = code;
+        VkShaderModule m = VK_NULL_HANDLE;
+        m_df->vkCreateShaderModule(m_dev, &ci, nullptr, &m);
+        return m;
+    };
+    m_mdf = mod(k_mesh_depthfrag, k_mesh_depthfrag_size);
+    m_av = mod(k_ao_vert, k_ao_vert_size);
+    m_ag = mod(k_ao_gtao, k_ao_gtao_size);
+    m_ab = mod(k_ao_blur, k_ao_blur_size);
+    if (!m_mdf || !m_av || !m_ag || !m_ab) return false;
+    for (int k = 0; k < 2; ++k) {
+        m_pDepth[k] = mkPipe(m_mv, m_mdf, m_plMesh, m_rpDp, false, false, true, k == 1, false, false, VK_SAMPLE_COUNT_1_BIT, true);
+        if (!m_pDepth[k]) return false;
+    }
+    m_pGtao = mkPipeFs(m_av, m_ag, m_plAo, m_rpAo);
+    m_pBlur = mkPipeFs(m_av, m_ab, m_plAo, m_rpAo);
+    if (!m_pGtao || !m_pBlur) return false;
+
+    VkSamplerCreateInfo sci = {};
+    sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter = sci.minFilter = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (m_df->vkCreateSampler(m_dev, &sci, nullptr, &m_sampNear) != VK_SUCCESS) return false;
+    m_aoFail = false;
+    m_aoInit = true;
+    return true;
+}
+
+void VkRend::aoFree(AoT &t) {
+    if (!m_df || !m_dev) return;
+    for (VkFramebuffer f : {t.fd, t.fa, t.fb})
+        if (f) m_df->vkDestroyFramebuffer(m_dev, f, nullptr);
+    for (VkImageView v : {t.vd, t.va, t.vb})
+        if (v) m_df->vkDestroyImageView(m_dev, v, nullptr);
+    for (VkImage i : {t.dimg, t.ia, t.ib})
+        if (i) m_df->vkDestroyImage(m_dev, i, nullptr);
+    for (VkDeviceMemory m : {t.mdp, t.ma, t.mb})
+        if (m) m_df->vkFreeMemory(m_dev, m, nullptr);
+    const VkDescriptorSet s0 = t.sGtao, s1 = t.sBlur, s2 = t.sFinal;  // os conjuntos continuam do pool e sao reaproveitados
+    t = AoT();
+    t.sGtao = s0;
+    t.sBlur = s1;
+    t.sFinal = s2;
+}
+
+bool VkRend::aoTargets(AoT &t, int w, int h) {
+    if (t.fb && t.w == w && t.h == h) return true;
+    if (t.fb || t.dimg) {
+        m_df->vkDeviceWaitIdle(m_dev);  // so ao redimensionar: os quadros em andamento ainda usam as imagens
+        aoFree(t);
+    }
+    auto mk = [&](VkFormat fmt, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage &img, VkDeviceMemory &mem, VkImageView &view) {
+        VkImageCreateInfo ic = {};
+        ic.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ic.imageType = VK_IMAGE_TYPE_2D;
+        ic.format = fmt;
+        ic.extent = {uint32_t(w), uint32_t(h), 1};
+        ic.mipLevels = 1;
+        ic.arrayLayers = 1;
+        ic.samples = VK_SAMPLE_COUNT_1_BIT;
+        ic.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ic.usage = usage;
+        ic.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (m_df->vkCreateImage(m_dev, &ic, nullptr, &img) != VK_SUCCESS) return false;
+        VkMemoryRequirements mr;
+        m_df->vkGetImageMemoryRequirements(m_dev, img, &mr);
+        uint32_t mt = 0;
+        if (!findMem(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mt)) return false;
+        VkMemoryAllocateInfo ai = {};
+        ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        ai.allocationSize = mr.size;
+        ai.memoryTypeIndex = mt;
+        if (m_df->vkAllocateMemory(m_dev, &ai, nullptr, &mem) != VK_SUCCESS) return false;
+        if (m_df->vkBindImageMemory(m_dev, img, mem, 0) != VK_SUCCESS) return false;
+        VkImageViewCreateInfo vc = {};
+        vc.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vc.image = img;
+        vc.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vc.format = fmt;
+        vc.subresourceRange = {aspect, 0, 1, 0, 1};
+        return m_df->vkCreateImageView(m_dev, &vc, nullptr, &view) == VK_SUCCESS;
+    };
+    const VkImageUsageFlags colUse = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    bool ok = mk(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_DEPTH_BIT, t.dimg, t.mdp, t.vd) &&
+              mk(VK_FORMAT_R8_UNORM, colUse, VK_IMAGE_ASPECT_COLOR_BIT, t.ia, t.ma, t.va) &&
+              mk(VK_FORMAT_R8_UNORM, colUse, VK_IMAGE_ASPECT_COLOR_BIT, t.ib, t.mb, t.vb);
+    auto fbo = [&](VkRenderPass rp, VkImageView v, VkFramebuffer &out) {
+        VkFramebufferCreateInfo fi = {};
+        fi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fi.renderPass = rp;
+        fi.attachmentCount = 1;
+        fi.pAttachments = &v;
+        fi.width = uint32_t(w);
+        fi.height = uint32_t(h);
+        fi.layers = 1;
+        return m_df->vkCreateFramebuffer(m_dev, &fi, nullptr, &out) == VK_SUCCESS;
+    };
+    ok = ok && fbo(m_rpDp, t.vd, t.fd) && fbo(m_rpAo, t.va, t.fa) && fbo(m_rpAo, t.vb, t.fb);
+    if (ok && !t.sGtao) {
+        VkDescriptorSetAllocateInfo ai = {};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = m_pool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &m_lAo;
+        ok = m_df->vkAllocateDescriptorSets(m_dev, &ai, &t.sGtao) == VK_SUCCESS && m_df->vkAllocateDescriptorSets(m_dev, &ai, &t.sBlur) == VK_SUCCESS;
+        ai.pSetLayouts = &m_lTex;
+        ok = ok && m_df->vkAllocateDescriptorSets(m_dev, &ai, &t.sFinal) == VK_SUCCESS;
+    }
+    if (!ok) {
+        aoFree(t);
+        return false;
+    }
+    const VkDescriptorImageInfo dI = {m_sampNear, t.vd, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo aI = {m_sampNear, t.va, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo bI = {m_sampNear, t.vb, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo fI = {m_samp, t.vb, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet wr[5] = {};
+    auto set = [&](int i, VkDescriptorSet ds, uint32_t b, const VkDescriptorImageInfo *ii) {
+        wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wr[i].dstSet = ds;
+        wr[i].dstBinding = b;
+        wr[i].descriptorCount = 1;
+        wr[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wr[i].pImageInfo = ii;
+    };
+    set(0, t.sGtao, 0, &dI);
+    set(1, t.sGtao, 1, &bI);  // nao e lida neste passe
+    set(2, t.sBlur, 0, &dI);
+    set(3, t.sBlur, 1, &aI);
+    set(4, t.sFinal, 0, &fI);
+    m_df->vkUpdateDescriptorSets(m_dev, 5, wr, 0, nullptr);
+    t.w = w;
+    t.h = h;
+    t.cleared = false;
+    return true;
+}
+
+// deixa a imagem final com visibilidade 1.0 e o layout de leitura (antes do primeiro uso)
+void VkRend::aoClear(VkCommandBuffer cb, AoT &t) {
+    VkClearValue cv = {};
+    cv.color = {{1.f, 1.f, 1.f, 1.f}};
+    VkRenderPassBeginInfo rb = {};
+    rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    rb.renderPass = m_rpAoClr;
+    rb.framebuffer = t.fb;
+    rb.renderArea = {{0, 0}, {uint32_t(t.w), uint32_t(t.h)}};
+    rb.clearValueCount = 1;
+    rb.pClearValues = &cv;
+    m_df->vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+    m_df->vkCmdEndRenderPass(cb);
+    t.cleared = true;
+}
+
+void VkRend::aoRecord(VkCommandBuffer cb, AoT &t, VkDescriptorSet opsSet, const std::vector<EngVkOp> &ops, const EngVkFrame &f) {
+    const VkViewport vp = {0.f, 0.f, float(t.w), float(t.h), 0.f, 1.f};
+    const VkRect2D full = {{0, 0}, {uint32_t(t.w), uint32_t(t.h)}};
+
+    // 1) profundidade das malhas sombreadas (mesma numeracao de ordens do desenho normal)
+    {
+        VkClearValue cv = {};
+        cv.depthStencil = {1.f, 0};
+        VkRenderPassBeginInfo rb = {};
+        rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rb.renderPass = m_rpDp;
+        rb.framebuffer = t.fd;
+        rb.renderArea = full;
+        rb.clearValueCount = 1;
+        rb.pClearValues = &cv;
+        m_df->vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+        m_df->vkCmdSetViewport(cb, 0, 1, &vp);
+        m_df->vkCmdSetScissor(cb, 0, 1, &full);
+        m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plMesh, 0, 1, &opsSet, 0, nullptr);
+        VkPipeline cur = VK_NULL_HANDLE;
+        uint32_t idx = 0;
+        for (const EngVkOp &op : ops) {
+            if (op.kind != 0 || !op.cpu || op.n <= 0) continue;
+            const uint32_t myIdx = idx++;
+            if (myIdx >= kMaxOps) continue;
+            if (op.lines || !op.depth || op.a[0] <= 0.5f) continue;  // so objetos sombreados fazem sombra de oclusao
+            MeshBuf *mb = meshFor(op);
+            if (!mb) continue;
+            const bool skinned = op.skin != nullptr;
+            if (skinned && !mb->skin.b) continue;
+            VkPipeline want = m_pDepth[skinned ? 1 : 0];
+            if (want != cur) {
+                m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                cur = want;
+            }
+            const VkDeviceSize off0 = 0;
+            m_df->vkCmdBindVertexBuffers(cb, 0, 1, &mb->b.b, &off0);
+            if (skinned) m_df->vkCmdBindVertexBuffers(cb, 1, 1, &mb->skin.b, &off0);
+            m_df->vkCmdDraw(cb, uint32_t(op.n), 1, 0, myIdx);
+        }
+        m_df->vkCmdEndRenderPass(cb);
+    }
+
+    // 2) visibilidade (GTAO) e 3) filtro
+    const float fov = f.proj[0], asp = std::max(f.proj[1], 0.01f), n = std::max(f.proj[2], 1e-4f), fr = std::max(f.proj[3], n + 1e-3f);
+    const float tanY = std::tan(fov * 0.5f);
+    const float R = std::max(f.ao[1], 0.01f);
+    const float falloff = 0.615f * R;
+    float pc[12] = {1.f / float(t.w), 1.f / float(t.h), R, std::max(f.ao[2], 0.1f),
+                    tanY * asp, tanY, (fr + n) / (n - fr), 2.f * fr * n / (n - fr),
+                    -1.f / falloff, (R - falloff) / falloff + 1.f, 0.f, 0.f};
+    VkPipeline pipes[2] = {m_pGtao, m_pBlur};
+    VkFramebuffer fbs[2] = {t.fa, t.fb};
+    VkDescriptorSet sets[2] = {t.sGtao, t.sBlur};
+    for (int p = 0; p < 2; ++p) {
+        VkRenderPassBeginInfo rb = {};
+        rb.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        rb.renderPass = m_rpAo;
+        rb.framebuffer = fbs[p];
+        rb.renderArea = full;
+        m_df->vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
+        m_df->vkCmdSetViewport(cb, 0, 1, &vp);
+        m_df->vkCmdSetScissor(cb, 0, 1, &full);
+        m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipes[p]);
+        m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_plAo, 0, 1, &sets[p], 0, nullptr);
+        m_df->vkCmdPushConstants(cb, m_plAo, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
+        m_df->vkCmdDraw(cb, 3, 1, 0, 0);
+        m_df->vkCmdEndRenderPass(cb);
+    }
+    t.cleared = true;
+}
+
+// viewport: roda antes do passe do Qt Quick (as imagens ficam prontas para o desenho das malhas)
+void VkRend::aoPass(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
+    m_aoActiveV = false;
+    if (!m_ready || pw < 8 || ph < 8 || !aoInit()) return;
+    if (!aoTargets(m_aoV, std::max(pw / 2, 4), std::max(ph / 2, 4))) return;
+    const bool want = f.ao[0] > 0.001f && f.proj[1] > 0.f;
+    if (!want && m_aoV.cleared) return;
+    QSGRendererInterface *rif = w->rendererInterface();
+    w->beginExternalCommands();
+    void *pcb = rif->getResource(w, QSGRendererInterface::CommandListResource);
+    if (pcb) {
+        VkCommandBuffer cb = *reinterpret_cast<VkCommandBuffer *>(pcb);
+        if (want) {
+            aoRecord(cb, m_aoV, m_slot[m_cur].set, f.scene, f);
+            m_aoActiveV = true;
+        } else {
+            aoClear(cb, m_aoV);
+        }
+    }
+    w->endExternalCommands();
+}
+
 void VkRend::release() {
     if (m_df && m_dev) {
         freeOff();
+        aoFree(m_aoV);
+        aoFree(m_aoC);
+        for (VkPipeline p : {m_pDepth[0], m_pDepth[1], m_pGtao, m_pBlur})
+            if (p) m_df->vkDestroyPipeline(m_dev, p, nullptr);
+        for (VkShaderModule m : {m_mdf, m_av, m_ag, m_ab})
+            if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
+        if (m_plAo) m_df->vkDestroyPipelineLayout(m_dev, m_plAo, nullptr);
+        if (m_lAo) m_df->vkDestroyDescriptorSetLayout(m_dev, m_lAo, nullptr);
+        for (VkRenderPass r : {m_rpDp, m_rpAo, m_rpAoClr})
+            if (r) m_df->vkDestroyRenderPass(m_dev, r, nullptr);
+        if (m_sampNear) m_df->vkDestroySampler(m_dev, m_sampNear, nullptr);
         freeBuf(m_cap.ops);
         freeBuf(m_cap.pal);
         for (int l = 0; l < 2; ++l)
@@ -1313,6 +1759,15 @@ void VkRend::release() {
     m_cpool = VK_NULL_HANDLE;
     m_ccb = VK_NULL_HANDLE;
     m_rpOff = VK_NULL_HANDLE;
+    m_aoV = AoT();
+    m_aoC = AoT();
+    m_aoInit = m_aoFail = m_aoActiveV = false;
+    m_rpDp = m_rpAo = m_rpAoClr = VK_NULL_HANDLE;
+    m_lAo = VK_NULL_HANDLE;
+    m_plAo = VK_NULL_HANDLE;
+    m_pDepth[0] = m_pDepth[1] = m_pGtao = m_pBlur = VK_NULL_HANDLE;
+    m_mdf = m_av = m_ag = m_ab = VK_NULL_HANDLE;
+    m_sampNear = VK_NULL_HANDLE;
     m_capInit = m_capFail = false;
     m_cap = Slot();
     m_created = m_dummyOk = false;

@@ -5,7 +5,6 @@
 #include <android/log.h>
 #include <android/input.h>
 #include <android/keycodes.h>
-#include <EGL/egl.h>
 
 #include "engine_api.h"
 

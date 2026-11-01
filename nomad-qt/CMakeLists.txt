@@ -4,7 +4,7 @@ project(Nomad VERSION 0.2 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Quick Gui OpenGL)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Quick Gui)
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(Nomad main.cpp)
@@ -47,18 +47,16 @@ qt_add_qml_module(Nomad
         imgui/imgui_draw.cpp
         imgui/imgui_tables.cpp
         imgui/imgui_widgets.cpp
-        imgui/imgui_impl_opengl3.cpp
         imgui/ImGuizmo.cpp
 )
 
-# ImGui (so para os gizmos) + ImGuizmo, backend OpenGL ES 3
+# ImGui (so para os gizmos) + ImGuizmo; as listas de desenho vao para o renderizador Vulkan
 target_include_directories(Nomad PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/imgui)
-target_compile_definitions(Nomad PRIVATE IMGUI_IMPL_OPENGL_ES3)
 
 # Bibliotecas do NDK usadas pelo motor (as mesmas do projeto antigo)
 target_link_libraries(Nomad PRIVATE
-    Qt6::Quick Qt6::Gui Qt6::OpenGL
-    android EGL GLESv3 log z mediandk)
+    Qt6::Quick Qt6::Gui
+    android log z mediandk)
 
 if(ANDROID)
     set_target_properties(Nomad PROPERTIES

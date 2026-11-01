@@ -57,6 +57,7 @@ struct EngVkOp {
     int depth = 0;  // 1 = teste de profundidade ligado
     int lines = 0;  // 1 = lista de linhas (senao triangulos)
     int vid = 0;    // malha: id estavel (muda so se a malha for recriada)
+    int ver = 0;    // malha: versao dos vertices (muda quando a malha e editada, ex.: escultura)
     int n = 0;      // malha: numero de vertices
     const float *cpu = nullptr;  // malha: vertices (posicao + normal, 6 floats cada); valido ate o fim do quadro
     const float *uv = nullptr;   // malha com textura: 2 floats por vertice
@@ -90,8 +91,9 @@ struct EngVkFrame {
     std::vector<float> pal;      // paletas de ossos: matrizes 4x4 (16 floats, colunas) uma apos a outra
     float cam[4] = {};           // xyz = posicao da camera, w = 1 se matcap
     float mcR[4] = {}, mcU[4] = {}, mcB[4] = {};  // base do matcap (w de mcR = altura da tela em px)
+    float proj[4] = {};          // projecao do quadro: fov vertical (rad), aspecto, near, far (para o GTAO)
+    float ao[4] = {};            // GTAO do NanoFarm: intensidade (0 = desligado), raio (unidades da cena), potencia
 };
-void eng_set_vk(bool on);                                // liga o modo Vulkan (antes de eng_init)
 void eng_vk_frame(EngVkFrame &out, int w, int h);        // avanca o tempo, roda a cena e a interface e grava as ordens
 int eng_vk_tex_count(int &size, unsigned &ver);          // texturas de material: camadas size x size RGBA8; ver muda quando entra uma nova
 const unsigned char *eng_vk_tex_layer(int i);
@@ -104,11 +106,8 @@ bool eng_ready();
 void eng_init(const char *dir, int w, int h);
 void eng_resize(int w, int h);
 void eng_event(const EngEvent &e);
-void eng_frame();
-void eng_gl_lost();
 bool eng_dialog_open();
 void eng_timeline(EngTimeline &t);
-void eng_frame_ui();                       // fase da interface do motor (depois do Qt Quick)
 void eng_ui_rects(std::vector<float> &out);  // retangulos x,y,w,h (px) ocupados pela interface do motor
 
 // ---- plataforma (engineview.cpp) - chamadas pelo motor ----
