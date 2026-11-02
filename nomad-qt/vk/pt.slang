@@ -6,9 +6,9 @@ struct PC {
     float3 right;
     float aspect;
     float3 up;
-    float pad0;
+    int ntex;      // camadas validas no array de texturas (0 = sem texturas)
     float3 fwd;
-    float pad1;
+    int dn;        // 1 = grava normal/profundidade/albedo e o resolve usa o resultado do filtro
     int w;
     int h;
     int y0;
@@ -17,14 +17,22 @@ struct PC {
     int bounces;
     int night;
     int ntri;
+    int src;       // filtro: buffer de leitura (0/1)
+    int stp;       // filtro: distancia do passo a-trous (1, 2, 4, 8, 16)
+    float phi;     // filtro: tolerancia de luminancia
+    int pad2;
 };
 [[vk::push_constant]] ConstantBuffer<PC> pc;
 
 [[vk::binding(0, 0)]] StructuredBuffer<float4> bPos;    // 3 float4 por triangulo (p0, p1, p2)
 [[vk::binding(1, 0)]] StructuredBuffer<float4> bShade;  // 4 float4: n0, n1, n2 (w de n2 = metal), cor (w = rugosidade)
 [[vk::binding(2, 0)]] StructuredBuffer<float4> bNode;   // 2 float4 por no: (min, esq/primeiro), (max, quantidade)
-[[vk::binding(3, 0)]] RWStructuredBuffer<float4> bAcc;  // soma das amostras (rgb) e contagem (a)
-[[vk::binding(4, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
+[[vk::binding(3, 0)]] StructuredBuffer<float4> bTexI;   // 3 float4 por triangulo: (u0,v0,u1,v1), (u2,v2,base,metal/rug), (normal,recorte,0,0)
+// acumulo: dn == 0 -> 1 float4 por pixel (soma rgb, contagem a); dn == 1 -> 3 por pixel: [soma rgb|contagem], [soma normal|soma profundidade], [soma albedo|contagem]
+[[vk::binding(4, 0)]] RWStructuredBuffer<float4> bAcc;
+[[vk::binding(5, 0)]] RWStructuredBuffer<float4> bTmp;  // filtro: 2 float4 por pixel (ping-pong de iluminacao desmodulada pelo albedo)
+[[vk::binding(6, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
+[[vk::binding(7, 0)]] Sampler2DArray uTex;              // texturas de material (camadas size x size RGBA8)
 
 static const float PI = 3.14159265;
 
@@ -54,7 +62,7 @@ bool hitTri(float3 o, float3 d, int ti, inout float tmax, out float bu, out floa
     float3 e2 = bPos[ti * 3 + 2].xyz - p0;
     float3 pv = cross(d, e2);
     float det = dot(e1, pv);
-    if (abs(det) < 1e-30) return false;   // sem limiar relativo: triangulos de scan sao minusculos
+    if (abs(det) < 1e-12) return false;
     float inv = 1.0 / det;
     float3 tv = o - p0;
     float u = dot(tv, pv) * inv;
@@ -63,54 +71,107 @@ bool hitTri(float3 o, float3 d, int ti, inout float tmax, out float bu, out floa
     float v = dot(d, qv) * inv;
     if (v < 0.0 || u + v > 1.0) return false;
     float t = dot(e2, qv) * inv;
-    if (t <= 0.0 || t >= tmax) return false;
+    if (t <= 1e-6 || t >= tmax) return false;
     tmax = t;
     bu = u;
     bv = v;
     return true;
 }
 
-// percorre a BVH; anyHit = so quer saber se algo bloqueia (sombra)
+bool boxHit(int ni, float3 o, float3 inv, float tmax, out float tn)
+{
+    float4 a = bNode[ni * 2];
+    float4 b = bNode[ni * 2 + 1];
+    float3 t0 = (a.xyz - o) * inv;
+    float3 t1 = (b.xyz - o) * inv;
+    float3 tmn = min(t0, t1);
+    float3 tmx = max(t0, t1);
+    tn = max(max(tmn.x, tmn.y), max(tmn.z, 0.0));
+    float tf = min(min(tmx.x, tmx.y), min(tmx.z, tmax));
+    return tn <= tf;
+}
+
+// triangulo com recorte por alpha: o buraco da textura nao bloqueia o raio
+bool alphaOk(int ti, float hu, float hv)
+{
+    float4 tC = bTexI[ti * 3 + 2];
+    if (tC.y <= 0.5 || pc.ntex <= 0) return true;
+    float4 tB = bTexI[ti * 3 + 1];
+    int lay = int(tB.z);
+    if (lay < 0 || lay >= pc.ntex) return true;
+    float4 tA = bTexI[ti * 3];
+    float2 uv = (1.0 - hu - hv) * tA.xy + hu * tA.zw + hv * tB.xy;
+    return uTex.SampleLevel(float3(uv, float(lay)), 0.0).a >= 0.5;
+}
+
+// percorre a BVH visitando primeiro o filho mais proximo; anyHit = so quer saber se algo bloqueia (sombra)
 bool traverse(float3 o, float3 d, inout float tmax, out int hit, out float hu, out float hv, bool anyHit)
 {
     float3 inv = float3(sinv(d.x), sinv(d.y), sinv(d.z));
-    int stack[32];
+    int stack[64];
+    float stT[64];
     int sp = 0;
     int node = 0;
     hit = -1;
     hu = 0.0;
     hv = 0.0;
+    float tr;
+    if (!boxHit(0, o, inv, tmax, tr)) return false;
     while (true) {
         float4 a = bNode[node * 2];
-        float4 b = bNode[node * 2 + 1];
-        float3 t0 = (a.xyz - o) * inv;
-        float3 t1 = (b.xyz - o) * inv;
-        float3 tmn = min(t0, t1);
-        float3 tmx = max(t0, t1);
-        float tn = max(max(tmn.x, tmn.y), max(tmn.z, 0.0));
-        float tf = min(min(tmx.x, tmx.y), min(tmx.z, tmax));
-        bool inside = tn <= tf;
-        int cnt = asint(b.w);
-        if (inside) {
-            if (cnt > 0) {
-                int first = asint(a.w);
-                for (int i = 0; i < cnt; i++) {
-                    float u, v;
-                    if (hitTri(o, d, first + i, tmax, u, v)) {
-                        hit = first + i;
-                        hu = u;
-                        hv = v;
-                        if (anyHit) return true;
+        int cnt = asint(bNode[node * 2 + 1].w);
+        bool pop = true;
+        if (cnt > 0) {
+            int first = asint(a.w);
+            for (int i = 0; i < cnt; i++) {
+                float u, v;
+                float tm0 = tmax;
+                if (hitTri(o, d, first + i, tmax, u, v)) {
+                    if (!alphaOk(first + i, u, v)) {
+                        tmax = tm0;
+                        continue;
                     }
+                    hit = first + i;
+                    hu = u;
+                    hv = v;
+                    if (anyHit) return true;
                 }
-            } else {
-                if (sp < 31) stack[sp++] = asint(a.w);
-                node = node + 1;
-                continue;
+            }
+        } else {
+            int l = node + 1;
+            int r = asint(a.w);
+            float dl, dr;
+            bool hl = boxHit(l, o, inv, tmax, dl);
+            bool hr = boxHit(r, o, inv, tmax, dr);
+            if (hl && hr) {
+                bool lf = dl <= dr;
+                if (sp < 63) {
+                    stack[sp] = lf ? r : l;
+                    stT[sp] = lf ? dr : dl;
+                    sp++;
+                }
+                node = lf ? l : r;
+                pop = false;
+            } else if (hl) {
+                node = l;
+                pop = false;
+            } else if (hr) {
+                node = r;
+                pop = false;
             }
         }
-        if (sp == 0) break;
-        node = stack[--sp];
+        if (pop) {
+            bool got = false;
+            while (sp > 0) {
+                sp--;
+                if (stT[sp] <= tmax) {
+                    node = stack[sp];
+                    got = true;
+                    break;
+                }
+            }
+            if (!got) break;
+        }
     }
     return hit >= 0;
 }
@@ -230,6 +291,9 @@ void csTrace(uint3 id : SV_DispatchThreadID)
     float3 beta = float3(1.0);
     float3 sunD = sunDir();
     float3 sunE = sunIrr(pc.night);
+    float3 aovN = float3(0.0);   // normal, profundidade e albedo do primeiro hit (para o denoise)
+    float aovD = 1e4;
+    float3 aovA = float3(1.0);
     // cone do sol (abertura angular ~1,7 grau: sombras suaves)
     const float cosMax = 0.99955;
 
@@ -246,6 +310,9 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float4 s1 = bShade[ti * 4 + 1];
         float4 s2 = bShade[ti * 4 + 2];
         float4 s3 = bShade[ti * 4 + 3];
+        float4 tA = bTexI[ti * 3];
+        float4 tB = bTexI[ti * 3 + 1];
+        float4 tC = bTexI[ti * 3 + 2];
         float3 p = o + d * tmax;
         float3 e1 = bPos[ti * 3 + 1].xyz - bPos[ti * 3].xyz;
         float3 e2 = bPos[ti * 3 + 2].xyz - bPos[ti * 3].xyz;
@@ -253,11 +320,43 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float3 ns = w0 * s0.xyz + hu * s1.xyz + hv * s2.xyz;
         float nl2 = dot(ns, ns);
         ns = nl2 > 1e-12 ? ns * rsqrt(nl2) : ng;
+
+        // texturas de material
+        float2 uv = w0 * tA.xy + hu * tA.zw + hv * tB.xy;
+        int lb = int(tB.z);
+        int lm = int(tB.w);
+        int ln = int(tC.x);
+        float metal = saturate(s2.w);
+        float rou = s3.w;
+        float3 col = saturate(s3.xyz);
+        if (lb >= 0 && lb < pc.ntex) col *= pow(saturate(uTex.SampleLevel(float3(uv, float(lb)), 0.0).rgb), float3(2.2));
+        if (lm >= 0 && lm < pc.ntex) {
+            float4 mrs = uTex.SampleLevel(float3(uv, float(lm)), 0.0);
+            rou *= mrs.g;
+            metal = saturate(metal * mrs.b);
+        }
+        if (ln >= 0 && ln < pc.ntex) {
+            // mapa de normais: tangente a partir das coordenadas de textura do triangulo
+            float3 tn = uTex.SampleLevel(float3(uv, float(ln)), 0.0).xyz * 2.0 - 1.0;
+            float2 du1 = tA.zw - tA.xy;
+            float2 du2 = tB.xy - tA.xy;
+            float det = du1.x * du2.y - du1.y * du2.x;
+            if (abs(det) > 1e-12) {
+                float3 Tt = (e1 * du2.y - e2 * du1.y) / det;
+                float3 Tu = Tt - ns * dot(ns, Tt);
+                float tl2 = dot(Tu, Tu);
+                if (tl2 > 1e-14) {
+                    Tu *= rsqrt(tl2);
+                    float3 Bu = cross(ns, Tu);
+                    float3 Bt = -((e2 * du1.x - e1 * du2.x) / det);   // mesmo sentido do viewport (v para baixo)
+                    if (dot(Bu, Bt) < 0.0) Bu = -Bu;
+                    ns = normalize(Tu * tn.x + Bu * tn.y + ns * tn.z);
+                }
+            }
+        }
         if (dot(ns, d) > 0.0) ns = -ns;      // sempre do lado de quem olha
         if (dot(ng, ns) < 0.0) ng = -ng;
-        float metal = saturate(s2.w);
-        float rou = clamp(s3.w, 0.04, 1.0);
-        float3 col = saturate(s3.xyz);
+        rou = clamp(rou, 0.04, 1.0);
         Mat m;
         m.cd = col * (1.0 - metal);
         m.f0 = lerp(float3(0.04), col, metal);
@@ -265,11 +364,16 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float ls = dot(m.f0, float3(0.3, 0.6, 0.1));
         float ld_ = dot(m.cd, float3(0.3, 0.6, 0.1));
         m.pSpec = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
+        if (bounce == 0) {
+            aovN = ns;
+            aovD = tmax;
+            aovA = max(m.cd + m.f0, float3(0.02));
+        }
 
         float3 T, B;
         basis(ns, T, B);
         float3 wo = float3(dot(-d, T), dot(-d, B), dot(-d, ns));
-        float eps = 2e-6 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
+        float eps = 1e-4 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
         float3 org = p + ng * eps;
 
         // luz direta: sol (cone) com raio de sombra
@@ -316,8 +420,18 @@ void csTrace(uint3 id : SV_DispatchThreadID)
     if (any(isnan(L)) || any(isinf(L))) L = float3(0.0);
     L = min(L, float3(30.0));
     uint idx = uint(py) * uint(pc.w) + uint(px);
-    float4 prev = pc.sample == 0 ? float4(0.0) : bAcc[idx];
-    bAcc[idx] = prev + float4(L, 1.0);
+    if (pc.dn != 0) {
+        uint bi = idx * 3u;
+        float4 p0 = pc.sample == 0 ? float4(0.0) : bAcc[bi];
+        float4 p1 = pc.sample == 0 ? float4(0.0) : bAcc[bi + 1u];
+        float4 p2 = pc.sample == 0 ? float4(0.0) : bAcc[bi + 2u];
+        bAcc[bi] = p0 + float4(L, 1.0);
+        bAcc[bi + 1u] = p1 + float4(aovN, aovD);
+        bAcc[bi + 2u] = p2 + float4(aovA, 1.0);
+    } else {
+        float4 prev = pc.sample == 0 ? float4(0.0) : bAcc[idx];
+        bAcc[idx] = prev + float4(L, 1.0);
+    }
 }
 
 float3 shoulder(float3 c)
@@ -340,11 +454,81 @@ void csResolve(uint3 id : SV_DispatchThreadID)
     int py = int(id.y);
     if (px >= pc.w || py >= pc.h) return;
     uint idx = uint(py) * uint(pc.w) + uint(px);
-    float4 a = bAcc[idx];
-    float3 c = a.xyz / max(a.w, 1.0);
+    float3 c;
+    if (pc.dn != 0) {
+        float cnt = max(bAcc[idx * 3u].w, 1.0);
+        float3 alb = bAcc[idx * 3u + 2u].xyz / cnt;
+        c = bTmp[idx * 2u + uint(pc.src)].xyz * max(alb, float3(0.02));
+    } else {
+        float4 a = bAcc[idx];
+        c = a.xyz / max(a.w, 1.0);
+    }
     c = saturate(toSrgb(saturate(shoulder(max(c, float3(0.0))))));
     uint r = uint(c.x * 255.0 + 0.5);
     uint g = uint(c.y * 255.0 + 0.5);
     uint b = uint(c.z * 255.0 + 0.5);
     bOut[idx] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+}
+
+// denoise, passo 1: iluminacao desmodulada pelo albedo (a textura nao e borrada junto)
+[numthreads(8, 8, 1)]
+void csDnPrep(uint3 id : SV_DispatchThreadID)
+{
+    int px = int(id.x);
+    int py = pc.y0 + int(id.y);
+    if (px >= pc.w || int(id.y) >= pc.rows || py >= pc.h) return;
+    uint idx = uint(py) * uint(pc.w) + uint(px);
+    float4 a = bAcc[idx * 3u];
+    float cnt = max(a.w, 1.0);
+    float3 alb = bAcc[idx * 3u + 2u].xyz / cnt;
+    bTmp[idx * 2u] = float4(a.xyz / cnt / max(alb, float3(0.02)), 0.0);
+}
+
+// denoise, passos seguintes: a-trous 5x5 guiado por normal, profundidade e luminancia
+[numthreads(8, 8, 1)]
+void csDnStep(uint3 id : SV_DispatchThreadID)
+{
+    int px = int(id.x);
+    int py = pc.y0 + int(id.y);
+    if (px >= pc.w || int(id.y) >= pc.rows || py >= pc.h) return;
+    uint idx = uint(py) * uint(pc.w) + uint(px);
+    uint dst = idx * 2u + uint(1 - pc.src);
+    float3 c0 = bTmp[idx * 2u + uint(pc.src)].xyz;
+    float4 na = bAcc[idx * 3u + 1u];
+    float cn0 = max(bAcc[idx * 3u].w, 1.0);
+    float3 n0 = na.xyz / cn0;
+    float d0 = na.w / cn0;
+    if (dot(n0, n0) < 0.25) {      // ceu: sem geometria para guiar, passa direto
+        bTmp[dst] = float4(c0, 0.0);
+        return;
+    }
+    n0 = normalize(n0);
+    float l0 = dot(c0, float3(0.299, 0.587, 0.114));
+    float kern[3] = { 0.375, 0.25, 0.0625 };
+    float3 sum = c0 * (kern[0] * kern[0]);
+    float ws = kern[0] * kern[0];
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            int qx = px + dx * pc.stp;
+            int qy = py + dy * pc.stp;
+            if (qx < 0 || qy < 0 || qx >= pc.w || qy >= pc.h) continue;
+            uint qi = uint(qy) * uint(pc.w) + uint(qx);
+            float4 qa = bAcc[qi * 3u + 1u];
+            float qc = max(bAcc[qi * 3u].w, 1.0);
+            float3 qn = qa.xyz / qc;
+            if (dot(qn, qn) < 0.25) continue;
+            qn = normalize(qn);
+            float qd = qa.w / qc;
+            float3 c1 = bTmp[qi * 2u + uint(pc.src)].xyz;
+            float wn = pow(saturate(dot(n0, qn)), 48.0);
+            float wd = exp(-abs(d0 - qd) / (0.06 * max(d0, 0.05) + 1e-3));
+            float l1 = dot(c1, float3(0.299, 0.587, 0.114));
+            float wl = exp(-abs(l0 - l1) / max(pc.phi * 0.25 * (l0 + l1 + 0.1), 1e-3));
+            float w = kern[abs(dx)] * kern[abs(dy)] * wn * wd * wl;
+            sum += c1 * w;
+            ws += w;
+        }
+    }
+    bTmp[dst] = float4(sum / max(ws, 1e-6), 0.0);
 }

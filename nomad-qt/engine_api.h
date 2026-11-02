@@ -88,9 +88,11 @@ struct EngPt {
     bool on = false;     // este quadro e renderizado pelo path tracer
     bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
     int spp = 16, bounces = 6, night = 0;
+    int denoise = 0;           // 1 = filtro a-trous guiado por normal/profundidade/albedo no fim do render
     int ntri = 0, nnode = 0;
     std::vector<float> pos;    // 12 floats por triangulo (p0, p1, p2 como float4)
     std::vector<float> shade;  // 16 floats por triangulo (n0, n1, n2 [w de n2 = metal], cor [w = rugosidade])
+    std::vector<float> texi;   // 12 floats por triangulo: (u0,v0,u1,v1), (u2,v2,camada base,camada metal/rug), (camada normal, recorte, 0, 0); camada < 0 = sem textura
     std::vector<float> nodes;  // 8 floats por no (min, esq/primeiro, max, quantidade; os inteiros vao como bits de float)
 };
 struct EngVkFrame {

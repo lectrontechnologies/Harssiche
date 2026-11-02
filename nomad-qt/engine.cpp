@@ -687,7 +687,7 @@ struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob 
 int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
 bool gMcGround=false,gMcHaveCam=false;   // estado do futuro path tracer (Etapa 3): chao e invalidacao do acumulo
 int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcFrame=0;
-bool gMcLeak=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
+bool gMcLeak=true,gMcDn=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
 bool gCapReq=false,gCapNow=false;int gCapW=1280,gCapH=720;
 int gVidFps=30,gRA=-1,gRB=-1,gAutoPng=0,gPrevSeq=0;bool gMcNight=false,gRenderReq=false;std::string gPrevPath;
 double gSigS=-1;float gDt=.016f;
@@ -823,23 +823,52 @@ void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
  if(gMcGround){TriD a;a.col=V{.25f,.25f,.25f};a.rou=.85f;V q[4]={{-60,-.002f,-60},{60,-.002f,-60},{60,-.002f,60},{-60,-.002f,60}};
   for(int k=0;k<3;k++)a.n[k]=V{0,1,0};TriD b=a;a.p[0]=q[0];a.p[1]=q[2];a.p[2]=q[1];b.p[0]=q[0];b.p[1]=q[3];b.p[2]=q[2];gTD.push_back(a);gTD.push_back(b);}
  if(gTD.empty()){TriD t;t.p[0]=V{1e6f,1e6f,1e6f};t.p[1]=V{1e6f+1,1e6f,1e6f};t.p[2]=V{1e6f,1e6f+1,1e6f};gTD.push_back(t);}}
-int bvhRec(int b,int e){int id_=(int)gBN.size();gBN.push_back(BN());BN n;n.mn=V{1e30f,1e30f,1e30f};n.mx=V{-1e30f,-1e30f,-1e30f};V cmn=n.mn,cmx=n.mx;
- for(int i=b;i<e;i++){TriD&t=gTD[gOrd[i]];for(int k=0;k<3;k++){n.mn=vmin(n.mn,t.p[k]);n.mx=vmax(n.mx,t.p[k]);}cmn=vmin(cmn,gCen[gOrd[i]]);cmx=vmax(cmx,gCen[gOrd[i]]);}
- if(e-b<=4){n.lf=b;n.cnt=e-b;gBN[id_]=n;return id_;}
- V ex=cmx-cmn;int ax=(ex.x>ex.y&&ex.x>ex.z)?0:(ex.y>ex.z?1:2);int m=(b+e)/2;
- std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a,int c){return (&gCen[a].x)[ax]<(&gCen[c].x)[ax];});
- bvhRec(b,m);int r=bvhRec(m,e);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
+// BVH binaria por SAH (16 faixas por eixo); folhas de ate 4 triangulos; o filho esquerdo e sempre o proximo no
+static float bvhArea(const V&mn,const V&mx){float dx=mx.x-mn.x,dy=mx.y-mn.y,dz=mx.z-mn.z;return dx<0?0.f:2.f*(dx*dy+dy*dz+dz*dx);}
+int bvhRec(int b,int e,int depth=0){
+ const int id_=(int)gBN.size();gBN.push_back(BN());
+ BN n;n.mn=V{1e30f,1e30f,1e30f};n.mx=V{-1e30f,-1e30f,-1e30f};V cmn=n.mn,cmx=n.mx;
+ for(int i=b;i<e;i++){const TriD&t=gTD[gOrd[i]];for(int k=0;k<3;k++){n.mn=vmin(n.mn,t.p[k]);n.mx=vmax(n.mx,t.p[k]);}cmn=vmin(cmn,gCen[gOrd[i]]);cmx=vmax(cmx,gCen[gOrd[i]]);}
+ const int cnt=e-b;
+ if(cnt<=1||depth>=60){n.lf=b;n.cnt=cnt;gBN[id_]=n;return id_;}
+ const V ex{cmx.x-cmn.x,cmx.y-cmn.y,cmx.z-cmn.z};
+ const int ax=(ex.x>ex.y&&ex.x>ex.z)?0:(ex.y>ex.z?1:2);
+ const float ext=(&ex.x)[ax],lo=(&cmn.x)[ax];
+ int m=-1;
+ if(ext>1e-9f){
+  const int NB=16;struct Bin{V mn{1e30f,1e30f,1e30f},mx{-1e30f,-1e30f,-1e30f};int c=0;};Bin bin[NB];
+  const float kb=(float)NB*(1.f-1e-5f)/ext;
+  auto binOf=[&](int ti){int k=(int)(((&gCen[ti].x)[ax]-lo)*kb);return k<0?0:(k>=NB?NB-1:k);};
+  for(int i=b;i<e;i++){const int ti=gOrd[i];Bin&bb=bin[binOf(ti)];bb.c++;const TriD&t=gTD[ti];for(int k=0;k<3;k++){bb.mn=vmin(bb.mn,t.p[k]);bb.mx=vmax(bb.mx,t.p[k]);}}
+  float rA[NB];int rC[NB];V amn{1e30f,1e30f,1e30f},amx{-1e30f,-1e30f,-1e30f};int ac=0;
+  for(int i=NB-1;i>0;i--){if(bin[i].c){amn=vmin(amn,bin[i].mn);amx=vmax(amx,bin[i].mx);}ac+=bin[i].c;rA[i-1]=bvhArea(amn,amx);rC[i-1]=ac;}
+  amn=V{1e30f,1e30f,1e30f};amx=V{-1e30f,-1e30f,-1e30f};ac=0;
+  float best=1e30f;int bs=-1;
+  for(int i=0;i<NB-1;i++){if(bin[i].c){amn=vmin(amn,bin[i].mn);amx=vmax(amx,bin[i].mx);}ac+=bin[i].c;
+   if(ac==0||rC[i]==0)continue;const float c=(float)ac*bvhArea(amn,amx)+(float)rC[i]*rA[i];if(c<best){best=c;bs=i;}}
+  if(bs>=0){
+   const float an=bvhArea(n.mn,n.mx);const float split=2.f+(an>0?best/an:(float)cnt);   // custo de descer + custo dos filhos
+   if(cnt<=4&&split>=(float)cnt){n.lf=b;n.cnt=cnt;gBN[id_]=n;return id_;}             // folha e mais barata
+   const int mid=(int)(std::partition(gOrd.begin()+b,gOrd.begin()+e,[&](int ti){return binOf(ti)<=bs;})-gOrd.begin());
+   if(mid>b&&mid<e)m=mid;
+  }
+ }
+ if(m<0){ // sem divisao boa (centroides iguais): metade por indice
+  if(cnt<=4){n.lf=b;n.cnt=cnt;gBN[id_]=n;return id_;}
+  m=(b+e)/2;std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a2,int c2){return (&gCen[a2].x)[ax]<(&gCen[c2].x)[ax];});}
+ bvhRec(b,m,depth+1);const int r=bvhRec(m,e,depth+1);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
 // ---------- path tracer: cena para o compute ----------
 static void ptBuild(EngPt&p,int spp,int bn,int night){
  gatherTris();const int n=(int)gTD.size();
  gCen.resize(n);gOrd.resize(n);
  for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
  gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
- p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;
- p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
- for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];
+ p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;p.denoise=gMcDn?1:0;
+ p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.texi.assign((size_t)n*12,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
+ for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];float*ti=&p.texi[(size_t)i*12];
   for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
-  sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;}
+  sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;
+  ti[0]=t.uv[0][0];ti[1]=t.uv[0][1];ti[2]=t.uv[1][0];ti[3]=t.uv[1][1];ti[4]=t.uv[2][0];ti[5]=t.uv[2][1];ti[6]=t.tb;ti[7]=t.tm;ti[8]=t.tn;ti[9]=t.ac;ti[10]=0;ti[11]=0;}
  for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
   q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
 static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
@@ -1685,6 +1714,7 @@ void api_cmd(int c, float a, float b) {
     case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
     case 17: gGtao = a > .5f; break;                                  // GTAO do NanoFarm
     case 29: gRend = std::clamp((int)roundf(a), 0, 1); gPtJob.run = false; break;   // renderizador
+    case 31: gMcDn = a > .5f; break;                                   // denoise do Parallax
     case 30: gMcSpp = std::clamp((int)roundf(a), 1, 4096); break;                  // amostras por pixel
     case 28: gAOs = std::clamp(a, 0.f, 1.f); break;                   // intensidade do GTAO
     case 18: startImage((int)roundf(a)); break;

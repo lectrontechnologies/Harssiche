@@ -286,9 +286,9 @@ bool VkRend::create(QQuickWindow *w) {
     // descritores, buffers por slot e amostrador
     VkDescriptorPoolSize ps[2] = {};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 5;  // + path tracer
+    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 7;  // + path tracer
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = 2 + 2 * kMaxSlots + 12;  // + GTAO (viewport e captura)
+    ps[1].descriptorCount = 2 + 2 * kMaxSlots + 13;  // + GTAO (viewport e captura) + texturas do path tracer
     VkDescriptorPoolCreateInfo dpi = {};
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpi.maxSets = 3 * kMaxSlots + 4 + 6 + 1;
@@ -1686,10 +1686,15 @@ void VkRend::aoPass(QQuickWindow *w, int pw, int ph, const EngVkFrame &f) {
 struct PtPC {
     float eye[3], tanY;
     float right[3], aspect;
-    float up[3], pad0;
-    float fwd[3], pad1;
+    float up[3];
+    int32_t ntex;
+    float fwd[3];
+    int32_t dn;
     int32_t w, h, y0, rows;
     int32_t sample, bounces, night, ntri;
+    int32_t src, stp;
+    float phi;
+    int32_t pad2;
 };
 
 bool VkRend::ptInit() {
@@ -1697,16 +1702,16 @@ bool VkRend::ptInit() {
     if (P.init) return true;
     if (P.fail) return false;
     P.fail = true;
-    VkDescriptorSetLayoutBinding bb[5] = {};
-    for (int i = 0; i < 5; ++i) {
+    VkDescriptorSetLayoutBinding bb[8] = {};
+    for (int i = 0; i < 8; ++i) {
         bb[i].binding = uint32_t(i);
-        bb[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        bb[i].descriptorType = i == 7 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bb[i].descriptorCount = 1;
         bb[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo dl = {};
     dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dl.bindingCount = 5;
+    dl.bindingCount = 8;
     dl.pBindings = bb;
     if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
     VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
@@ -1728,16 +1733,20 @@ bool VkRend::ptInit() {
     };
     P.mT = mod(k_pt_trace, k_pt_trace_size);
     P.mR = mod(k_pt_resolve, k_pt_resolve_size);
-    if (!P.mT || !P.mR) return false;
-    for (int i = 0; i < 2; ++i) {
+    P.mD = mod(k_pt_dnprep, k_pt_dnprep_size);
+    P.mA = mod(k_pt_dnstep, k_pt_dnstep_size);
+    if (!P.mT || !P.mR || !P.mD || !P.mA) return false;
+    VkShaderModule mods[4] = {P.mT, P.mR, P.mD, P.mA};
+    VkPipeline *outs[4] = {&P.pTrace, &P.pRes, &P.pDi, &P.pAt};
+    for (int i = 0; i < 4; ++i) {
         VkComputePipelineCreateInfo ci = {};
         ci.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
         ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        ci.stage.module = i ? P.mR : P.mT;
+        ci.stage.module = mods[i];
         ci.stage.pName = "main";
         ci.layout = P.pl;
-        if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, i ? &P.pRes : &P.pTrace) != VK_SUCCESS) return false;
+        if (m_df->vkCreateComputePipelines(m_dev, VK_NULL_HANDLE, 1, &ci, nullptr, outs[i]) != VK_SUCCESS) return false;
     }
     VkDescriptorSetAllocateInfo ai = {};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1753,22 +1762,24 @@ bool VkRend::ptInit() {
 void VkRend::ptFree() {
     PtS &P = m_pt;
     if (m_df && m_dev) {
-        for (VkPipeline p : {P.pTrace, P.pRes})
+        for (VkPipeline p : {P.pTrace, P.pRes, P.pDi, P.pAt})
             if (p) m_df->vkDestroyPipeline(m_dev, p, nullptr);
-        for (VkShaderModule m : {P.mT, P.mR})
+        for (VkShaderModule m : {P.mT, P.mR, P.mD, P.mA})
             if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
         if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
         if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
-        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.acc, &P.out}) freeBuf(*b);
+        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out}) freeBuf(*b);
     }
     P = PtS();
 }
 
-// envia a cena (triangulos + BVH) e prepara o acumulo
+// envia a cena (triangulos + BVH + texturas por triangulo) e prepara o acumulo
 bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
     PtS &P = m_pt;
     const EngPt &e = f.pt;
-    if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 || e.nodes.size() < size_t(e.nnode) * 8) return false;
+    if (e.ntri <= 0 || e.nnode <= 0 || e.pos.size() < size_t(e.ntri) * 12 || e.shade.size() < size_t(e.ntri) * 16 ||
+        e.texi.size() < size_t(e.ntri) * 12 || e.nodes.size() < size_t(e.nnode) * 8)
+        return false;
     auto need = [&](Buf &b, size_t bytes) {
         bytes = std::max<size_t>(bytes, 16);
         if (b.b && b.size >= bytes) return true;
@@ -1776,15 +1787,20 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
         return mkBuf(b, VkDeviceSize(bytes), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     };
     const size_t nPix = size_t(cw) * size_t(ch);
+    // denoise: acima disso o buffer extra do filtro ficaria grande demais
+    P.dn = e.denoise != 0 && nPix <= 5000000;
     if (!need(P.pos, size_t(e.ntri) * 48) || !need(P.shade, size_t(e.ntri) * 64) || !need(P.nodes, size_t(e.nnode) * 32) ||
-        !need(P.acc, nPix * 16) || !need(P.out, nPix * 4))
+        !need(P.texi, size_t(e.ntri) * 48) || !need(P.acc, nPix * (P.dn ? 48 : 16)) || !need(P.tmp, P.dn ? nPix * 32 : 16) ||
+        !need(P.out, nPix * 4))
         return false;
     std::memcpy(P.pos.p, e.pos.data(), size_t(e.ntri) * 48);
     std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
     std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
-    VkDescriptorBufferInfo bi[5] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.acc.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet wr[5] = {};
-    for (int i = 0; i < 5; ++i) {
+    std::memcpy(P.texi.p, e.texi.data(), size_t(e.ntri) * 48);
+    VkDescriptorBufferInfo bi[7] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.texi.b, 0, VK_WHOLE_SIZE},
+                                    {P.acc.b, 0, VK_WHOLE_SIZE}, {P.tmp.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet wr[7] = {};
+    for (int i = 0; i < 7; ++i) {
         wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[i].dstSet = P.set;
         wr[i].dstBinding = uint32_t(i);
@@ -1792,7 +1808,7 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
         wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wr[i].pBufferInfo = &bi[i];
     }
-    m_df->vkUpdateDescriptorSets(m_dev, 5, wr, 0, nullptr);
+    m_df->vkUpdateDescriptorSets(m_dev, 7, wr, 0, nullptr);
     for (int i = 0; i < 3; ++i) {
         P.eye[i] = f.cam[i];
         P.right[i] = f.mcR[i];
@@ -1825,11 +1841,30 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
     } else if (!P.active) {
         return 2;  // continuacao sem trabalho em andamento: o motor recomeca com a cena
     }
+    // texturas de material: so valem se o array ligado ao viewport e a versao atual; senao o path tracer usa so as cores
+    {
+        int tsz = 0;
+        unsigned tver = 0;
+        const int tn = eng_vk_tex_count(tsz, tver);
+        const bool okTex = tn > 0 && m_texImg.view && tver == m_texVer;
+        if (!okTex && !m_dummyImg.view) return 2;
+        P.ntex = okTex ? tn : 0;
+        VkDescriptorImageInfo ti = {m_sampRep, okTex ? m_texImg.view : m_dummyImg.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet tw = {};
+        tw.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        tw.dstSet = P.set;
+        tw.dstBinding = 7;
+        tw.descriptorCount = 1;
+        tw.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        tw.pImageInfo = &ti;
+        m_df->vkUpdateDescriptorSets(m_dev, 1, &tw, 0, nullptr);
+    }
     using Clk = std::chrono::steady_clock;
     auto secs = [](Clk::time_point a, Clk::time_point b) { return std::chrono::duration<double>(b - a).count(); };
 
     // um comando: uma faixa de linhas de uma amostra (ou a conversao final)
-    auto run = [&](bool resolve, int y0, int rows) -> bool {
+    // pipe: 0 = caminhos, 1 = conversao final, 2 = prepara o filtro, 3 = passo do filtro
+    auto run = [&](int pipe, int y0, int rows, int step = 1, int src = 0, float phi = 1.f) -> bool {
         PtPC pc = {};
         for (int i = 0; i < 3; ++i) {
             pc.eye[i] = P.eye[i];
@@ -1847,13 +1882,18 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
         pc.bounces = P.bn;
         pc.night = P.night;
         pc.ntri = P.ntri;
+        pc.ntex = P.ntex;
+        pc.dn = P.dn ? 1 : 0;
+        pc.src = src;
+        pc.stp = step;
+        pc.phi = phi;
         VkCommandBuffer cb = m_ccb;
         m_df->vkResetCommandBuffer(cb, 0);
         VkCommandBufferBeginInfo bi = {};
         bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         if (m_df->vkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) return false;
-        m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, resolve ? P.pRes : P.pTrace);
+        m_df->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe == 0 ? P.pTrace : (pipe == 1 ? P.pRes : (pipe == 2 ? P.pDi : P.pAt)));
         m_df->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, P.pl, 0, 1, &P.set, 0, nullptr);
         m_df->vkCmdPushConstants(cb, P.pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof pc, &pc);
         m_df->vkCmdDispatch(cb, uint32_t((P.w + 7) / 8), uint32_t((rows + 7) / 8), 1);
@@ -1876,7 +1916,7 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
     while (P.done < P.spp) {
         const int rows = std::min(P.band, P.h - P.row);
         const auto ta = Clk::now();
-        if (!run(false, P.row, rows)) {
+        if (!run(0, P.row, rows)) {
             P.active = false;
             return 2;
         }
@@ -1893,7 +1933,24 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
     }
     if (P.done < P.spp) return 3;
 
-    if (!run(true, 0, P.h)) {
+    int finalSrc = 0;
+    if (P.dn) {  // denoise: iluminacao desmodulada pelo albedo + 5 passos a-trous (1, 2, 4, 8, 16 px), em faixas de linhas
+        auto bands = [&](int pipe, int step, int src, float phi) -> bool {
+            const int bh = std::max(256, P.band);
+            for (int y = 0; y < P.h; y += bh)
+                if (!run(pipe, y, std::min(bh, P.h - y), step, src, phi)) return false;
+            return true;
+        };
+        static const float kPhi[5] = {4.f, 2.f, 1.5f, 1.f, 1.f};
+        bool ok = bands(2, 1, 0, 1.f);
+        for (int k = 0; ok && k < 5; ++k) ok = bands(3, 1 << k, k & 1, kPhi[k]);
+        if (!ok) {
+            P.active = false;
+            return 2;
+        }
+        finalSrc = 5 & 1;  // cada passo troca o buffer de leitura; o resultado do quinto fica no buffer 1
+    }
+    if (!run(1, 0, P.h, 1, finalSrc)) {
         P.active = false;
         return 2;
     }

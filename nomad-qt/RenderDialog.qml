@@ -21,6 +21,7 @@ Item {
     property bool gtao: true
     property real gtaoS: 0.85
     property int spp: 64
+    property bool denoise: true
     property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
     function open() {
@@ -63,6 +64,7 @@ Item {
         view.command(28, gtaoS)
         view.command(29, renderer === 3 ? 1 : 0)
         view.command(30, spp)
+        view.command(31, denoise ? 1 : 0)
     }
 
     // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -153,6 +155,15 @@ Item {
                     labels: ["16", "64", "256"]
                     index: dlg.spp <= 16 ? 0 : (dlg.spp <= 64 ? 1 : 2)
                     onPicked: function (i) { dlg.spp = [16, 64, 256][i]; dlg.view.command(30, dlg.spp) }
+                }
+                Item {
+                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 3
+                    Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Denoise"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                    Rectangle {
+                        x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                        Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.denoise }
+                        MouseArea { anchors.fill: parent; onClicked: { dlg.denoise = !dlg.denoise; dlg.view.command(31, dlg.denoise ? 1 : 0) } }
+                    }
                 }
 
                 Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }
