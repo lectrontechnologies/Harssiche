@@ -15,6 +15,7 @@
 #include "stb_truetype.h"
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
+#include <sys/stat.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -687,7 +688,7 @@ struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob 
 int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
 bool gMcGround=false,gMcHaveCam=false;   // estado do futuro path tracer (Etapa 3): chao e invalidacao do acumulo
 int gMcSpp=64,gMcSamples=0,gMcRow=0,gMcFrame=0;
-bool gMcLeak=true,gMcDn=true,gVidBusy=false;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
+bool gMcLeak=true,gMcDn=true,gMcEnv=true,gVidBusy=false;float gMcEnvScale=1.f;int gMcFinW=1920,gMcBn=12,gVidQ=1;const char*gVidQN[3]={"Rapido 1024","Medio 1280","Alto 1920"};
 bool gCapReq=false,gCapNow=false;int gCapW=1280,gCapH=720;
 int gVidFps=30,gRA=-1,gRB=-1,gAutoPng=0,gPrevSeq=0;bool gMcNight=false,gRenderReq=false;std::string gPrevPath;
 double gSigS=-1;float gDt=.016f;
@@ -858,12 +859,57 @@ int bvhRec(int b,int e,int depth=0){
   m=(b+e)/2;std::nth_element(gOrd.begin()+b,gOrd.begin()+m,gOrd.begin()+e,[&](int a2,int c2){return (&gCen[a2].x)[ax]<(&gCen[c2].x)[ax];});}
  bvhRec(b,m,depth+1);const int r=bvhRec(m,e,depth+1);n.lf=r;n.cnt=0;gBN[id_]=n;return id_;}
 // ---------- path tracer: cena para o compute ----------
+// ---------- ambiente HDRI do path tracer ----------
+// A distribuicao 2D por luminancia segue o InfiniteLight do LuxCoreRender (Apache 2.0, (c) 1998-2020 LuxCoreRender authors):
+// [largura, altura (uint), marginal, condicional 0..h-1]; cada 1D = [n (uint), func[n] normalizada, cdf[n+1]]
+static void envDist1D(const float*f,unsigned n,float*o,float*avg){
+ const unsigned cnt=n;memcpy(o,&cnt,4);float*fn=o+1,*cdf=o+1+n;cdf[0]=0.f;
+ for(unsigned i=1;i<=n;i++)cdf[i]=cdf[i-1]+f[i-1]/(float)n;
+ const float c=cdf[n];*avg=c;
+ if(c>0.f){for(unsigned i=1;i<=n;i++)cdf[i]/=c;for(unsigned i=0;i<n;i++)fn[i]=f[i]/c;}
+ else for(unsigned i=0;i<n;i++)fn[i]=f[i];}
+static bool envBuild(const float*rgba,int w,int h,std::vector<float>&dist){
+ std::vector<float> lum((size_t)w*h);
+ for(size_t i=0;i<lum.size();i++){float l=.299f*rgba[i*4]+.587f*rgba[i*4+1]+.114f*rgba[i*4+2];lum[i]=(l>0.f&&l<1e30f)?l:0.f;}
+ const size_t mS=(size_t)h*2+2,cS=(size_t)w*2+2;
+ dist.assign(2+mS+(size_t)h*cS,0.f);
+ const unsigned W=(unsigned)w,H=(unsigned)h;memcpy(&dist[0],&W,4);memcpy(&dist[1],&H,4);
+ std::vector<float> marg((size_t)h);float tot=0.f;
+ for(int v=0;v<h;v++)envDist1D(&lum[(size_t)v*w],(unsigned)w,&dist[2+mS+(size_t)v*cS],&marg[(size_t)v]);
+ envDist1D(marg.data(),(unsigned)h,&dist[2],&tot);
+ return tot>0.f;}
+static std::shared_ptr<std::vector<float>> gEnvRgb,gEnvDist;static int gEnvW=0,gEnvH=0;static long gEnvKey=-1;
+// procura hdri.hdr em Downloads (ou na pasta do app); recarrega so se o arquivo mudou
+static bool envLoad(){
+ std::string path;struct stat sb;
+ const std::string cand[2]={"/storage/emulated/0/Download/hdri.hdr",std::string(gDir)+"/hdri.hdr"};
+ for(int i=0;i<2;i++)if(stat(cand[i].c_str(),&sb)==0&&sb.st_size>16){path=cand[i];break;}
+ if(path.empty()){gEnvKey=-1;gEnvRgb.reset();gEnvDist.reset();return false;}
+ const long key=(long)sb.st_size*1000003L+(long)sb.st_mtime;
+ if(key==gEnvKey&&gEnvRgb&&gEnvDist)return true;
+ gEnvKey=key;gEnvRgb.reset();gEnvDist.reset();
+ FILE*f=fopen(path.c_str(),"rb");if(!f)return false;
+ std::vector<unsigned char> b((size_t)sb.st_size);const bool rd_=fread(b.data(),1,b.size(),f)==b.size();fclose(f);if(!rd_)return false;
+ int w=0,h=0,c=0;float*px=stbi_loadf_from_memory(b.data(),(int)b.size(),&w,&h,&c,3);
+ if(!px||w<8||h<4){if(px)stbi_image_free(px);return false;}
+ const int fct=std::max(1,(w+2047)/2048);const int ow=w/fct,oh=h/fct;   // limita a 2048 de largura (media de blocos)
+ auto rgb=std::make_shared<std::vector<float>>((size_t)ow*oh*4);
+ for(int y=0;y<oh;y++)for(int x=0;x<ow;x++){double r=0,g=0,bl=0;
+  for(int j=0;j<fct;j++)for(int i=0;i<fct;i++){const float*q=&px[((size_t)(y*fct+j)*w+(x*fct+i))*3];r+=q[0];g+=q[1];bl+=q[2];}
+  const double k=1.0/(fct*fct);float*o=&(*rgb)[((size_t)y*ow+x)*4];
+  o[0]=std::min((float)(r*k),65000.f);o[1]=std::min((float)(g*k),65000.f);o[2]=std::min((float)(bl*k),65000.f);o[3]=1.f;}
+ stbi_image_free(px);
+ auto dist=std::make_shared<std::vector<float>>();
+ if(!envBuild(rgb->data(),ow,oh,*dist))return false;
+ gEnvRgb=rgb;gEnvDist=dist;gEnvW=ow;gEnvH=oh;return true;}
 static void ptBuild(EngPt&p,int spp,int bn,int night){
  gatherTris();const int n=(int)gTD.size();
  gCen.resize(n);gOrd.resize(n);
  for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
  gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
  p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;p.denoise=gMcDn?1:0;
+ p.envOn=0;p.envRgb.reset();p.envDist.reset();
+ if(gMcEnv&&envLoad()){p.envOn=1;p.envScale=gMcEnvScale;p.envRgb=gEnvRgb;p.envDist=gEnvDist;}
  p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.texi.assign((size_t)n*12,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
  for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];float*ti=&p.texi[(size_t)i*12];
   for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
@@ -1714,6 +1760,7 @@ void api_cmd(int c, float a, float b) {
     case 16: gMcLeak = a > .5f; gMcHaveCam = false; break;
     case 17: gGtao = a > .5f; break;                                  // GTAO do NanoFarm
     case 29: gRend = std::clamp((int)roundf(a), 0, 1); gPtJob.run = false; break;   // renderizador
+    case 32: gMcEnv = a > .5f; break;                                  // HDRI (Downloads/hdri.hdr) no Parallax
     case 31: gMcDn = a > .5f; break;                                   // denoise do Parallax
     case 30: gMcSpp = std::clamp((int)roundf(a), 1, 4096); break;                  // amostras por pixel
     case 28: gAOs = std::clamp(a, 0.f, 1.f); break;                   // intensidade do GTAO

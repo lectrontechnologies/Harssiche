@@ -21,6 +21,10 @@ struct PC {
     int stp;       // filtro: distancia do passo a-trous (1, 2, 4, 8, 16)
     float phi;     // filtro: tolerancia de luminancia
     int pad2;
+    int envOn;       // 1 = ambiente vem do HDRI (bEnv/bEnvD)
+    float envScale;
+    int pad3;
+    int pad4;
 };
 [[vk::push_constant]] ConstantBuffer<PC> pc;
 
@@ -32,7 +36,10 @@ struct PC {
 [[vk::binding(4, 0)]] RWStructuredBuffer<float4> bAcc;
 [[vk::binding(5, 0)]] RWStructuredBuffer<float4> bTmp;  // filtro: 2 float4 por pixel (ping-pong de iluminacao desmodulada pelo albedo)
 [[vk::binding(6, 0)]] RWStructuredBuffer<uint> bOut;    // RGBA8 final, de cima para baixo
-[[vk::binding(7, 0)]] Sampler2DArray uTex;              // texturas de material (camadas size x size RGBA8)
+[[vk::binding(7, 0)]] Sampler2DArray uTex;
+[[vk::binding(8, 0)]] StructuredBuffer<float> bEnvD;    // distribuicao 2D do HDRI por luminancia (formato do InfiniteLight do LuxCore)
+[[vk::binding(9, 0)]] StructuredBuffer<float4> bEnv;    // HDRI equirretangular (Y para cima), 1 float4 por texel
+              // texturas de material (camadas size x size RGBA8)
 
 static const float PI = 3.14159265;
 
@@ -198,6 +205,127 @@ float3 skyRad(float3 d, int night)
     return lerp(hor, zen, sqrt(t)) * 0.8;
 }
 
+// ---------- ambiente HDRI: amostragem por importancia ----------
+// Adaptado do InfiniteLight / Distribution2D do LuxCoreRender (Apache 2.0, (c) 1998-2020 LuxCoreRender authors),
+// com o mapeamento latitude-longitude em Y para cima.
+static const float INV_2PI = 0.15915494309;
+static const float INV_PI = 0.31830988618;
+
+float2 envDirToUV(float3 d, out float mapPdf)
+{
+    float theta = acos(clamp(d.y, -1.0, 1.0));
+    float phi = atan2(d.z, d.x);
+    if (phi < 0.0) phi += 2.0 * PI;
+    float sinT = sin(theta);
+    mapPdf = sinT > 1e-6 ? INV_2PI * INV_PI / sinT : 0.0;
+    return float2(phi * INV_2PI, theta * INV_PI);
+}
+
+float3 envUVToDir(float2 uv, out float mapPdf)
+{
+    float phi = uv.x * 2.0 * PI;
+    float theta = uv.y * PI;
+    float sinT = sin(theta);
+    mapPdf = sinT > 1e-6 ? INV_2PI * INV_PI / sinT : 0.0;
+    return float3(sinT * cos(phi), cos(theta), sinT * sin(phi));
+}
+
+// primeiro indice em [0, n) com val < cdf[i] (std::upper_bound)
+uint envUpper(uint cdfBase, uint n, float val)
+{
+    uint first = 0u;
+    uint count = n;
+    while (count > 0u) {
+        uint step = count / 2u;
+        uint it = first + step;
+        if (!(val < bEnvD[cdfBase + it])) {
+            first = it + 1u;
+            count -= step + 1u;
+        } else {
+            count = step;
+        }
+    }
+    return first;
+}
+
+float envSample1D(uint base, float u, out float pdf, out uint off)
+{
+    uint count = asuint(bEnvD[base]);
+    uint fB = base + 1u;
+    uint cB = base + 1u + count;
+    if (u <= bEnvD[cB]) {
+        pdf = bEnvD[fB];
+        off = 0u;
+        return 0.0;
+    }
+    if (u >= bEnvD[cB + count]) {
+        pdf = bEnvD[fB + count - 1u];
+        off = count - 1u;
+        return 1.0;
+    }
+    uint o = envUpper(cB, count + 1u, u) - 1u;
+    float du = (u - bEnvD[cB + o]) / (bEnvD[cB + o + 1u] - bEnvD[cB + o]);
+    pdf = bEnvD[fB + o];
+    off = o;
+    return (float(o) + du) / float(count);
+}
+
+float envPdf1D(uint base, float u)
+{
+    uint count = asuint(bEnvD[base]);
+    uint o = min(count - 1u, uint(clamp(u, 0.0, 1.0) * float(count)));
+    return bEnvD[base + 1u + o];
+}
+
+// amostra (u, v) do HDRI proporcional a luminancia; pdf em relacao a area de (u, v)
+float2 envSample(float u0, float u1, out float pdf)
+{
+    uint w = asuint(bEnvD[0]);
+    uint h = asuint(bEnvD[1]);
+    uint mSize = 2u * h + 2u;
+    uint cSize = 2u * w + 2u;
+    float pdf1;
+    uint row;
+    float v = envSample1D(2u, u1, pdf1, row);
+    float pdf0;
+    uint dummy;
+    float u = envSample1D(2u + mSize + row * cSize, u0, pdf0, dummy);
+    pdf = pdf0 * pdf1;
+    return float2(u, v);
+}
+
+float envPdf(float2 uv)
+{
+    uint w = asuint(bEnvD[0]);
+    uint h = asuint(bEnvD[1]);
+    uint mSize = 2u * h + 2u;
+    uint cSize = 2u * w + 2u;
+    uint row = min(h - 1u, uint(clamp(uv.y, 0.0, 1.0) * float(h)));
+    return envPdf1D(2u + mSize + row * cSize, uv.x) * envPdf1D(2u, uv.y);
+}
+
+// radiancia do HDRI com filtro bilinear (volta em u, limita em v)
+float3 envLookup(float2 uv)
+{
+    int w = int(asuint(bEnvD[0]));
+    int h = int(asuint(bEnvD[1]));
+    float fx = uv.x * float(w) - 0.5;
+    float fy = uv.y * float(h) - 0.5;
+    int x0 = int(floor(fx));
+    int y0 = int(floor(fy));
+    float tx = fx - float(x0);
+    float ty = fy - float(y0);
+    int xa = ((x0 % w) + w) % w;
+    int xb = (((x0 + 1) % w) + w) % w;
+    int ya = clamp(y0, 0, h - 1);
+    int yb = clamp(y0 + 1, 0, h - 1);
+    float3 c00 = bEnv[uint(ya * w + xa)].xyz;
+    float3 c10 = bEnv[uint(ya * w + xb)].xyz;
+    float3 c01 = bEnv[uint(yb * w + xa)].xyz;
+    float3 c11 = bEnv[uint(yb * w + xb)].xyz;
+    return lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty);
+}
+
 void basis(float3 n, out float3 t, out float3 b)
 {
     float s = n.z >= 0.0 ? 1.0 : -1.0;
@@ -295,6 +423,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
     float3 aovN = float3(0.0);   // normal, profundidade e albedo do primeiro hit (para o denoise)
     float aovD = 1e4;
     float3 aovA = float3(1.0);
+    float prevPdf = 1.0;         // pdf (angulo solido) da direcao amostrada no rebatimento anterior, para o MIS com o ambiente
     // cone do sol (abertura angular ~1,7 grau: sombras suaves)
     const float cosMax = 0.99955;
 
@@ -303,7 +432,19 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         int ti;
         float hu, hv;
         if (!traverse(o, d, tmax, ti, hu, hv, false)) {
-            L += beta * skyRad(d, pc.night);
+            if (pc.envOn != 0) {
+                float mp;
+                float2 euv = envDirToUV(d, mp);
+                float3 er = envLookup(euv) * pc.envScale;
+                float wB = 1.0;
+                if (bounce > 0 && mp > 0.0) {
+                    float pl = envPdf(euv) * mp;
+                    wB = (prevPdf * prevPdf) / (prevPdf * prevPdf + pl * pl);
+                }
+                L += beta * er * wB;
+            } else {
+                L += beta * skyRad(d, pc.night);
+            }
             break;
         }
         float w0 = 1.0 - hu - hv;
@@ -377,8 +518,8 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float eps = 1e-4 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
         float3 org = p + ng * eps;
 
-        // luz direta: sol (cone) com raio de sombra
-        {
+        // luz direta: sol (cone) com raio de sombra, ou o HDRI amostrado por importancia (com MIS)
+        if (pc.envOn == 0) {
             float u1 = rnd(st);
             float u2 = rnd(st);
             float cz = 1.0 - u1 * (1.0 - cosMax);
@@ -398,6 +539,26 @@ void csTrace(uint3 id : SV_DispatchThreadID)
                     L += beta * f * (wl.z) * sunE;
                 }
             }
+        } else {
+            float eu0 = rnd(st);
+            float eu1 = rnd(st);
+            float pdfL;
+            float2 suv = envSample(eu0, eu1, pdfL);
+            float mp2;
+            float3 ldir = envUVToDir(suv, mp2);
+            pdfL *= mp2;
+            float3 wl = float3(dot(ldir, T), dot(ldir, B), dot(ldir, ns));
+            if (pdfL > 1e-9 && wl.z > 0.0 && dot(ldir, ng) > 0.0) {
+                float tm2 = 1e30;
+                int sh;
+                float su, sv;
+                if (!traverse(org, ldir, tm2, sh, su, sv, true)) {
+                    float pdfB;
+                    float3 f = evalBsdf(m, wo, wl, pdfB);
+                    float wL = (pdfL * pdfL) / (pdfL * pdfL + pdfB * pdfB);
+                    L += beta * f * (wl.z / pdfL) * (envLookup(suv) * pc.envScale) * wL;
+                }
+            }
         }
 
         // proxima direcao
@@ -409,6 +570,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float pdf;
         float3 f = evalBsdf(m, wo, wi, pdf);
         if (pdf < 1e-7) break;
+        prevPdf = pdf;
         beta *= f * (wi.z / pdf);
         if (bounce >= 3) {
             float q = clamp(max(beta.x, max(beta.y, beta.z)), 0.05, 0.95);
@@ -419,7 +581,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         o = org;
     }
     if (any(isnan(L)) || any(isinf(L))) L = float3(0.0);
-    L = min(L, float3(30.0));
+    L = min(L, float3(pc.envOn != 0 ? 100.0 : 30.0));
     uint idx = uint(py) * uint(pc.w) + uint(px);
     if (pc.dn != 0) {
         uint bi = idx * 3u;

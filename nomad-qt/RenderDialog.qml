@@ -22,6 +22,7 @@ Item {
     property real gtaoS: 0.85
     property int spp: 64
     property bool denoise: true
+    property bool hdri: true
     property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
 
     function open() {
@@ -65,6 +66,7 @@ Item {
         view.command(29, renderer === 3 ? 1 : 0)
         view.command(30, spp)
         view.command(31, denoise ? 1 : 0)
+        view.command(32, hdri ? 1 : 0)
     }
 
     // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -163,6 +165,15 @@ Item {
                         x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
                         Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.denoise }
                         MouseArea { anchors.fill: parent; onClicked: { dlg.denoise = !dlg.denoise; dlg.view.command(31, dlg.denoise ? 1 : 0) } }
+                    }
+                }
+                Item {
+                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 3
+                    Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "HDRI"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
+                    Rectangle {
+                        x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
+                        Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.hdri }
+                        MouseArea { anchors.fill: parent; onClicked: { dlg.hdri = !dlg.hdri; dlg.view.command(32, dlg.hdri ? 1 : 0) } }
                     }
                 }
 

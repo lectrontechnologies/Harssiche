@@ -286,7 +286,7 @@ bool VkRend::create(QQuickWindow *w) {
     // descritores, buffers por slot e amostrador
     VkDescriptorPoolSize ps[2] = {};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 7;  // + path tracer
+    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 9;  // + path tracer
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = 2 + 2 * kMaxSlots + 13;  // + GTAO (viewport e captura) + texturas do path tracer
     VkDescriptorPoolCreateInfo dpi = {};
@@ -1695,6 +1695,9 @@ struct PtPC {
     int32_t src, stp;
     float phi;
     int32_t pad2;
+    int32_t envOn;
+    float envScale;
+    int32_t pad3, pad4;
 };
 
 bool VkRend::ptInit() {
@@ -1702,8 +1705,8 @@ bool VkRend::ptInit() {
     if (P.init) return true;
     if (P.fail) return false;
     P.fail = true;
-    VkDescriptorSetLayoutBinding bb[8] = {};
-    for (int i = 0; i < 8; ++i) {
+    VkDescriptorSetLayoutBinding bb[10] = {};
+    for (int i = 0; i < 10; ++i) {
         bb[i].binding = uint32_t(i);
         bb[i].descriptorType = i == 7 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bb[i].descriptorCount = 1;
@@ -1711,7 +1714,7 @@ bool VkRend::ptInit() {
     }
     VkDescriptorSetLayoutCreateInfo dl = {};
     dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dl.bindingCount = 8;
+    dl.bindingCount = 10;
     dl.pBindings = bb;
     if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
     VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
@@ -1768,7 +1771,7 @@ void VkRend::ptFree() {
             if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
         if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
         if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
-        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out}) freeBuf(*b);
+        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env}) freeBuf(*b);
     }
     P = PtS();
 }
@@ -1793,22 +1796,33 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
         !need(P.texi, size_t(e.ntri) * 48) || !need(P.acc, nPix * (P.dn ? 48 : 16)) || !need(P.tmp, P.dn ? nPix * 32 : 16) ||
         !need(P.out, nPix * 4))
         return false;
+    // ambiente HDRI (se houver): imagem float4 + distribuicao 2D; sem HDRI, buffers minimos que o shader nao le
+    const bool envOk = e.envOn != 0 && e.envRgb && e.envDist && !e.envRgb->empty() && !e.envDist->empty();
+    if (!need(P.env, envOk ? e.envRgb->size() * 4 : 16) || !need(P.envD, envOk ? e.envDist->size() * 4 : 16)) return false;
+    P.envOn = envOk ? 1 : 0;
+    P.envScale = e.envScale;
+    if (envOk) {
+        std::memcpy(P.env.p, e.envRgb->data(), e.envRgb->size() * 4);
+        std::memcpy(P.envD.p, e.envDist->data(), e.envDist->size() * 4);
+    }
     std::memcpy(P.pos.p, e.pos.data(), size_t(e.ntri) * 48);
     std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
     std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
     std::memcpy(P.texi.p, e.texi.data(), size_t(e.ntri) * 48);
-    VkDescriptorBufferInfo bi[7] = {{P.pos.b, 0, VK_WHOLE_SIZE}, {P.shade.b, 0, VK_WHOLE_SIZE}, {P.nodes.b, 0, VK_WHOLE_SIZE}, {P.texi.b, 0, VK_WHOLE_SIZE},
-                                    {P.acc.b, 0, VK_WHOLE_SIZE}, {P.tmp.b, 0, VK_WHOLE_SIZE}, {P.out.b, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet wr[7] = {};
-    for (int i = 0; i < 7; ++i) {
+    Buf *sb[9] = {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env};
+    const uint32_t bnd[9] = {0, 1, 2, 3, 4, 5, 6, 8, 9};   // o binding 7 e a imagem de texturas
+    VkDescriptorBufferInfo bi[9];
+    VkWriteDescriptorSet wr[9] = {};
+    for (int i = 0; i < 9; ++i) {
+        bi[i] = {sb[i]->b, 0, VK_WHOLE_SIZE};
         wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[i].dstSet = P.set;
-        wr[i].dstBinding = uint32_t(i);
+        wr[i].dstBinding = bnd[i];
         wr[i].descriptorCount = 1;
         wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wr[i].pBufferInfo = &bi[i];
     }
-    m_df->vkUpdateDescriptorSets(m_dev, 7, wr, 0, nullptr);
+    m_df->vkUpdateDescriptorSets(m_dev, 9, wr, 0, nullptr);
     for (int i = 0; i < 3; ++i) {
         P.eye[i] = f.cam[i];
         P.right[i] = f.mcR[i];
@@ -1887,6 +1901,8 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
         pc.src = src;
         pc.stp = step;
         pc.phi = phi;
+        pc.envOn = P.envOn;
+        pc.envScale = P.envScale;
         VkCommandBuffer cb = m_ccb;
         m_df->vkResetCommandBuffer(cb, 0);
         VkCommandBufferBeginInfo bi = {};

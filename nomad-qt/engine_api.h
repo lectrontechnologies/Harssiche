@@ -1,6 +1,7 @@
 #pragma once
 #include <jni.h>
 #include <string>
+#include <memory>
 #include <vector>
 
 // Evento ja traduzido do Qt para o formato que o motor entende.
@@ -88,6 +89,10 @@ struct EngPt {
     bool on = false;     // este quadro e renderizado pelo path tracer
     bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
     int spp = 16, bounces = 6, night = 0;
+    int envOn = 0;             // 1 = ambiente vem do HDRI (envRgb/envDist); 0 = ceu procedural + sol
+    float envScale = 1.f;
+    std::shared_ptr<std::vector<float>> envRgb;   // float4 por texel, equirretangular (Y para cima)
+    std::shared_ptr<std::vector<float>> envDist;  // distribuicao 2D por luminancia (formato do InfiniteLight do LuxCore)
     int denoise = 0;           // 1 = filtro a-trous guiado por normal/profundidade/albedo no fim do render
     int ntri = 0, nnode = 0;
     std::vector<float> pos;    // 12 floats por triangulo (p0, p1, p2 como float4)
