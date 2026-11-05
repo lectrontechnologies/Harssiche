@@ -820,7 +820,7 @@ void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
     else{pp=xf(w,pp);nn=xn(w,nn);}
     float l=sqrtf(dot(nn,nn));t.p[k]=pp;t.n[k]=l>1e-8f?nn*(1/l):V{0,1,0};size_t ui=(v/6+k)*2;if(m.uv.size()>=ui+2){t.uv[k][0]=m.uv[ui];t.uv[k][1]=m.uv[ui+1];}}
    gTD.push_back(t);}}
- if(gMcGround){TriD a;a.col=V{.25f,.25f,.25f};a.rou=.85f;V q[4]={{-60,-.002f,-60},{60,-.002f,-60},{60,-.002f,60},{-60,-.002f,60}};
+ if(gMcGround){TriD a;a.col=V{.25f,.25f,.25f};a.rou=.85f;V q[4]={{-1500,-.002f,-1500},{1500,-.002f,-1500},{1500,-.002f,1500},{-1500,-.002f,1500}};
   for(int k=0;k<3;k++)a.n[k]=V{0,1,0};TriD b=a;a.p[0]=q[0];a.p[1]=q[2];a.p[2]=q[1];b.p[0]=q[0];b.p[1]=q[3];b.p[2]=q[2];gTD.push_back(a);gTD.push_back(b);}
  if(gTD.empty()){TriD t;t.p[0]=V{1e6f,1e6f,1e6f};t.p[1]=V{1e6f+1,1e6f,1e6f};t.p[2]=V{1e6f,1e6f+1,1e6f};gTD.push_back(t);}}
 // BVH binaria por SAH (16 faixas por eixo); folhas de ate 4 triangulos; o filho esquerdo e sempre o proximo no

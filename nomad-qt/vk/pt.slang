@@ -182,7 +182,7 @@ float3 sunDir()
 }
 float3 sunIrr(int night)
 {
-    return night != 0 ? float3(0.10, 0.13, 0.22) : float3(2.6, 2.45, 2.2);
+    return night != 0 ? float3(0.10, 0.13, 0.22) : float3(1.7, 1.6, 1.45);
 }
 float3 skyRad(float3 d, int night)
 {
@@ -191,10 +191,11 @@ float3 skyRad(float3 d, int night)
         float3 s = lerp(float3(0.020, 0.028, 0.050), float3(0.004, 0.007, 0.020), sqrt(t));
         return d.y < 0.0 ? s * 0.5 : s;
     }
-    float3 hor = float3(0.85, 0.90, 1.00);
-    float3 zen = float3(0.28, 0.50, 0.95);
-    if (d.y < 0.0) return lerp(hor, float3(0.30, 0.28, 0.26), saturate(-d.y * 4.0));
-    return lerp(hor, zen, sqrt(t));
+    // ceu mais suave (menos saturado) e abaixo do horizonte segue a cor do horizonte, sem faixa escura
+    float3 hor = float3(0.78, 0.83, 0.92);
+    float3 zen = float3(0.36, 0.52, 0.82);
+    if (d.y < 0.0) return lerp(hor, float3(0.42, 0.44, 0.47), saturate(-d.y * 2.0)) * 0.8;
+    return lerp(hor, zen, sqrt(t)) * 0.8;
 }
 
 void basis(float3 n, out float3 t, out float3 b)
@@ -436,9 +437,9 @@ void csTrace(uint3 id : SV_DispatchThreadID)
 
 float3 shoulder(float3 c)
 {
-    // linear ate 0,8; acima disso comprime suavemente (sem mudar os tons medios)
-    float3 hi = 0.8 + 0.2 * tanh((c - 0.8) / 0.2);
-    return float3(c.x < 0.8 ? c.x : hi.x, c.y < 0.8 ? c.y : hi.y, c.z < 0.8 ? c.z : hi.z);
+    // linear ate 0,55; acima disso comprime suavemente, para o claro nao estourar e chapar a cor
+    float3 hi = 0.55 + 0.45 * tanh((c - 0.55) / 0.45);
+    return float3(c.x < 0.55 ? c.x : hi.x, c.y < 0.55 ? c.y : hi.y, c.z < 0.55 ? c.z : hi.z);
 }
 float3 toSrgb(float3 c)
 {
