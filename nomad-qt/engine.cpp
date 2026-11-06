@@ -809,15 +809,19 @@ void sculptSync(){if(!gSculpt)return;
  if(!sculptable(sel)){gSculpt=false;gSt.on=false;gCanUndo=gSceneCU;gCanRedo=gSceneCR;return;}
  sculptPrep(sel);int mi=objs[sel].mesh;if(gSM.mesh!=mi||gSM.nsv!=meshes[mi].cpu.size()/6){gSt.on=false;smBuild(mi);gSU.clear();gSR.clear();}
  gCanUndo=!gSU.empty();gCanRedo=!gSR.empty();}
-void gatherTris(){gTD.clear();std::vector<std::vector<M>> JS(skins.size());
+int gPtSkipped=0;
+void gatherTris(){gTD.clear();gPtSkipped=0;std::vector<std::vector<M>> JS(skins.size());
  for(size_t s2=0;s2<skins.size();s2++){Skin&sk=skins[s2];JS[s2].resize(sk.j.size());
   for(size_t k=0;k<sk.j.size();k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<sk.fz.size()?sk.fz[k]:id());JS[s2][k]=mul(jw,sk.ibm[k]);}}
- for(int i=0;i<(int)objs.size()&&gTD.size()<150000;i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide||o.nor)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
-  M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
+ const size_t kCapTri=500000;   // limite de triangulos no Parallax; objeto que nao cabe e pulado (os demais continuam)
+ for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide||o.nor)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
+  if(gTD.size()+m.cpu.size()/18>kCapTri){gPtSkipped++;continue;}
+  M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned&&m.skin.size()>=(m.cpu.size()/6)*8;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
   for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;
    for(int k=0;k<3;k++){const float*c=&m.cpu[v+6*k];V pp{c[0],c[1],c[2]},nn{c[3],c[4],c[5]};
-    if(sk){const float*sw=&m.skin[(v/6+k)*8];V ap,an;for(int q=0;q<4;q++){float wq=sw[4+q];if(wq<=0)continue;int ji=(int)sw[q];if(ji>=(int)JS[o.skin].size())continue;
-      ap=ap+xf(JS[o.skin][ji],pp)*wq;an=an+xn(JS[o.skin][ji],nn)*wq;}pp=ap;nn=an;}
+    if(sk){const float*sw=&m.skin[(v/6+k)*8];V ap,an;float ws=0;for(int q=0;q<4;q++){float wq=sw[4+q];if(wq<=0)continue;int ji=(int)sw[q];if(ji<0||ji>=(int)JS[o.skin].size())continue;
+      ap=ap+xf(JS[o.skin][ji],pp)*wq;an=an+xn(JS[o.skin][ji],nn)*wq;ws+=wq;}
+      if(ws>1e-6f){pp=ap*(1.f/ws);nn=an*(1.f/ws);}else{pp=xf(w,pp);nn=xn(w,nn);}}   // vertice sem peso valido fica no objeto, nao na origem
     else{pp=xf(w,pp);nn=xn(w,nn);}
     float l=sqrtf(dot(nn,nn));t.p[k]=pp;t.n[k]=l>1e-8f?nn*(1/l):V{0,1,0};size_t ui=(v/6+k)*2;if(m.uv.size()>=ui+2){t.uv[k][0]=m.uv[ui];t.uv[k][1]=m.uv[ui+1];}}
    gTD.push_back(t);}}
@@ -903,7 +907,8 @@ static bool envLoad(){
  if(!envBuild(rgb->data(),ow,oh,*dist))return false;
  gEnvRgb=rgb;gEnvDist=dist;gEnvW=ow;gEnvH=oh;return true;}
 static void ptBuild(EngPt&p,int spp,int bn,int night){
- gatherTris();const int n=(int)gTD.size();
+ gatherTris();if(gPtSkipped>0)toast(fm("Parallax: limite de 500 mil triangulos, %d objeto(s) ficaram de fora",gPtSkipped));
+ const int n=(int)gTD.size();
  gCen.resize(n);gOrd.resize(n);
  for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
  gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
@@ -1133,10 +1138,15 @@ void pickPath(const std::string&p){
  if(gPick==0){importPath(p);return;}
  if(gPick==1){if(loadMAD(p,true)){size_t sl=p.rfind('/');std::string n=sl==std::string::npos?p:p.substr(sl+1);size_t dt=n.rfind('.');if(dt!=std::string::npos)n=n.substr(0,dt);gProj=n;}}
  else loadMAD(p,false);}
-bool setJoints(int si){if(si<0||si>=(int)skins.size())return false;Skin&sk=skins[si];int n=std::min((int)sk.j.size(),64);static M J[64];
- for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());J[k]=mul(jw,sk.ibm[k]);}
-
- if(true){if(!gVkOut||n<=0||(int)(gVkOut->pal.size()/16)+n>kEngVkMaxMats){gVkPal=-1;return false;}gVkPal=(int)(gVkOut->pal.size()/16);for(int k=0;k<n;k++)gVkOut->pal.insert(gVkOut->pal.end(),J[k].m,J[k].m+16);return true;}return true;}
+// paleta de ossos do quadro: uma por skin (varios objetos do mesmo rig dividem a mesma) e com todos os ossos
+bool setJoints(int si){if(si<0||si>=(int)skins.size()||!gVkOut)return false;Skin&sk=skins[si];const int n=(int)sk.j.size();
+ static std::vector<int> ofs;if(gVkOut->pal.empty()||ofs.size()!=skins.size())ofs.assign(skins.size(),-1);   // paleta vazia = quadro novo
+ if(n<=0){gVkPal=-1;return false;}
+ if(ofs[si]>=0&&(size_t)(ofs[si]+n)*16<=gVkOut->pal.size()){gVkPal=ofs[si];return true;}
+ if((int)(gVkOut->pal.size()/16)+n>kEngVkMaxMats){gVkPal=-1;return false;}
+ ofs[si]=gVkPal=(int)(gVkOut->pal.size()/16);
+ for(int k=0;k<n;k++){M jw=sk.j[k]>=0?worldM(sk.j[k]):(k<(int)sk.fz.size()?sk.fz[k]:id());const M J=mul(jw,sk.ibm[k]);gVkOut->pal.insert(gVkOut->pal.end(),J.m,J.m+16);}
+ return true;}
 // ---------- controles do rig: formas personalizadas (custom shapes) ----------
 const char*gShapeN[6]={"Cubo","Circulo","Esfera","Diamante","Cruz","Quadrado"};
 static void ctrlSeg(V a,V b,float tk,float r,float g,float bl,float al,float ext=-1.f){V d=b-a;float sl=vlen(d);if(sl<1e-7f)return;float ll=ext<0?sl*1.15f:sl+ext;V e1=d*(1/sl),r0=fabsf(e1.y)<.9f?V{0,1,0}:V{1,0,0},e2=norm(cross(e1,r0)),e3=cross(e1,e2),mid=(a+b)*.5f;
