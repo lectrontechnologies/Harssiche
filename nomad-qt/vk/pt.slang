@@ -23,7 +23,7 @@ struct PC {
     int pad2;
     int envOn;       // 1 = ambiente vem do HDRI (bEnv/bEnvD)
     float envScale;
-    int pad3;
+    int glass;       // 1 = ha vidro na cena: a sombra atravessa a transmissao
     int pad4;
 };
 [[vk::push_constant]] ConstantBuffer<PC> pc;
@@ -326,6 +326,36 @@ float3 envLookup(float2 uv)
     return lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty);
 }
 
+// visibilidade para luz direta: com vidro na cena, a sombra atravessa a transmissao (atenuada pela cor) em vez de bloquear
+float3 shadowTrans(float3 o, float3 d)
+{
+    float3 T = float3(1.0);
+    float3 org = o;
+    for (int i = 0; i < 6; i++) {
+        float tm = 1e30;
+        int hit;
+        float hu, hv;
+        if (!traverse(org, d, tm, hit, hu, hv, false)) return T;
+        float4 s0 = bShade[hit * 4];
+        float4 s2 = bShade[hit * 4 + 2];
+        float4 s3 = bShade[hit * 4 + 3];
+        float tr = saturate(s0.w) * (1.0 - saturate(s2.w));
+        if (tr < 0.5) return float3(0.0);
+        T *= saturate(s3.xyz) * 0.9;
+        org = org + d * (tm + 1e-4 * (1.0 + tm));
+    }
+    return T;
+}
+
+float3 visibility(float3 o, float3 d)
+{
+    if (pc.glass != 0) return shadowTrans(o, d);
+    float tm = 1e30;
+    int hit;
+    float hu, hv;
+    return traverse(o, d, tm, hit, hu, hv, true) ? float3(0.0) : float3(1.0);
+}
+
 void basis(float3 n, out float3 t, out float3 b)
 {
     float s = n.z >= 0.0 ? 1.0 : -1.0;
@@ -423,11 +453,16 @@ void csTrace(uint3 id : SV_DispatchThreadID)
     float3 aovN = float3(0.0);   // normal, profundidade e albedo do primeiro hit (para o denoise)
     float aovD = 1e4;
     float3 aovA = float3(1.0);
+    bool inMed = false;          // dentro de um meio com absorcao (vidro, agua)
+    float3 sigA = float3(0.0);
+    bool prevDelta = false;      // o ultimo rebatimento foi especular (vidro): sem MIS com o ambiente
+    int glassN = 0;              // interacoes com vidro nao contam como rebatimentos
     float prevPdf = 1.0;         // pdf (angulo solido) da direcao amostrada no rebatimento anterior, para o MIS com o ambiente
     // cone do sol (abertura angular ~1,7 grau: sombras suaves)
     const float cosMax = 0.99955;
 
-    for (int bounce = 0; bounce < pc.bounces; bounce++) {
+    for (int bounce = 0; bounce < pc.bounces + 12; bounce++) {
+        if (bounce - glassN >= pc.bounces) break;
         float tmax = 1e30;
         int ti;
         float hu, hv;
@@ -437,16 +472,19 @@ void csTrace(uint3 id : SV_DispatchThreadID)
                 float2 euv = envDirToUV(d, mp);
                 float3 er = envLookup(euv) * pc.envScale;
                 float wB = 1.0;
-                if (bounce > 0 && mp > 0.0) {
+                if (bounce > 0 && mp > 0.0 && !prevDelta) {
                     float pl = envPdf(euv) * mp;
                     wB = (prevPdf * prevPdf) / (prevPdf * prevPdf + pl * pl);
                 }
                 L += beta * er * wB;
             } else {
                 L += beta * skyRad(d, pc.night);
+                // o sol visto por reflexo ou refracao (vidro): disco do cone
+                if (prevDelta && dot(d, sunD) > cosMax) L += beta * sunE / (2.0 * PI * (1.0 - cosMax));
             }
             break;
         }
+        if (inMed) beta *= exp(-sigA * tmax);      // absorcao (Beer-Lambert) no trecho percorrido dentro do vidro
         float w0 = 1.0 - hu - hv;
         float4 s0 = bShade[ti * 4];
         float4 s1 = bShade[ti * 4 + 1];
@@ -462,6 +500,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float3 ns = w0 * s0.xyz + hu * s1.xyz + hv * s2.xyz;
         float nl2 = dot(ns, ns);
         ns = nl2 > 1e-12 ? ns * rsqrt(nl2) : ng;
+        float3 nOut = ns;
 
         // texturas de material
         float2 uv = w0 * tA.xy + hu * tA.zw + hv * tB.xy;
@@ -496,6 +535,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
                 }
             }
         }
+        bool backf = dot(nOut, d) > 0.0;     // o raio esta saindo do objeto (vem por dentro)
         if (dot(ns, d) > 0.0) ns = -ns;      // sempre do lado de quem olha
         if (dot(ng, ns) < 0.0) ng = -ng;
         rou = clamp(rou, 0.04, 1.0);
@@ -506,7 +546,8 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float ls = dot(m.f0, float3(0.3, 0.6, 0.1));
         float ld_ = dot(m.cd, float3(0.3, 0.6, 0.1));
         m.pSpec = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
-        if (bounce == 0) {
+        float trn = saturate(s0.w) * (1.0 - metal);   // chance de o raio interagir como vidro
+        if (bounce == 0 && trn < 0.5) {   // vidro fica sem guia no denoise (a imagem refratada nao deve ser borrada)
             aovN = ns;
             aovD = tmax;
             aovA = max(m.cd + m.f0, float3(0.02));
@@ -517,6 +558,39 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float3 wo = float3(dot(-d, T), dot(-d, B), dot(-d, ns));
         float eps = 1e-4 * (1.0 + max(abs(p.x), max(abs(p.y), abs(p.z))));
         float3 org = p + ng * eps;
+
+        // vidro: reflete ou refrata pelo Fresnel (dieletrico) e o raio segue; sem luz direta (a luz vem pelos caminhos)
+        if (trn > 0.0 && rnd(st) < trn) {
+            float ior = max(s1.w, 1.0);
+            float rr = backf ? ior : 1.0 / ior;          // n do meio de origem / n do meio de destino
+            float cosI = saturate(dot(-d, ns));
+            float kk = 1.0 - rr * rr * (1.0 - cosI * cosI);
+            float F = 1.0;
+            float cosT = 0.0;
+            if (kk > 0.0) {
+                cosT = sqrt(kk);
+                float rs = (rr * cosI - cosT) / (rr * cosI + cosT);
+                float rp = (cosI - rr * cosT) / (cosI + rr * cosT);
+                F = 0.5 * (rs * rs + rp * rp);
+            }
+            if (rnd(st) < F) {
+                d = reflect(d, ns);
+                o = org;
+            } else {
+                d = normalize(rr * d + (rr * cosI - cosT) * ns);
+                o = p - ng * eps;
+                if (backf) {
+                    inMed = false;
+                } else {
+                    inMed = true;
+                    sigA = -log(max(col, float3(0.002)));
+                }
+            }
+            prevDelta = true;
+            glassN++;
+            continue;
+        }
+        prevDelta = false;
 
         // luz direta: sol (cone) com raio de sombra, ou o HDRI amostrado por importancia (com MIS)
         if (pc.envOn == 0) {
@@ -530,13 +604,11 @@ void csTrace(uint3 id : SV_DispatchThreadID)
             float3 ldir = normalize(st1 * (sz * cos(ph)) + st2 * (sz * sin(ph)) + sunD * cz);
             float3 wl = float3(dot(ldir, T), dot(ldir, B), dot(ldir, ns));
             if (wl.z > 0.0 && dot(ldir, ng) > 0.0) {
-                float tm2 = 1e30;
-                int sh;
-                float su, sv;
-                if (!traverse(org, ldir, tm2, sh, su, sv, true)) {
+                float3 vis = visibility(org, ldir);
+                if (any(vis > 0.0)) {
                     float pdf0;
                     float3 f = evalBsdf(m, wo, wl, pdf0);
-                    L += beta * f * (wl.z) * sunE;
+                    L += beta * f * (wl.z) * sunE * vis;
                 }
             }
         } else {
@@ -549,14 +621,12 @@ void csTrace(uint3 id : SV_DispatchThreadID)
             pdfL *= mp2;
             float3 wl = float3(dot(ldir, T), dot(ldir, B), dot(ldir, ns));
             if (pdfL > 1e-9 && wl.z > 0.0 && dot(ldir, ng) > 0.0) {
-                float tm2 = 1e30;
-                int sh;
-                float su, sv;
-                if (!traverse(org, ldir, tm2, sh, su, sv, true)) {
+                float3 vis = visibility(org, ldir);
+                if (any(vis > 0.0)) {
                     float pdfB;
                     float3 f = evalBsdf(m, wo, wl, pdfB);
                     float wL = (pdfL * pdfL) / (pdfL * pdfL + pdfB * pdfB);
-                    L += beta * f * (wl.z / pdfL) * (envLookup(suv) * pc.envScale) * wL;
+                    L += beta * f * (wl.z / pdfL) * (envLookup(suv) * pc.envScale) * wL * vis;
                 }
             }
         }

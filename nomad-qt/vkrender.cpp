@@ -1697,7 +1697,7 @@ struct PtPC {
     int32_t pad2;
     int32_t envOn;
     float envScale;
-    int32_t pad3, pad4;
+    int32_t glass, pad4;
 };
 
 bool VkRend::ptInit() {
@@ -1800,6 +1800,7 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
     const bool envOk = e.envOn != 0 && e.envRgb && e.envDist && !e.envRgb->empty() && !e.envDist->empty();
     if (!need(P.env, envOk ? e.envRgb->size() * 4 : 16) || !need(P.envD, envOk ? e.envDist->size() * 4 : 16)) return false;
     P.envOn = envOk ? 1 : 0;
+    P.glass = e.glass;
     P.envScale = e.envScale;
     if (envOk) {
         std::memcpy(P.env.p, e.envRgb->data(), e.envRgb->size() * 4);
@@ -1902,6 +1903,7 @@ int VkRend::capturePT(QQuickWindow *w, const EngVkFrame &f, int cw, int ch, std:
         pc.stp = step;
         pc.phi = phi;
         pc.envOn = P.envOn;
+        pc.glass = P.glass;
         pc.envScale = P.envScale;
         VkCommandBuffer cb = m_ccb;
         m_df->vkResetCommandBuffer(cb, 0);

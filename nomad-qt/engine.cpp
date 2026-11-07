@@ -2,6 +2,7 @@
 #include "engine_shim.h"
 #include <android/log.h>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -66,7 +67,7 @@ M model(const T&t){
 
 // ---------- cena + animacao ----------
 struct Key{float t;T x;};
-struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;bool hide=false,nor=false;};
+struct Obj{int mesh;V col;T cur;std::vector<Key> k;char nm[24]="";int parent=-1;float len=1;float met=0,rou=.5f;float trans=0,ior=1.5f;int skin=-1;int tb=-1,tm=-1,tn=-1;float ac=0;int kind=0,shape=0;float fov=.8727f;bool hide=false,nor=false;};
 std::vector<Obj> objs;
 int sel=-1,tool=3,W=1,H=1;      // tool: 0 mover,1 girar,2 escalar,3 camera
 bool gAutoKey=false;float gRI=0;   // gRI: fracao da largura tomada pelo Outliner (QML)
@@ -423,6 +424,7 @@ FILE*openOut(const char*ext,std::string&path,bool&fb){long t=(long)time(nullptr)
  path=fm("/storage/emulated/0/Download/nomad_%ld.%s",t,ext);FILE*f=fopen(path.c_str(),"wb");
  if(!f){path=fm("%s/nomad_%ld.%s",gDir,t,ext);f=fopen(path.c_str(),"wb");fb=true;}return f;}
 void saved(const std::string&path,bool fb){toast("Salvo: "+path+(fb?"  (ative Acesso a todos os arquivos para salvar em Downloads)":""));}
+const int TEXN=1024,TEXMAX=16;std::vector<std::vector<unsigned char>> gTexCpu;unsigned gTexVer=0;
 void writeMAD(FILE*f){
  auto U_=[&](uint32_t v){fwrite(&v,4,1,f);};auto Fl=[&](float v){fwrite(&v,4,1,f);};
  fwrite("MAD2",1,4,f);U_(2);Fl(24);Fl(DUR);U_((uint32_t)(meshes.size()-6));
@@ -434,7 +436,13 @@ void writeMAD(FILE*f){
   const float*c=&o.cur.p.x;for(int i=0;i<9;i++)Fl(c[i]);U_((uint32_t)o.k.size());for(auto&k:o.k){Fl(k.t);const float*q=&k.x.p.x;for(int i=0;i<9;i++)Fl(q[i]);}}
  Fl(yaw);Fl(pitch);Fl(cd);Fl(tgt.x);Fl(tgt.y);Fl(tgt.z);Fl(tm);
  fwrite("RIG3",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs)U_((uint32_t)o.kind);for(auto&o:objs)U_((uint32_t)o.shape);for(auto&o:objs)Fl(o.fov);U_((uint32_t)rigs.size());
- for(auto&g:rigs){U_((uint32_t)g.a);U_((uint32_t)g.b);U_((uint32_t)g.c);U_((uint32_t)g.tgt);U_((uint32_t)g.pole);Fl(g.w);U_(g.rotc?1u:0u);U_((uint32_t)g.wk.size());for(auto&k:g.wk){Fl(k.first);Fl(k.second);}}}
+ for(auto&g:rigs){U_((uint32_t)g.a);U_((uint32_t)g.b);U_((uint32_t)g.c);U_((uint32_t)g.tgt);U_((uint32_t)g.pole);Fl(g.w);U_(g.rotc?1u:0u);U_((uint32_t)g.wk.size());for(auto&k:g.wk){Fl(k.first);Fl(k.second);}}
+ // TEX1: texturas (PNG), camadas de textura por objeto e UVs por malha; arquivos antigos sem este bloco continuam abrindo
+ fwrite("TEX1",1,4,f);U_((uint32_t)gTexCpu.size());
+ for(auto&t:gTexCpu){int len=0;unsigned char*png=stbi_write_png_to_mem(t.data(),TEXN*4,TEXN,TEXN,4,&len);U_((uint32_t)(png?len:0));if(png){fwrite(png,1,(size_t)len,f);free(png);}}
+ U_((uint32_t)objs.size());for(auto&o:objs){U_((uint32_t)o.tb);U_((uint32_t)o.tm);U_((uint32_t)o.tn);Fl(o.ac);}
+ U_((uint32_t)(meshes.size()-6));for(size_t i=6;i<meshes.size();i++){Mesh&m=meshes[i];U_((uint32_t)m.uv.size());if(!m.uv.empty())fwrite(m.uv.data(),4,m.uv.size(),f);}
+ fwrite("MAT1",1,4,f);U_((uint32_t)objs.size());for(auto&o:objs){Fl(o.trans);Fl(o.ior);}}   // MAT1: transmissao e IOR por objeto
 FILE*openOutName(const std::string&nm,const char*ext,std::string&path,bool&fb){fb=false;
  path=fm("/storage/emulated/0/Download/%s.%s",nm.c_str(),ext);FILE*f=fopen(path.c_str(),"wb");
  if(!f){path=fm("%s/%s.%s",gDir,nm.c_str(),ext);f=fopen(path.c_str(),"wb");fb=true;}return f;}
@@ -589,7 +597,6 @@ void scanFiles(){gFiles.clear();std::vector<std::pair<time_t,std::string>> v;
  scanDir("/storage/emulated/0/Download",1,v);scanDir(gDir,1,v);
  std::sort(v.rbegin(),v.rend());for(size_t i=0;i<v.size()&&i<200;i++)gFiles.push_back(v[i].second);}
 // ---------- texturas (array 1024x1024, ate 16 imagens) ----------
-const int TEXN=1024,TEXMAX=16;std::vector<std::vector<unsigned char>> gTexCpu;unsigned gTexVer=0;
 int addTexture(const unsigned char*data,int len){
  if(!data||len<8||(int)gTexCpu.size()>=TEXMAX)return -1;int w=0,h=0,c=0;unsigned char*px=stbi_load_from_memory(data,len,&w,&h,&c,4);
  if(!px||w<1||h<1){if(px)stbi_image_free(px);return -1;}
@@ -617,7 +624,7 @@ void importGLTF(const std::string&path){
  if(cgltf_parse_file(&op,path.c_str(),&d)!=cgltf_result_success){toast("Falha ao ler o arquivo");return;}
  if(cgltf_load_buffers(&op,d,path.c_str())!=cgltf_result_success){cgltf_free(d);toast("Falta o .bin: ele precisa estar na mesma pasta do .gltf");return;}
  std::string dir=path.substr(0,path.rfind('/')+1);std::vector<int> imgc(d->images_count,-2);
- struct PR{int mesh=5;V col{.8f,.8f,.8f};float met=0,rou=.6f;int tb=-1,tm=-1,tn=-1;float ac=0;};
+ struct PR{int mesh=5;V col{.8f,.8f,.8f};float met=0,rou=.6f;float trans=0,ior=1.5f;int tb=-1,tm=-1,tn=-1;float ac=0;};
  std::vector<std::vector<PR>> prs(d->meshes_count);
  for(size_t m=0;m<d->meshes_count;m++)for(size_t pi=0;pi<d->meshes[m].primitives_count;pi++){
   cgltf_primitive&pr=d->meshes[m].primitives[pi];if(pr.type!=cgltf_primitive_type_triangles)continue;
@@ -631,6 +638,8 @@ void importGLTF(const std::string&path){
   if(pr.material){cgltf_material*mt=pr.material;
    if(mt->has_pbr_metallic_roughness){const float*c=mt->pbr_metallic_roughness.base_color_factor;res.col=V{c[0],c[1],c[2]};
     res.met=mt->pbr_metallic_roughness.metallic_factor;res.rou=mt->pbr_metallic_roughness.roughness_factor;
+    if(mt->has_transmission)res.trans=std::clamp((float)mt->transmission.transmission_factor,0.f,1.f);
+    if(mt->has_ior)res.ior=std::clamp((float)mt->ior.ior,1.f,3.f);
     if(tc&&mt->pbr_metallic_roughness.base_color_texture.texture)res.tb=gltfImage(d,mt->pbr_metallic_roughness.base_color_texture.texture->image,dir,imgc);
     if(tc&&mt->pbr_metallic_roughness.metallic_roughness_texture.texture)res.tm=gltfImage(d,mt->pbr_metallic_roughness.metallic_roughness_texture.texture->image,dir,imgc);}
    if(tc&&mt->normal_texture.texture)res.tn=gltfImage(d,mt->normal_texture.texture->image,dir,imgc);
@@ -642,7 +651,7 @@ void importGLTF(const std::string&path){
     if(nor){cgltf_accessor_read_float(nor,ix,f,3);N[k]=V{f[0],f[1],f[2]};}
     float jf[4]={0,0,0,0},wf[4]={1,0,0,0};
     if(jn&&wt){cgltf_accessor_read_float(jn,ix,jf,4);cgltf_accessor_read_float(wt,ix,wf,4);float sm=wf[0]+wf[1]+wf[2]+wf[3];
-     if(sm<1e-6f){wf[0]=1;wf[1]=wf[2]=wf[3]=0;jf[0]=0;}else for(int q=0;q<4;q++){if(jf[q]>=64){wf[q]=0;jf[q]=0;}wf[q]/=sm;}}
+     if(sm<1e-6f){wf[0]=1;wf[1]=wf[2]=wf[3]=0;jf[0]=0;}else for(int q=0;q<4;q++)wf[q]/=sm;}
     for(int q=0;q<4;q++){SK[k][q]=jf[q];SK[k][4+q]=wf[q];}
     float tv2[2]={0,0};if(tc)cgltf_accessor_read_float(tc,ix,tv2,2);UVk[k][0]=tv2[0];UVk[k][1]=tv2[1];}
    if(!nor){V fn=cross(P[1]-P[0],P[2]-P[0]);float l=sqrtf(dot(fn,fn));fn=l>1e-12f?fn*(1/l):V{0,1,0};N[0]=N[1]=N[2]=fn;}
@@ -652,7 +661,7 @@ void importGLTF(const std::string&path){
   mm.rad=r>0?r:1;if(jn&&wt)attachSkin(mm,sk);if(tc)attachUV(mm,uvs);meshes.push_back(mm);res.mesh=(int)meshes.size()-1;prs[m].push_back(res);}
  int base=(int)objs.size();size_t nn=d->nodes_count;int sb=(int)skins.size();
  for(size_t i=0;i<nn;i++){cgltf_node*nd=&d->nodes[i];Obj o;int mid=nd->mesh?(int)(nd->mesh-d->meshes):-1;
-  if(mid>=0&&!prs[mid].empty()){PR&q=prs[mid][0];o.mesh=q.mesh;o.col=q.col;o.met=q.met;o.rou=q.rou;o.tb=q.tb;o.tm=q.tm;o.tn=q.tn;o.ac=q.ac;}else{o.mesh=5;o.col=V{.85f,.85f,.65f};}
+  if(mid>=0&&!prs[mid].empty()){PR&q=prs[mid][0];o.mesh=q.mesh;o.col=q.col;o.met=q.met;o.rou=q.rou;o.tb=q.tb;o.tm=q.tm;o.tn=q.tn;o.ac=q.ac;o.trans=q.trans;o.ior=q.ior;}else{o.mesh=5;o.col=V{.85f,.85f,.65f};}
   snprintf(o.nm,24,"%s",nd->name?nd->name:"Node");o.skin=nd->skin?sb+(int)(nd->skin-d->skins):-1;o.parent=nd->parent?base+(int)(nd->parent-d->nodes):-1;T&t=o.cur;
   if(nd->has_matrix){float m[16];cgltf_node_transform_local(nd,m);t.p=V{m[12],m[13],m[14]};
    float sx=sqrtf(m[0]*m[0]+m[1]*m[1]+m[2]*m[2]),sy=sqrtf(m[4]*m[4]+m[5]*m[5]+m[6]*m[6]),sz=sqrtf(m[8]*m[8]+m[9]*m[9]+m[10]*m[10]);
@@ -665,7 +674,7 @@ void importGLTF(const std::string&path){
    if(ch->has_translation){V tv{ch->translation[0],ch->translation[1],ch->translation[2]};float l=sqrtf(dot(tv,tv));if(l>.01f){o.len=l;break;}}}}
   objs.push_back(o);}
  for(size_t i=0;i<nn;i++){cgltf_node*nd=&d->nodes[i];if(!nd->mesh)continue;int mid=(int)(nd->mesh-d->meshes);
-  for(size_t q=1;q<prs[mid].size();q++){PR&r=prs[mid][q];Obj o;o.mesh=r.mesh;o.col=r.col;o.met=r.met;o.rou=r.rou;o.tb=r.tb;o.tm=r.tm;o.tn=r.tn;o.ac=r.ac;
+  for(size_t q=1;q<prs[mid].size();q++){PR&r=prs[mid][q];Obj o;o.mesh=r.mesh;o.col=r.col;o.met=r.met;o.rou=r.rou;o.tb=r.tb;o.tm=r.tm;o.tn=r.tn;o.ac=r.ac;o.trans=r.trans;o.ior=r.ior;
    snprintf(o.nm,24,"%.20s.%d",objs[base+i].nm,(int)q);o.parent=base+(int)i;o.skin=objs[base+i].skin;objs.push_back(o);}}
  for(size_t si=0;si<d->skins_count;si++){cgltf_skin&cs=d->skins[si];Skin sk;
   for(size_t k=0;k<cs.joints_count;k++){sk.j.push_back(base+(int)(cs.joints[k]-d->nodes));M im=id();
@@ -679,10 +688,10 @@ void importGLTF(const std::string&path){
  cgltf_free(d);toast(fm("Importado: %d objetos",(int)nn));}
 // ---------- SSAO (meia resolucao) + render pbr ----------
 bool gMatcap=true,gBones=true,gGtao=true;float gAOs=.85f,gFps=0,gFAcc=0;int gFN=0,gHW=1,gHH=1;
-float gSlX[10]={0,0,1,0,0,0,0,0,0,0},gSlW[10]={1,1,1,1,1,1,1,1,1,1};
-void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==5){gSRad=20+(int)(v*180+.5f);return;}if(i==6){gSStr=.05f+v*.95f;return;}if(i==4){if(sel>=0&&objs[sel].kind==3)objs[sel].fov=.17f+v*2.23f;return;}if(i==7){if(sel>=0&&objs[sel].kind==4){float lo=objs[sel].shape==0?.3f:3.f,hi=objs[sel].shape==0?30.f:1000.f;objs[sel].len=lo*powf(hi/lo,v);}return;}if(i==8){if(sel>=0&&objs[sel].kind==4)objs[sel].fov=.1f+v*1.3f;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
+float gSlX[12]={0,0,1,0,0,0,0,0,0,0,0,0},gSlW[12]={1,1,1,1,1,1,1,1,1,1,1,1};
+void setSlider(int i,float x){float v=std::clamp((x-gSlX[i])/gSlW[i],0.f,1.f);if(i==2){gAOs=v;return;}if(i==5){gSRad=20+(int)(v*180+.5f);return;}if(i==6){gSStr=.05f+v*.95f;return;}if(i==4){if(sel>=0&&objs[sel].kind==3)objs[sel].fov=.17f+v*2.23f;return;}if(i==7){if(sel>=0&&objs[sel].kind==4){float lo=objs[sel].shape==0?.3f:3.f,hi=objs[sel].shape==0?30.f:1000.f;objs[sel].len=lo*powf(hi/lo,v);}return;}if(i==8){if(sel>=0&&objs[sel].kind==4)objs[sel].fov=.1f+v*1.3f;return;}if(i==9){if(sel>=0)objs[sel].trans=v;return;}if(i==10){if(sel>=0)objs[sel].ior=1.f+v*1.5f;return;}if(i==3){int ri=sel>=0?rigOf(sel):-1;if(ri>=0){rigs[ri].w=v;if(!rigs[ri].wk.empty())rigKeyW(rigs[ri],v);}return;}if(sel<0)return;if(i==0)objs[sel].met=v;else objs[sel].rou=v;}
 // ---------- triangulos da cena (base do futuro path tracer em compute/Slang; o BVH sera refeito) ----------
-struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
+struct TriD{V p[3],n[3];float uv[3][2]={};V col;float met=0,rou=.5f;float tr=0,ior=1.5f;float tb=-1,tm=-1,tn=-1,ac=0;};struct BN{V mn,mx;int lf=0,cnt=0;};
 std::vector<TriD> gTD;std::vector<int> gOrd;std::vector<V> gCen;std::vector<BN> gBN;
 struct PtJob{bool run=false;int cw=0,ch=0,spp=0,bn=0,night=0;float tm=0;};PtJob gPtJob;   // trabalho do path tracer em andamento (varios quadros)
 int gRend=0;   // renderizador: 0 = NanoFarm (raster), 1 = Parallax (path tracer)
@@ -817,7 +826,7 @@ void gatherTris(){gTD.clear();gPtSkipped=0;std::vector<std::vector<M>> JS(skins.
  for(int i=0;i<(int)objs.size();i++){Obj&o=objs[i];if(o.mesh==5||o.kind||o.hide||o.nor)continue;Mesh&m=meshes[o.mesh];if(m.cpu.empty())continue;
   if(gTD.size()+m.cpu.size()/18>kCapTri){gPtSkipped++;continue;}
   M w=worldM(i);bool sk=o.skin>=0&&o.skin<(int)skins.size()&&m.skinned&&m.skin.size()>=(m.cpu.size()/6)*8;V col{powf(o.col.x,2.2f),powf(o.col.y,2.2f),powf(o.col.z,2.2f)};
-  for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;
+  for(size_t v=0;v+17<m.cpu.size();v+=18){TriD t;t.col=col;t.met=o.met;t.rou=o.rou;t.tb=(float)o.tb;t.tm=(float)o.tm;t.tn=(float)o.tn;t.ac=o.ac;t.tr=o.trans;t.ior=o.ior;
    for(int k=0;k<3;k++){const float*c=&m.cpu[v+6*k];V pp{c[0],c[1],c[2]},nn{c[3],c[4],c[5]};
     if(sk){const float*sw=&m.skin[(v/6+k)*8];V ap,an;float ws=0;for(int q=0;q<4;q++){float wq=sw[4+q];if(wq<=0)continue;int ji=(int)sw[q];if(ji<0||ji>=(int)JS[o.skin].size())continue;
       ap=ap+xf(JS[o.skin][ji],pp)*wq;an=an+xn(JS[o.skin][ji],nn)*wq;ws+=wq;}
@@ -913,13 +922,16 @@ static void ptBuild(EngPt&p,int spp,int bn,int night){
  for(int i=0;i<n;i++){const TriD&t=gTD[i];gCen[i]=(t.p[0]+t.p[1]+t.p[2])*(1.f/3);gOrd[i]=i;}
  gBN.clear();gBN.reserve((size_t)n/2+16);bvhRec(0,n);
  p.ntri=n;p.nnode=(int)gBN.size();p.spp=spp;p.bounces=bn;p.night=night;p.denoise=gMcDn?1:0;
- p.envOn=0;p.envRgb.reset();p.envDist.reset();
+ p.glass=0;p.envOn=0;p.envRgb.reset();p.envDist.reset();
  if(gMcEnv&&envLoad()){p.envOn=1;p.envScale=gMcEnvScale;p.envRgb=gEnvRgb;p.envDist=gEnvDist;}
  p.pos.assign((size_t)n*12,0.f);p.shade.assign((size_t)n*16,0.f);p.texi.assign((size_t)n*12,0.f);p.nodes.assign((size_t)p.nnode*8,0.f);
+ int gl=0;
  for(int i=0;i<n;i++){const TriD&t=gTD[gOrd[i]];float*a=&p.pos[(size_t)i*12];float*sh=&p.shade[(size_t)i*16];float*ti=&p.texi[(size_t)i*12];
   for(int k=0;k<3;k++){a[4*k]=t.p[k].x;a[4*k+1]=t.p[k].y;a[4*k+2]=t.p[k].z;sh[4*k]=t.n[k].x;sh[4*k+1]=t.n[k].y;sh[4*k+2]=t.n[k].z;}
   sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;
+  sh[3]=t.tr;sh[7]=t.ior;if(t.tr*(1.f-t.met)>.001f)gl=1;   // transmissao e IOR nas posicoes livres (w das normais 0 e 1)
   ti[0]=t.uv[0][0];ti[1]=t.uv[0][1];ti[2]=t.uv[1][0];ti[3]=t.uv[1][1];ti[4]=t.uv[2][0];ti[5]=t.uv[2][1];ti[6]=t.tb;ti[7]=t.tm;ti[8]=t.tn;ti[9]=t.ac;ti[10]=0;ti[11]=0;}
+ p.glass=gl;
  for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
   q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
 static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
@@ -1021,7 +1033,7 @@ static void hmix(uint64_t&h,const void*p,size_t n){const unsigned char*b=(const 
 uint64_t stateHash(){uint64_t h=1469598103934665603ULL;
  for(size_t i=0;i<objs.size();i++){const Obj&o=objs[i];
   int meta[6]={o.mesh,o.parent,o.skin,o.kind,o.shape,(int)o.k.size()};hmix(h,meta,sizeof(meta));hmix(h,o.nm,strnlen(o.nm,24));
-  hmix(h,&o.col,sizeof(V));hmix(h,&o.met,4);hmix(h,&o.rou,4);hmix(h,&o.len,4);hmix(h,&o.fov,4);
+  hmix(h,&o.col,sizeof(V));hmix(h,&o.met,4);hmix(h,&o.rou,4);hmix(h,&o.trans,4);hmix(h,&o.ior,4);hmix(h,&o.len,4);hmix(h,&o.fov,4);
   bool derived=false;for(auto&g:rigs)if((g.a==(int)i||g.b==(int)i||g.c==(int)i)&&(g.w>.001f||!g.wk.empty()))derived=true; // osso movido pelo IK
   if(o.k.empty()&&!derived)hmix(h,&o.cur,sizeof(T));
   for(auto&k:o.k){hmix(h,&k.t,4);hmix(h,&k.x,sizeof(T));}}
@@ -1033,7 +1045,7 @@ void undoCommit(){uint64_t h=stateHash();if(h==gUHash)return;gUndo.push_back(std
 static void undoApply(const Snap&s){objs=s.o;skins=s.sk;rigs=s.rg;sel=s.sel<(int)objs.size()?s.sel:-1;gUCur=s;gUHash=stateHash();gMcHaveCam=false;gSigS=-1;mcReset();applyAnim();gSceneCU=!gUndo.empty();gSceneCR=!gRedo.empty();if(!gSculpt){gCanUndo=gSceneCU;gCanRedo=gSceneCR;}}
 void doUndo(){undoCommit();if(gUndo.empty())return;gRedo.push_back(gUCur);Snap p=std::move(gUndo.back());gUndo.pop_back();undoApply(p);toast("Desfeito");}
 void doRedo(){undoCommit();if(gRedo.empty())return;gUndo.push_back(gUCur);Snap n=std::move(gRedo.back());gRedo.pop_back();undoApply(n);toast("Refeito");}
-void clearScene(){ meshes.resize(6);objs.clear();rigs.clear();skins.clear();camViewOff();gCamAct=-1;sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
+void clearScene(){ meshes.resize(6);gTexCpu.clear();gTexVer++;objs.clear();rigs.clear();skins.clear();camViewOff();gCamAct=-1;sel=-1;tm=0;playing=false;parentMode=false;gImportOpen=false;gSigS=-1;mcReset();}
 bool loadMAD(const std::string&path,bool replace){
  FILE*f=fopen(path.c_str(),"rb");if(!f){toast("Nao consegui abrir o arquivo");return false;}
  fseek(f,0,SEEK_END);long sz=ftell(f);fseek(f,0,SEEK_SET);if(sz<16){fclose(f);toast("Arquivo invalido");return false;}
@@ -1053,7 +1065,8 @@ bool loadMAD(const std::string&path,bool replace){
   for(uint32_t k=0;k<nk;k++){Key kk;kk.t=r.f();float q[9];r.b(q,36);memcpy(&kk.x.p.x,q,36);o.k.push_back(kk);}os.push_back(o);}
  float cam[7];r.b(cam,28);
  std::vector<int> kinds,shapes;std::vector<float> fovs;std::vector<Rig> rgs;
- {Rd q=r;if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);bool v3=memcmp(m2,"RIG3",4)==0,v2=v3||memcmp(m2,"RIG2",4)==0;if(v2||memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());if(v2)for(uint32_t i=0;i<nk&&q.ok;i++)shapes.push_back(q.s());if(v3)for(uint32_t i=0;i<nk&&q.ok;i++)fovs.push_back(q.f());
+ Rd q=r;
+ {if(q.ok&&q.n-q.i>=8){char m2[4];q.b(m2,4);bool v3=memcmp(m2,"RIG3",4)==0,v2=v3||memcmp(m2,"RIG2",4)==0;if(v2||memcmp(m2,"RIG1",4)==0){uint32_t nk=q.u();if(nk==no&&nk<=100000){for(uint32_t i=0;i<nk&&q.ok;i++)kinds.push_back(q.s());if(v2)for(uint32_t i=0;i<nk&&q.ok;i++)shapes.push_back(q.s());if(v3)for(uint32_t i=0;i<nk&&q.ok;i++)fovs.push_back(q.f());
    uint32_t nr=q.u();if(nr>4096)q.ok=false;
    for(uint32_t i=0;i<nr&&q.ok;i++){Rig g;g.a=q.s();g.b=q.s();g.c=q.s();g.tgt=q.s();g.pole=q.s();g.w=q.f();g.rotc=q.u()!=0;uint32_t nw=q.u();if(nw>100000||(size_t)nw*8>q.n-q.i){q.ok=false;break;}
     for(uint32_t k=0;k<nw;k++){float t_=q.f(),v_=q.f();g.wk.push_back({t_,v_});}rgs.push_back(g);}
@@ -1061,13 +1074,36 @@ bool loadMAD(const std::string&path,bool replace){
  for(size_t i=0;i<os.size()&&i<kinds.size();i++)os[i].kind=kinds[i];
  for(size_t i=0;i<os.size()&&i<shapes.size();i++)os[i].shape=std::clamp(shapes[i],0,5);
  for(size_t i=0;i<os.size()&&i<fovs.size();i++)os[i].fov=std::clamp(fovs[i],.1f,3.f);
+ std::vector<std::vector<unsigned char>> ltex;std::vector<int> ltb,ltm,ltn;std::vector<float> lac,ltr,lior;std::vector<std::vector<float>> luv;
+ if(q.ok&&q.n-q.i>=8){Rd t=q;char t4[4];t.b(t4,4);
+  if(memcmp(t4,"TEX1",4)==0){uint32_t nt=t.u();if(nt>(uint32_t)TEXMAX)t.ok=false;
+   for(uint32_t i=0;i<nt&&t.ok;i++){uint32_t len=t.u();if(len>t.n-t.i){t.ok=false;break;}
+    int w=0,h=0,c=0;unsigned char*px=len?stbi_load_from_memory(t.p+t.i,(int)len,&w,&h,&c,4):nullptr;t.i+=len;
+    if(px&&w==TEXN&&h==TEXN)ltex.emplace_back(px,px+(size_t)TEXN*TEXN*4);else ltex.emplace_back();
+    if(px)stbi_image_free(px);}
+   uint32_t nob=t.u();if(nob!=no)t.ok=false;
+   for(uint32_t i=0;i<nob&&t.ok;i++){ltb.push_back(t.s());ltm.push_back(t.s());ltn.push_back(t.s());lac.push_back(t.f());}
+   uint32_t nme=t.u();if(nme!=nm)t.ok=false;
+   for(uint32_t i=0;i<nme&&t.ok;i++){uint32_t nu=t.u();if((size_t)nu*4>t.n-t.i){t.ok=false;break;}std::vector<float> uv(nu);if(nu)t.b(uv.data(),(size_t)nu*4);luv.push_back(std::move(uv));}
+   if(!t.ok){ltex.clear();ltb.clear();ltm.clear();ltn.clear();lac.clear();luv.clear();}
+   else if(t.n-t.i>=8){char m4[4];t.b(m4,4);
+    if(memcmp(m4,"MAT1",4)==0){uint32_t nob2=t.u();if(nob2==no){for(uint32_t i=0;i<nob2&&t.ok;i++){ltr.push_back(t.f());lior.push_back(t.f());}}else t.ok=false;
+     if(!t.ok){ltr.clear();lior.clear();}}}}}
  if(!r.ok){toast("Arquivo .mad corrompido");return false;}
  if(replace)clearScene();
  int mb=(int)meshes.size(),sb2=(int)skins.size(),ob=(int)objs.size();
- for(auto&t:tms){Mesh mm=upload(t.cpu,MTRI);mm.rad=t.rad;if(!t.skin.empty())attachSkin(mm,t.skin);meshes.push_back(mm);}
+ const int tbase=(int)gTexCpu.size();int nadd=0;   // camadas de textura do projeto entram depois das que ja existem
+ for(auto&t:ltex){if(t.empty()||(int)gTexCpu.size()>=TEXMAX)break;gTexCpu.push_back(std::move(t));nadd++;}
+ if(nadd)gTexVer++;
+ auto mapT=[&](int v){return (v>=0&&v<nadd)?tbase+v:-1;};
+ {size_t ti=0;for(auto&t:tms){Mesh mm=upload(t.cpu,MTRI);mm.rad=t.rad;if(!t.skin.empty())attachSkin(mm,t.skin);
+   if(ti<luv.size()&&!luv[ti].empty())attachUV(mm,luv[ti]);ti++;meshes.push_back(mm);}}
  for(auto&sk:sks){for(auto&jj:sk.j)if(jj>=0)jj+=ob;skins.push_back(sk);}
  for(auto&o:os){if(o.mesh>=6)o.mesh=mb+(o.mesh-6);if(o.mesh<0||o.mesh>=(int)meshes.size())o.mesh=0;if(o.parent>=0)o.parent+=ob;
-  if(o.skin>=0){o.skin+=sb2;if(o.skin>=(int)skins.size())o.skin=-1;}objs.push_back(o);}
+  if(o.skin>=0){o.skin+=sb2;if(o.skin>=(int)skins.size())o.skin=-1;}
+  {size_t oi=(size_t)(&o-os.data());if(oi<ltb.size()){o.tb=mapT(ltb[oi]);o.tm=mapT(ltm[oi]);o.tn=mapT(ltn[oi]);o.ac=lac[oi];}
+   if(oi<ltr.size()){o.trans=std::clamp(ltr[oi],0.f,1.f);o.ior=std::clamp(lior[oi],1.f,3.f);}}
+  objs.push_back(o);}
  for(Rig g:rgs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>=0)*pp+=ob;rigs.push_back(g);}
  if(replace){yaw=cam[0];pitch=cam[1];cd=cam[2];tgt=V{cam[3],cam[4],cam[5]};tm=cam[6];}
  sel=os.empty()?-1:ob;if(replace)undoClear();toast(fm("Carregado: %d objetos",(int)os.size()));return true;}
@@ -1334,7 +1370,7 @@ void frameUI(){
  int n=(int)objs.size(),rows=std::min(n,3),st=(n>3&&sel>=0)?std::clamp(sel-2,0,n-3):0;
  float oh=0.f; // a hierarquia agora e o Outliner em QML (SceneOutliner.qml)
 
- if(sel>=0){T&t=objs[sel].cur;float ty=ry+oh+1.5f*u;panel(rx,ty,pw,4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u,1*u);
+ if(sel>=0){T&t=objs[sel].cur;float ty=ry+oh+1.5f*u;panel(rx,ty,pw,4*u+(objs[sel].kind==4?6:(objs[sel].kind==3?5:7))*rh+1*u,1*u);
 
   float lw=5.5f*u,fw=(pw-lw-1.2f*u)/3;static const char*XYZ[3]={"X","Y","Z"};
   for(int j=0;j<3;j++)tcen(XYZ[j],rx+lw+j*fw+fw/2,ty+2*u,tpx,AC[j][0],AC[j][1],AC[j][2]);
@@ -1349,8 +1385,9 @@ void frameUI(){
    if(lo_.shape==2)sld(8,rx,pw,ty+4*u+4*rh,rh,tpx,fm("Cone %d",(int)(lo_.fov*57.2958f+.5f)).c_str(),(lo_.fov-.1f)/1.3f);
    else text(lo_.shape==0?"Sol (direcional)":"Luz de ponto",rx+1.2f*u,ty+4*u+4*rh+rh/2-2.5f*tpx,tpx,.7f,.7f,.74f);
    {float ssz=rh*.7f,sx0=rx+1.2f*u,sy0=ty+4*u+5*rh;for(int k=0;k<6;k++){V cc=LCOL[k];float sxk=sx0+k*(ssz+.9f*u);rect(sxk,sy0+(rh-ssz)/2,ssz,ssz,cc.x,cc.y,cc.z,1,ssz/2);gBtn.push_back({{sxk,sy0,ssz+.9f*u,rh},23+k});}}}
-  else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);}}
- if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(5+(objs[sel].kind==4?1:0))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[1]={9};
+  else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);
+   sld(9,rx,pw,ty+4*u+5*rh,rh,tpx,"Transm.",objs[sel].trans);sld(10,rx,pw,ty+4*u+6*rh,rh,tpx,fm("IOR %.2f",objs[sel].ior).c_str(),(objs[sel].ior-1.f)/1.5f);}}
+ if(sel>=0){float ty2=ry+oh+1.5f*u+4*u+(objs[sel].kind==4?6:(objs[sel].kind==3?5:7))*rh+1*u+1.2f*u,bs2=6.2f*u,gx=rx;static const int AI[1]={9};
   for(int k=0;k<1;k++){int id=AI[k];bool on=(id==11&&parentMode);rect(gx,ty2,bs2,bs2,on?.28f:.16f,on?.45f:.16f,on?.7f:.18f,.94f,bs2/2);icon2(id,gx+bs2/2,ty2+bs2/2,bs2*.27f,on);gBtn.push_back({{gx,ty2,bs2,bs2},id});gx+=bs2+.8f*u;}}}
  // timeline estilo Maya/Houdini (compacta)
  float TH=17.5f*u,tT=100*u-3.6f*u-TH,tw_=W-2*ML_;if(gTlOpen)panel(ML_,tT,tw_,TH,1*u);
@@ -1619,7 +1656,7 @@ int32_t onInput(ShimEvt*e){
  if(act==AMOTION_EVENT_ACTION_DOWN){
   moved=false;rl=true;sx=x;sy=y;pinch=0;gDrag=false;mode=-1;
   if(gImportOpen&&!gNameOpen&&!gSizeOpen&&!gFiles.empty()&&inR(gListR,x,y)){mode=30;gSY0=y;gSS0=gScrollPx;}
-  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if(b.id>=300&&b.id<=306){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else if(b.id-100<(int)objs.size()){if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
+  for(auto&b:gBtn)if(mode<0&&inR(b.r,x,y)&&(!(gNameOpen||gSizeOpen)||b.id>=2000)){if((b.id>=300&&b.id<=306)||b.id==309||b.id==310){setSlider(b.id-300,x);mode=6+b.id-300;break;}if(b.id>=200||b.id<100)press(b.id);else if(b.id-100<(int)objs.size()){if(parentMode)finishParent(b.id-100);else sel=b.id-100;}mode=2;break;}
   if((gVid.on||gNameOpen||gSizeOpen)&&mode<0)mode=2;
   if(mode<0&&gImportOpen){gImportOpen=false;mode=2;}
   if(mode<0&&gFileMenu){gFileMenu=false;mode=2;}

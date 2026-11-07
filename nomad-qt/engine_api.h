@@ -89,6 +89,7 @@ struct EngPt {
     bool on = false;     // este quadro e renderizado pelo path tracer
     bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
     int spp = 16, bounces = 6, night = 0;
+    int glass = 0;             // 1 = ha triangulos com transmissao (vidro): sombras atravessam e o shader refrata
     int envOn = 0;             // 1 = ambiente vem do HDRI (envRgb/envDist); 0 = ceu procedural + sol
     float envScale = 1.f;
     std::shared_ptr<std::vector<float>> envRgb;   // float4 por texel, equirretangular (Y para cima)
