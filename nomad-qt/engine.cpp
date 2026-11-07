@@ -174,8 +174,7 @@ void camFromView(){int i=gCamView;if(i<0||i>=(int)objs.size())return;V e=camEye(
  M m=id();m.m[0]=r.x;m.m[1]=r.y;m.m[2]=r.z;m.m[4]=u.x;m.m[5]=u.y;m.m[6]=u.z;m.m[8]=-f.x;m.m[9]=-f.y;m.m[10]=-f.z;m.m[12]=e.x;m.m[13]=e.y;m.m[14]=e.z;
  M P=objs[i].parent>=0?worldM(objs[i].parent):id();T t=decomp(mul(invAff(P),m));objs[i].cur.p=t.p;objs[i].cur.r=t.r;}
 void addObj(int mesh){
- static const V pal[]={{.9f,.35f,.3f},{.3f,.7f,.9f},{.5f,.85f,.4f},{.95f,.8f,.3f},{.7f,.45f,.9f}};
- Obj o;o.mesh=mesh;o.col=pal[objs.size()%5];static int cnt[6]={0,0,0,0,0,0};static const char*NM[6]={"Cube","Sphere","Plane","","","Bone"};snprintf(o.nm,24,"%s.%03d",NM[mesh],++cnt[mesh]);
+ Obj o;o.mesh=mesh;o.col=V{.64f,.64f,.64f};static int cnt[6]={0,0,0,0,0,0};static const char*NM[6]={"Cube","Sphere","Plane","","","Bone"};snprintf(o.nm,24,"%s.%03d",NM[mesh],++cnt[mesh]);
  if(mesh==5){o.col={.85f,.85f,.65f};o.cur.p={0,0,0};if(sel>=0&&objs[sel].mesh==5){o.parent=sel;o.cur.p={0,objs[sel].len,0};}}
  else{o.cur.p={(objs.size()%4)*1.4f-2.1f,mesh==2?0.f:.5f,0};if(mesh==2)o.cur.s={2,2,2};}
  objs.push_back(o);sel=(int)objs.size()-1;}
@@ -1103,6 +1102,8 @@ bool loadMAD(const std::string&path,bool replace){
   if(o.skin>=0){o.skin+=sb2;if(o.skin>=(int)skins.size())o.skin=-1;}
   {size_t oi=(size_t)(&o-os.data());if(oi<ltb.size()){o.tb=mapT(ltb[oi]);o.tm=mapT(ltm[oi]);o.tn=mapT(ltn[oi]);o.ac=lac[oi];}
    if(oi<ltr.size()){o.trans=std::clamp(ltr[oi],0.f,1.f);o.ior=std::clamp(lior[oi],1.f,3.f);}}
+  {static const float OP[5][3]={{.9f,.35f,.3f},{.3f,.7f,.9f},{.5f,.85f,.4f},{.95f,.8f,.3f},{.7f,.45f,.9f}};   // cores aleatorias antigas das primitivas
+   if(o.kind==0&&o.mesh>=0&&o.mesh<5&&o.tb<0)for(auto&cc:OP)if(fabsf(o.col.x-cc[0])<1e-4f&&fabsf(o.col.y-cc[1])<1e-4f&&fabsf(o.col.z-cc[2])<1e-4f)o.col=V{.64f,.64f,.64f};}
   objs.push_back(o);}
  for(Rig g:rgs){int*qq[5]={&g.a,&g.b,&g.c,&g.tgt,&g.pole};for(int*pp:qq)if(*pp>=0)*pp+=ob;rigs.push_back(g);}
  if(replace){yaw=cam[0];pitch=cam[1];cd=cam[2];tgt=V{cam[3],cam[4],cam[5]};tm=cam[6];}

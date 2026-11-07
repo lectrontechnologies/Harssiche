@@ -457,9 +457,12 @@ void csTrace(uint3 id : SV_DispatchThreadID)
     float3 sigA = float3(0.0);
     bool prevDelta = false;      // o ultimo rebatimento foi especular (vidro): sem MIS com o ambiente
     int glassN = 0;              // interacoes com vidro nao contam como rebatimentos
+    float pathLen = 0.0;         // distancia percorrida desde a camera (profundidade do AOV atraves do vidro)
+    bool aovDone = false;        // o AOV vem da primeira superficie que nao e vidro
     float prevPdf = 1.0;         // pdf (angulo solido) da direcao amostrada no rebatimento anterior, para o MIS com o ambiente
     // cone do sol (abertura angular ~1,7 grau: sombras suaves)
     const float cosMax = 0.99955;
+    const float cosSpec = 0.9962;   // cone maior (~5 graus) para o sol visto por reflexo/refracao: menos pontos brancos
 
     for (int bounce = 0; bounce < pc.bounces + 12; bounce++) {
         if (bounce - glassN >= pc.bounces) break;
@@ -480,11 +483,12 @@ void csTrace(uint3 id : SV_DispatchThreadID)
             } else {
                 L += beta * skyRad(d, pc.night);
                 // o sol visto por reflexo ou refracao (vidro): disco do cone
-                if (prevDelta && dot(d, sunD) > cosMax) L += beta * sunE / (2.0 * PI * (1.0 - cosMax));
+                if (prevDelta && dot(d, sunD) > cosSpec) L += beta * sunE / (2.0 * PI * (1.0 - cosSpec));
             }
             break;
         }
         if (inMed) beta *= exp(-sigA * tmax);      // absorcao (Beer-Lambert) no trecho percorrido dentro do vidro
+        pathLen += tmax;
         float w0 = 1.0 - hu - hv;
         float4 s0 = bShade[ti * 4];
         float4 s1 = bShade[ti * 4 + 1];
@@ -547,9 +551,10 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float ld_ = dot(m.cd, float3(0.3, 0.6, 0.1));
         m.pSpec = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
         float trn = saturate(s0.w) * (1.0 - metal);   // chance de o raio interagir como vidro
-        if (bounce == 0 && trn < 0.5) {   // vidro fica sem guia no denoise (a imagem refratada nao deve ser borrada)
+        if (!aovDone && trn < 0.5) {   // o denoise usa a primeira superficie que nao e vidro (o que se ve atraves dele)
+            aovDone = true;
             aovN = ns;
-            aovD = tmax;
+            aovD = pathLen;
             aovA = max(m.cd + m.f0, float3(0.02));
         }
 
@@ -651,7 +656,9 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         o = org;
     }
     if (any(isnan(L)) || any(isinf(L))) L = float3(0.0);
-    L = min(L, float3(pc.envOn != 0 ? 100.0 : 30.0));
+    float lmax = pc.envOn != 0 ? 100.0 : 30.0;
+    if (glassN > 0) lmax = min(lmax, 16.0);   // caminhos com vidro tem muito brilho isolado (caustica)
+    L = min(L, float3(lmax));
     uint idx = uint(py) * uint(pc.w) + uint(px);
     if (pc.dn != 0) {
         uint bi = idx * 3u;
