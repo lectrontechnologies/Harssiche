@@ -133,7 +133,7 @@ Item {
                 model: [
                     { n: "Cubo", i: 0 }, { n: "Esfera", i: 1 }, { n: "Plano", i: 2 },
                     { n: "Osso", i: 10 }, { n: "Câmera", i: 18 },
-                    { n: "Sol", i: 45 }, { n: "Ponto", i: 46 }, { n: "Spot", i: 47 }
+                    { n: "Sol", i: 45 }, { n: "Ponto", i: 46 }, { n: "Spot", i: 47 }, { n: "Área", i: 48 }
                 ]
                 Rectangle {
                     required property var modelData

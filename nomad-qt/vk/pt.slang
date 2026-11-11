@@ -39,6 +39,7 @@ struct PC {
 [[vk::binding(7, 0)]] Sampler2DArray uTex;
 [[vk::binding(8, 0)]] StructuredBuffer<float> bEnvD;    // distribuicao 2D do HDRI por luminancia (formato do InfiniteLight do LuxCore)
 [[vk::binding(9, 0)]] StructuredBuffer<float4> bEnv;    // HDRI equirretangular (Y para cima), 1 float4 por texel
+[[vk::binding(10, 0)]] StructuredBuffer<float4> bLights; // luzes da cena: cabecalho (n, tem_sol) + 5 float4 por luz
               // texturas de material (camadas size x size RGBA8)
 
 static const float PI = 3.14159265;
@@ -326,13 +327,14 @@ float3 envLookup(float2 uv)
     return lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty);
 }
 
-// visibilidade para luz direta: com vidro na cena, a sombra atravessa a transmissao (atenuada pela cor) em vez de bloquear
-float3 shadowTrans(float3 o, float3 d)
+// visibilidade para luz direta ate a distancia tmaxIn: com vidro na cena, a sombra atravessa a transmissao (atenuada pela cor)
+float3 shadowTrans(float3 o, float3 d, float tmaxIn)
 {
     float3 T = float3(1.0);
     float3 org = o;
+    float remain = tmaxIn;
     for (int i = 0; i < 6; i++) {
-        float tm = 1e30;
+        float tm = remain;
         int hit;
         float hu, hv;
         if (!traverse(org, d, tm, hit, hu, hv, false)) return T;
@@ -342,18 +344,26 @@ float3 shadowTrans(float3 o, float3 d)
         float tr = saturate(s0.w) * (1.0 - saturate(s2.w));
         if (tr < 0.5) return float3(0.0);
         T *= saturate(s3.xyz) * 0.9;
-        org = org + d * (tm + 1e-4 * (1.0 + tm));
+        float stp = tm + 1e-4 * (1.0 + tm);
+        org = org + d * stp;
+        remain -= stp;
+        if (remain <= 0.0) return T;
     }
     return T;
 }
 
-float3 visibility(float3 o, float3 d)
+float3 visibilityT(float3 o, float3 d, float tmaxIn)
 {
-    if (pc.glass != 0) return shadowTrans(o, d);
-    float tm = 1e30;
+    if (pc.glass != 0) return shadowTrans(o, d, tmaxIn);
+    float tm = tmaxIn;
     int hit;
     float hu, hv;
     return traverse(o, d, tm, hit, hu, hv, true) ? float3(0.0) : float3(1.0);
+}
+
+float3 visibility(float3 o, float3 d)
+{
+    return visibilityT(o, d, 1e30);
 }
 
 void basis(float3 n, out float3 t, out float3 b)
@@ -488,6 +498,145 @@ bool sampleBsdf(Mat m, float3 wo, float u0, float u1, float u2, out float3 wi)
     return wi.z > 0.0;
 }
 
+// ---------- luzes da cena: sol, ponto, spot e area ----------
+// A luz de area retangular amostra o angulo solido do retangulo esferico (Urena et al.), adaptado do Cycles
+// (kernel/light/area.h, Apache 2.0, (c) 2011-2022 Blender Foundation). Radiancia constante, uma face emite.
+int lightCount()
+{
+    return asint(bLights[0].x);
+}
+int lightHasSun()
+{
+    return asint(bLights[0].y);
+}
+
+struct LightRec {
+    float3 co;
+    int type;        // 0 sol, 1 ponto, 2 spot, 3 area
+    float3 Ng;       // eixo de emissao
+    float cosOuter;
+    float3 L;        // radiancia (area), irradiancia (sol) ou intensidade (ponto, spot), ja com a cor
+    float cosInner;
+    float3 U;
+    float lenU;
+    float3 V;
+    float lenV;
+};
+
+LightRec getLight(int i)
+{
+    uint b = 1u + uint(i) * 5u;
+    float4 a0 = bLights[b];
+    float4 a1 = bLights[b + 1u];
+    float4 a2 = bLights[b + 2u];
+    float4 a3 = bLights[b + 3u];
+    float4 a4 = bLights[b + 4u];
+    LightRec r;
+    r.co = a0.xyz;
+    r.type = int(a0.w + 0.5);
+    r.Ng = a1.xyz;
+    r.cosOuter = a1.w;
+    r.L = a2.xyz;
+    r.cosInner = a2.w;
+    r.U = a3.xyz;
+    r.lenU = a3.w;
+    r.V = a4.xyz;
+    r.lenV = a4.w;
+    return r;
+}
+
+// devolve a pdf em angulo solido; com sampleCoord sorteia o ponto lightP no retangulo
+float areaRectSample(float3 P, inout float3 lightP, float3 axisU, float lenU, float3 axisV, float lenV, float2 rnd, bool sampleCoord)
+{
+    float3 x = axisU;
+    float3 y = axisV;
+    float3 z = cross(x, y);
+    float3 dir = lightP - P;
+    float z0 = dot(dir, z);
+    if (z0 > 0.0) {      // z aponta contra o ponto
+        z = -z;
+        z0 = -z0;
+    }
+    float xc = dot(dir, x);
+    float yc = dot(dir, y);
+    float x0 = xc - 0.5 * lenU;
+    float x1 = xc + 0.5 * lenU;
+    float y0 = yc - 0.5 * lenV;
+    float y1 = yc + 0.5 * lenV;
+    float4 nz = float4(-y0, x1, y1, -x0);
+    nz /= sqrt(nz * nz + z0 * z0);
+    // asin em vez de acos: evita o cancelamento em retangulos pequenos (como no Cycles)
+    float g0 = asin(clamp(-nz.x * nz.y, -1.0, 1.0));
+    float g1 = asin(clamp(-nz.y * nz.z, -1.0, 1.0));
+    float g2 = asin(clamp(-nz.z * nz.w, -1.0, 1.0));
+    float g3 = asin(clamp(-nz.w * nz.x, -1.0, 1.0));
+    float S = -(g0 + g1 + g2 + g3);
+    if (sampleCoord) {
+        float b0 = nz.x;
+        float b1 = nz.z;
+        float b0sq = b0 * b0;
+        float au = rnd.x * S + g2 + g3;
+        float sa = sin(au);
+        float fu = abs(sa) > 1e-12 ? (cos(au) * b0 + b1) / sa : 0.0;
+        float cu = 1.0 / sqrt(fu * fu + b0sq);
+        if (fu < 0.0) cu = -cu;
+        cu = clamp(cu, -1.0, 1.0);
+        float xu = -(cu * z0) / max(sqrt(1.0 - cu * cu), 1e-7);
+        xu = clamp(xu, x0, x1);
+        float d2 = xu * xu + z0 * z0;
+        float h0 = y0 / sqrt(d2 + y0 * y0);
+        float h1 = y1 / sqrt(d2 + y1 * y1);
+        float hv = h0 + rnd.y * (h1 - h0);
+        float hv2 = hv * hv;
+        float yv = (hv2 < 1.0 - 1e-6) ? hv * sqrt(d2 / (1.0 - hv2)) : y1;
+        lightP = P + xu * x + yv * y + z0 * z;
+    }
+    float mn = min(min(nz.x * nz.x, nz.y * nz.y), min(nz.z * nz.z, nz.w * nz.w));
+    if (S < 1e-5 || mn > 0.99999) {
+        // angulo solido pequeno demais para a precisao: pdf do sorteio plano
+        float t = length(dir);
+        return abs(z0 * lenU * lenV) > 1e-20 ? -t * t * t / (z0 * lenU * lenV) : 0.0;
+    }
+    return 1.0 / S;
+}
+
+float areaPdfAt(LightRec r, float3 P)
+{
+    float3 lp = r.co;
+    return areaRectSample(P, lp, r.U, r.lenU, r.V, r.lenV, float2(0.0), false);
+}
+
+// raio contra as luzes de area (uma face): a mais proxima antes de tmax
+bool areaHit(float3 o, float3 d, float tmax, out int li, out float tl)
+{
+    li = -1;
+    tl = tmax;
+    int n = lightCount();
+    for (int i = 0; i < n; i++) {
+        LightRec r = getLight(i);
+        if (r.type != 3) continue;
+        float dn = dot(d, r.Ng);
+        if (dn >= 0.0) continue;
+        float t = dot(r.co - o, r.Ng) / dn;
+        if (t <= 1e-4 || t >= tl) continue;
+        float3 pl = o + d * t - r.co;
+        if (abs(dot(pl, r.U)) > 0.5 * r.lenU || abs(dot(pl, r.V)) > 0.5 * r.lenV) continue;
+        tl = t;
+        li = i;
+    }
+    return li >= 0;
+}
+
+float3 sampleCone(float3 axis, float cosMax, float u1, float u2)
+{
+    float3 t, b;
+    basis(axis, t, b);
+    float cosT = 1.0 - u1 * (1.0 - cosMax);
+    float sinT = sqrt(max(1.0 - cosT * cosT, 0.0));
+    float phi = 2.0 * PI * u2;
+    return normalize(t * (sinT * cos(phi)) + b * (sinT * sin(phi)) + axis * cosT);
+}
+
 [numthreads(8, 8, 1)]
 void csTrace(uint3 id : SV_DispatchThreadID)
 {
@@ -524,7 +673,26 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         float tmax = 1e30;
         int ti;
         float hu, hv;
-        if (!traverse(o, d, tmax, ti, hu, hv, false)) {
+        bool gotHit = traverse(o, d, tmax, ti, hu, hv, false);
+        // luzes de area: o raio que as atinge soma a emissao (MIS com a amostragem da luz); a camera nao ve o painel, so reflexos
+        {
+            int nL0 = lightCount();
+            if (nL0 > 0 && bounce > 0) {
+                int ali;
+                float tl;
+                if (areaHit(o, d, tmax, ali, tl)) {
+                    LightRec ar = getLight(ali);
+                    float wB2 = 1.0;
+                    if (!prevDelta) {
+                        float pl = areaPdfAt(ar, o) / float(nL0);
+                        wB2 = (prevPdf * prevPdf) / (prevPdf * prevPdf + pl * pl);
+                    }
+                    L += beta * ar.L * wB2;
+                    break;
+                }
+            }
+        }
+        if (!gotHit) {
             if (pc.envOn != 0) {
                 float mp;
                 float2 euv = envDirToUV(d, mp);
@@ -538,7 +706,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
             } else {
                 L += beta * skyRad(d, pc.night);
                 // o sol visto por reflexo ou refracao (vidro): disco do cone
-                if (prevDelta && dot(d, sunD) > cosSpec) L += beta * sunE / (2.0 * PI * (1.0 - cosSpec));
+                if (prevDelta && lightHasSun() == 0 && dot(d, sunD) > cosSpec) L += beta * sunE / (2.0 * PI * (1.0 - cosSpec));
             }
             break;
         }
@@ -665,7 +833,7 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         prevDelta = false;
 
         // luz direta: sol (cone) com raio de sombra, ou o HDRI amostrado por importancia (com MIS)
-        if (pc.envOn == 0) {
+        if (pc.envOn == 0 && lightHasSun() == 0) {
             float u1 = rnd(st);
             float u2 = rnd(st);
             float cz = 1.0 - u1 * (1.0 - cosMax);
@@ -699,6 +867,59 @@ void csTrace(uint3 id : SV_DispatchThreadID)
                     float3 f = evalBsdf(m, wo, wl, pdfB);
                     float wL = (pdfL * pdfL) / (pdfL * pdfL + pdfB * pdfB);
                     L += beta * f * (wl.z / pdfL) * (envLookup(suv) * pc.envScale) * wL * vis;
+                }
+            }
+        }
+
+        // luzes da cena: escolhe uma por sorteio uniforme; a de area usa MIS entre a amostragem da luz e a do material
+        {
+            int nL = lightCount();
+            if (nL > 0) {
+                int li = min(int(rnd(st) * float(nL)), nL - 1);
+                LightRec lr = getLight(li);
+                float2 lu = float2(rnd(st), rnd(st));
+                float3 ldir2 = float3(0.0, 1.0, 0.0);
+                float ldist = 1e30;
+                float3 Li = float3(0.0);
+                float pdfL2 = 0.0;
+                if (lr.type == 0) {
+                    ldir2 = sampleCone(-lr.Ng, cosMax, lu.x, lu.y);
+                    Li = lr.L;
+                } else if (lr.type == 3) {
+                    if (dot(lr.co - org, lr.Ng) < 0.0) {
+                        float3 lp = lr.co;
+                        pdfL2 = areaRectSample(org, lp, lr.U, lr.lenU, lr.V, lr.lenV, lu, true);
+                        float3 dv = lp - org;
+                        ldist = length(dv);
+                        ldir2 = dv / max(ldist, 1e-6);
+                        Li = lr.L;
+                    }
+                } else {
+                    float3 dv = lr.co - org;
+                    float d2 = max(dot(dv, dv), 1e-8);
+                    ldist = sqrt(d2);
+                    ldir2 = dv / ldist;
+                    float att = 1.0 / d2;
+                    if (lr.type == 2) att *= smoothstep(lr.cosOuter, lr.cosInner, dot(-ldir2, lr.Ng));
+                    Li = lr.L * att;
+                }
+                float3 wl2 = float3(dot(ldir2, T), dot(ldir2, B), dot(ldir2, ns));
+                bool okL = (lr.type != 3 || pdfL2 > 1e-9) && any(Li > 0.0) && wl2.z > 0.0 && dot(ldir2, ng) > 0.0;
+                if (okL) {
+                    float3 vis2 = visibilityT(org, ldir2, ldist * 0.999);
+                    if (any(vis2 > 0.0)) {
+                        float pdfB2;
+                        float3 f2 = evalBsdf(m, wo, wl2, pdfB2);
+                        float3 contrib;
+                        if (lr.type == 3) {
+                            float pl = pdfL2 / float(nL);
+                            float wgt = (pl * pl) / (pl * pl + pdfB2 * pdfB2);
+                            contrib = f2 * (wl2.z / pl) * Li * wgt;
+                        } else {
+                            contrib = f2 * wl2.z * Li * float(nL);
+                        }
+                        L += beta * contrib * vis2;
+                    }
                 }
             }
         }

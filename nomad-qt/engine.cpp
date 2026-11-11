@@ -180,8 +180,8 @@ void addObj(int mesh){
  objs.push_back(o);sel=(int)objs.size()-1;}
 static const V LCOL[6]={{1.f,1.f,1.f},{1.f,.85f,.62f},{.68f,.84f,1.f},{1.f,.32f,.28f},{.42f,1.f,.48f},{.38f,.52f,1.f}};
 void addLight(int ty){ // 0 sol (direcional), 1 ponto, 2 spot. Aponta para -Y local; len = intensidade, fov = meio-angulo do spot
- ty=std::clamp(ty,0,2);Obj o;o.mesh=1;o.kind=4;o.shape=ty;static int cnt[3]={0,0,0};static const char*NM[3]={"Sun","Point","Spot"};
- snprintf(o.nm,24,"%s.%03d",NM[ty],++cnt[ty]);o.col=LCOL[ty==1?1:0];o.len=ty==0?3.f:(ty==1?40.f:60.f);o.fov=.6f;
+ ty=std::clamp(ty,0,3);Obj o;o.mesh=1;o.kind=4;o.shape=ty;static int cnt[4]={0,0,0,0};static const char*NM[4]={"Sun","Point","Spot","Area"};
+ snprintf(o.nm,24,"%s.%03d",NM[ty],++cnt[ty]);o.col=LCOL[ty==1?1:0];o.len=ty==0?3.f:(ty==1?40.f:(ty==2?60.f:10.f));o.fov=.6f;if(ty==3)o.cur.s=V{2.f,1.f,2.f};   // area: tamanho = escala X e Z
  o.cur.p={(objs.size()%4)*1.4f-2.1f,ty==0?5.f:3.f,0};objs.push_back(o);sel=(int)objs.size()-1;}
 void clearParent(int c){M w=worldM(c);objs[c].parent=-1;objs[c].cur=decomp(w);}
 void delObj(int i){
@@ -917,6 +917,18 @@ static bool envLoad(){
  auto dist=std::make_shared<std::vector<float>>();
  if(!envBuild(rgb->data(),ow,oh,*dist))return false;
  gEnvRgb=rgb;gEnvDist=dist;gEnvW=ow;gEnvH=oh;return true;}
+// luzes da cena para o path tracer: cabecalho (n, tem_sol) + 5 float4 por luz:
+// (centro, tipo) (eixo de emissao, cos do cone externo) (cor*intensidade, cos do cone interno) (eixo U, largura) (eixo V, altura)
+// tipos: 0 sol, 1 ponto, 2 spot, 3 area (emite para -Y local; tamanho = escala X e Z)
+static void ptLights(EngPt&p){
+ std::vector<float> L(4,0.f);int n=0,hasSun=0;
+ for(int i=0;i<(int)objs.size()&&n<64;i++){Obj&o=objs[i];if(o.kind!=4||o.hide)continue;
+  M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]},ex{w.m[0],w.m[1],w.m[2]},ey{w.m[4],w.m[5],w.m[6]},ez{w.m[8],w.m[9],w.m[10]};
+  const float sx=vlen(ex),sz=vlen(ez);if(sx<1e-6f||vlen(ey)<1e-6f||sz<1e-6f)continue;ex=norm(ex);ey=norm(ey);ez=norm(ez);
+  const int ty=std::clamp(o.shape,0,3);const float k=(ty==0?.57f:(ty==3?.1f:.25f))*o.len;const V ng=ey*-1.f;const float fo=std::clamp(o.fov,.1f,1.4f);
+  const float rec[20]={c.x,c.y,c.z,(float)ty, ng.x,ng.y,ng.z,cosf(fo), o.col.x*k,o.col.y*k,o.col.z*k,cosf(fo*.8f), ex.x,ex.y,ex.z,sx, ez.x,ez.y,ez.z,sz};
+  L.insert(L.end(),rec,rec+20);n++;if(ty==0)hasSun=1;}
+ memcpy(&L[0],&n,4);memcpy(&L[1],&hasSun,4);p.lights=std::move(L);}
 static void ptBuild(EngPt&p,int spp,int bn,int night){
  gatherTris();if(gPtSkipped>0)toast(fm("Parallax: limite de 500 mil triangulos, %d objeto(s) ficaram de fora",gPtSkipped));
  const int n=(int)gTD.size();
@@ -933,7 +945,7 @@ static void ptBuild(EngPt&p,int spp,int bn,int night){
   sh[11]=t.met;sh[12]=t.col.x;sh[13]=t.col.y;sh[14]=t.col.z;sh[15]=t.rou;
   sh[3]=t.tr;sh[7]=t.ior;if(t.tr*(1.f-t.met)>.001f)gl=1;   // transmissao e IOR nas posicoes livres (w das normais 0 e 1)
   ti[0]=t.uv[0][0];ti[1]=t.uv[0][1];ti[2]=t.uv[1][0];ti[3]=t.uv[1][1];ti[4]=t.uv[2][0];ti[5]=t.uv[2][1];ti[6]=t.tb;ti[7]=t.tm;ti[8]=t.tn;ti[9]=t.ac;ti[10]=t.coat;ti[11]=t.sheen;}
- p.glass=gl;
+ p.glass=gl;ptLights(p);
  for(int i=0;i<p.nnode;i++){const BN&b=gBN[i];float*q=&p.nodes[(size_t)i*8];int lf=b.lf,cn=b.cnt;
   q[0]=b.mn.x;q[1]=b.mn.y;q[2]=b.mn.z;memcpy(&q[3],&lf,4);q[4]=b.mx.x;q[5]=b.mx.y;q[6]=b.mx.z;memcpy(&q[7],&cn,4);}}
 static void mcWrite(void*c,void*d,int n){fwrite(d,1,n,(FILE*)c);}
@@ -1212,10 +1224,10 @@ static void ctrlShape(int shape,V c,V ex,V ey,V ez,float R,float tk,float cr,flo
 static void drawLightObj(int i){ // luz como objeto 3D: esfera na cor da luz + marcas conforme o tipo
  Obj&o=objs[i];M w=worldM(i);V c{w.m[12],w.m[13],w.m[14]};
  V ex{w.m[0],w.m[1],w.m[2]},ey{w.m[4],w.m[5],w.m[6]},ez{w.m[8],w.m[9],w.m[10]};
- if(vlen(ex)<1e-8f||vlen(ey)<1e-8f||vlen(ez)<1e-8f)return;ex=norm(ex);ey=norm(ey);ez=norm(ez);
+ if(vlen(ex)<1e-8f||vlen(ey)<1e-8f||vlen(ez)<1e-8f)return;const float sxw=vlen(ex),szw=vlen(ez);ex=norm(ex);ey=norm(ey);ez=norm(ez);
  V e=camEye();float th=tanf(FOV/2);float R=std::max({o.cur.s.x,o.cur.s.y,o.cur.s.z})*.35f;
  float dc=std::max(vlen(c-e),1e-3f),pxr=R/(dc*th)*H*.5f;if(pxr>60)R*=60/pxr;else if(pxr<13)R*=13/pxr;
- bool s=(i==sel);float cr=s?1.f:o.col.x,cg=s?.85f:o.col.y,cb=s?.2f:o.col.z;int ty=std::clamp(o.shape,0,2);
+ bool s=(i==sel);float cr=s?1.f:o.col.x,cg=s?.85f:o.col.y,cb=s?.2f:o.col.z;int ty=std::clamp(o.shape,0,3);
  gMR[0]=0;gMR[1]=.5f;gSk=0;
  {T t;t.p=c;t.s={R*.9f,R*.9f,R*.9f};M m=model(t);draw(meshes[1],mul(gVP,m),m,o.col.x,o.col.y,o.col.z,1,0);}
  float tk=R*.07f;
@@ -1226,6 +1238,8 @@ static void drawLightObj(int i){ // luz como objeto 3D: esfera na cor da luz + m
   for(int k=0;k<8;k++){float an=k*PI/4;L(P(cosf(an)*1.1f,0,sinf(an)*1.1f),P(cosf(an)*1.9f,0,sinf(an)*1.9f));}
   ring(1,1.1f,0);L(P(0,-1.1f,0),P(0,-4.f,0));L(P(0,-4.f,0),P(.45f,-3.4f,0));L(P(0,-4.f,0),P(-.45f,-3.4f,0));}
  else if(ty==1){ring(0,1.5f,0);ring(1,1.5f,0);ring(2,1.5f,0);}
+ else if(ty==3){float hx=sxw*.5f,hz=szw*.5f;V a0=c+ex*hx+ez*hz,a1=c-ex*hx+ez*hz,a2=c-ex*hx-ez*hz,a3=c+ex*hx-ez*hz;   // retangulo; a seta mostra o lado que emite
+  L(a0,a1);L(a1,a2);L(a2,a3);L(a3,a0);L(a0,a2);L(a1,a3);L(c,c-ey*(std::min(hx,hz)+R));}
  else{float len=4.f,rr=std::min(tanf(std::clamp(o.fov,.1f,1.4f))*len,3.6f);ring(1,rr,-len);L(P(0,0,0),P(0,-len,0));
   for(int k=0;k<4;k++){float an=k*PI/2;L(P(0,0,0),P(cosf(an)*rr,-len,sinf(an)*rr));}}}
 static void drawCamObj(int i,bool selc){V e,f,r,u;if(!camBasis(i,e,f,r,u))return;float d=std::max({objs[i].cur.s.x,objs[i].cur.s.y,objs[i].cur.s.z})*2.f;
@@ -1388,10 +1402,10 @@ void frameUI(){
     rect(fx,yy+.3f*u,fw-.5f*u,rh-.6f*u,.25f,.25f,.27f,1,.6f*u);tcen(b,fx+(fw-.5f*u)/2,yy+2.2f*u,tpx*.95f,.92f,.92f,.92f);}}
  if(objs[sel].kind==3){sld(4,rx,pw,ty+4*u+3*rh,rh,tpx,fm("FOV %d",(int)(objs[sel].fov*57.2958f+.5f)).c_str(),(objs[sel].fov-.17f)/2.23f);
    pill(rx+.9f*u,ty+4*u+4*rh+.3f*u,pw-1.8f*u,rh-.6f*u,19,gCamView==sel?"Sair da câmera":"Ver pela câmera",gCamView==sel,.2f,.38f,.55f);}
-  else if(objs[sel].kind==4){Obj&lo_=objs[sel];float lo=lo_.shape==0?.3f:3.f,hi=lo_.shape==0?30.f:1000.f;
+  else if(objs[sel].kind==4){Obj&lo_=objs[sel];float lo=lo_.shape==0?.3f:(lo_.shape==3?1.f:3.f),hi=lo_.shape==0?30.f:(lo_.shape==3?200.f:1000.f);
    sld(7,rx,pw,ty+4*u+3*rh,rh,tpx,fm("Intens. %.1f",lo_.len).c_str(),logf(std::max(lo_.len,lo)/lo)/logf(hi/lo));
    if(lo_.shape==2)sld(8,rx,pw,ty+4*u+4*rh,rh,tpx,fm("Cone %d",(int)(lo_.fov*57.2958f+.5f)).c_str(),(lo_.fov-.1f)/1.3f);
-   else text(lo_.shape==0?"Sol (direcional)":"Luz de ponto",rx+1.2f*u,ty+4*u+4*rh+rh/2-2.5f*tpx,tpx,.7f,.7f,.74f);
+   else text(lo_.shape==0?"Sol (direcional)":(lo_.shape==3?"Luz de area (escala = tamanho)":"Luz de ponto"),rx+1.2f*u,ty+4*u+4*rh+rh/2-2.5f*tpx,tpx,.7f,.7f,.74f);
    {float ssz=rh*.7f,sx0=rx+1.2f*u,sy0=ty+4*u+5*rh;for(int k=0;k<6;k++){V cc=LCOL[k];float sxk=sx0+k*(ssz+.9f*u);rect(sxk,sy0+(rh-ssz)/2,ssz,ssz,cc.x,cc.y,cc.z,1,ssz/2);gBtn.push_back({{sxk,sy0,ssz+.9f*u,rh},23+k});}}}
   else{sld(0,rx,pw,ty+4*u+3*rh,rh,tpx,"Metal",objs[sel].met);sld(1,rx,pw,ty+4*u+4*rh,rh,tpx,"Rough",objs[sel].rou);
    sld(9,rx,pw,ty+4*u+5*rh,rh,tpx,"Transm.",objs[sel].trans);sld(10,rx,pw,ty+4*u+6*rh,rh,tpx,fm("IOR %.2f",objs[sel].ior).c_str(),(objs[sel].ior-1.f)/1.5f);
@@ -1607,7 +1621,7 @@ void pressInner(int i){
    if(i==78)objs[co].shape=(objs[co].shape+1)%6;else objs[co].cur.s=objs[co].cur.s*(i==80?.8f:1.25f);}
   else if(i==79){int po=rigs[ri].pole;if(po>=0&&po<(int)objs.size()){V Bp=wp(rigs[ri].b),Pp=wp(po);objs[po].cur.p=Bp+(Bp-Pp);toast("Pole do outro lado");}}}}
  else if(i==17)gBones=!gBones;
- else if(i==45)addLight(0);else if(i==46)addLight(1);else if(i==47)addLight(2);
+ else if(i==45)addLight(0);else if(i==46)addLight(1);else if(i==47)addLight(2);else if(i==48)addLight(3);
  else if(i>=23&&i<=28&&sel>=0&&objs[sel].kind==4)objs[sel].col=LCOL[i-23];
  else if(i==50){tm=gFS/24.f;applyAnim();}else if(i==51){playing=true;gPlayDir=-1;}else if(i==52)playing=false;else if(i==53){playing=true;gPlayDir=1;}else if(i==54){tm=gFE/24.f;applyAnim();}
  else if(i==55)jumpKey(-1);else if(i==56)jumpKey(1);else if(i==57)delKey();

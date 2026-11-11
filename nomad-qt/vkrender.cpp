@@ -286,7 +286,7 @@ bool VkRend::create(QQuickWindow *w) {
     // descritores, buffers por slot e amostrador
     VkDescriptorPoolSize ps[2] = {};
     ps[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 9;  // + path tracer
+    ps[0].descriptorCount = kMaxSlots * 2 + 2 + 10;  // + path tracer
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     ps[1].descriptorCount = 2 + 2 * kMaxSlots + 13;  // + GTAO (viewport e captura) + texturas do path tracer
     VkDescriptorPoolCreateInfo dpi = {};
@@ -1706,8 +1706,8 @@ bool VkRend::ptInit() {
     if (P.init) return true;
     if (P.fail) return false;
     P.fail = true;
-    VkDescriptorSetLayoutBinding bb[10] = {};
-    for (int i = 0; i < 10; ++i) {
+    VkDescriptorSetLayoutBinding bb[11] = {};
+    for (int i = 0; i < 11; ++i) {
         bb[i].binding = uint32_t(i);
         bb[i].descriptorType = i == 7 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bb[i].descriptorCount = 1;
@@ -1715,7 +1715,7 @@ bool VkRend::ptInit() {
     }
     VkDescriptorSetLayoutCreateInfo dl = {};
     dl.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    dl.bindingCount = 10;
+    dl.bindingCount = 11;
     dl.pBindings = bb;
     if (m_df->vkCreateDescriptorSetLayout(m_dev, &dl, nullptr, &P.lay) != VK_SUCCESS) return false;
     VkPushConstantRange pcr = {VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PtPC)};
@@ -1772,7 +1772,7 @@ void VkRend::ptFree() {
             if (m) m_df->vkDestroyShaderModule(m_dev, m, nullptr);
         if (P.pl) m_df->vkDestroyPipelineLayout(m_dev, P.pl, nullptr);
         if (P.lay) m_df->vkDestroyDescriptorSetLayout(m_dev, P.lay, nullptr);
-        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env}) freeBuf(*b);
+        for (Buf *b : {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env, &P.lights}) freeBuf(*b);
     }
     P = PtS();
 }
@@ -1813,11 +1813,15 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
     std::memcpy(P.shade.p, e.shade.data(), size_t(e.ntri) * 64);
     std::memcpy(P.nodes.p, e.nodes.data(), size_t(e.nnode) * 32);
     std::memcpy(P.texi.p, e.texi.data(), size_t(e.ntri) * 48);
-    Buf *sb[9] = {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env};
-    const uint32_t bnd[9] = {0, 1, 2, 3, 4, 5, 6, 8, 9};   // o binding 7 e a imagem de texturas
-    VkDescriptorBufferInfo bi[9];
-    VkWriteDescriptorSet wr[9] = {};
-    for (int i = 0; i < 9; ++i) {
+    // luzes da cena (cabecalho + 5 float4 por luz)
+    if (!need(P.lights, std::max<size_t>(e.lights.size() * 4, 16))) return false;
+    if (e.lights.empty()) std::memset(P.lights.p, 0, 16);
+    else std::memcpy(P.lights.p, e.lights.data(), e.lights.size() * 4);
+    Buf *sb[10] = {&P.pos, &P.shade, &P.nodes, &P.texi, &P.acc, &P.tmp, &P.out, &P.envD, &P.env, &P.lights};
+    const uint32_t bnd[10] = {0, 1, 2, 3, 4, 5, 6, 8, 9, 10};   // o binding 7 e a imagem de texturas
+    VkDescriptorBufferInfo bi[10];
+    VkWriteDescriptorSet wr[10] = {};
+    for (int i = 0; i < 10; ++i) {
         bi[i] = {sb[i]->b, 0, VK_WHOLE_SIZE};
         wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         wr[i].dstSet = P.set;
@@ -1826,7 +1830,7 @@ bool VkRend::ptScene(const EngVkFrame &f, int cw, int ch) {
         wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         wr[i].pBufferInfo = &bi[i];
     }
-    m_df->vkUpdateDescriptorSets(m_dev, 9, wr, 0, nullptr);
+    m_df->vkUpdateDescriptorSets(m_dev, 10, wr, 0, nullptr);
     for (int i = 0; i < 3; ++i) {
         P.eye[i] = f.cam[i];
         P.right[i] = f.mcR[i];

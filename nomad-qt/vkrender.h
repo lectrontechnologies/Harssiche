@@ -138,7 +138,7 @@ private:
     Off m_off;
     // path tracer (Parallax)
     struct PtS {
-        Buf pos, shade, nodes, texi, acc, tmp, out, envD, env;
+        Buf pos, shade, nodes, texi, acc, tmp, out, envD, env, lights;
         VkDescriptorSetLayout lay = VK_NULL_HANDLE;
         VkPipelineLayout pl = VK_NULL_HANDLE;
         VkPipeline pTrace = VK_NULL_HANDLE, pRes = VK_NULL_HANDLE, pDi = VK_NULL_HANDLE, pAt = VK_NULL_HANDLE;  // caminhos, conversao final, prepara o filtro, passo do filtro
