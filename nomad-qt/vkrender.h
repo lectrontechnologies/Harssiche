@@ -145,8 +145,8 @@ private:
         VkShaderModule mT = VK_NULL_HANDLE, mR = VK_NULL_HANDLE, mD = VK_NULL_HANDLE, mA = VK_NULL_HANDLE;
         VkDescriptorSet set = VK_NULL_HANDLE;
         bool init = false, fail = false, active = false, dn = false;
-        int ntex = 0, envOn = 0, glass = 0;
-        float envScale = 1.f;
+        int ntex = 0, envOn = 0, glass = 0, tonemap = 0;
+        float envScale = 1.f, expo = 1.f;
         int w = 0, h = 0, spp = 0, bn = 0, night = 0, done = 0, row = 0, band = 16, ntri = 0;
         float eye[3] = {}, right[3] = {}, up[3] = {}, fwd[3] = {}, tanY = 1.f, aspect = 1.f;
     } m_pt;

@@ -23,7 +23,9 @@ Item {
     property int spp: 64
     property bool denoise: true
     property bool hdri: true
-    property int renderer: 0   // 0 = NanoFarm (raster, deterministico); os path tracers entram na proxima etapa
+    property int expoIdx: 2   // exposicao -2..+2 EV
+    property int tmap: 0      // 0 = suave, 1 = ACES
+    property int renderer: 0   // 0 = NanoFarm (raster, deterministico); 1 = Parallax (path tracer)
 
     function open() {
         fromF = view.anyKeys ? view.keyFirst : view.frameStart
@@ -63,10 +65,12 @@ Item {
         view.command(16, edge ? 1 : 0)
         view.command(17, gtao ? 1 : 0)
         view.command(28, gtaoS)
-        view.command(29, renderer === 3 ? 1 : 0)
+        view.command(29, renderer === 1 ? 1 : 0)
         view.command(30, spp)
         view.command(31, denoise ? 1 : 0)
         view.command(32, hdri ? 1 : 0)
+        view.command(33, expoIdx - 2)
+        view.command(34, tmap)
     }
 
     // pede ao motor uma copia do que o viewport mostra (mesma camera) na proporcao do render
@@ -118,10 +122,7 @@ Item {
                     Repeater {
                         model: [
                             { n: "NanoFarm", d: "padrão", on: true },
-                            { n: "SeptaCore", d: "em breve", on: false },
-                            { n: "DeltaXRender", d: "em breve", on: false },
-                            { n: "Parallax", d: "experimental", on: true },
-                            { n: "WhiteNoise", d: "em breve", on: false }
+                            { n: "Parallax", d: "experimental", on: true }
                         ]
                         Rectangle {
                             required property var modelData
@@ -145,21 +146,21 @@ Item {
                             MouseArea {
                                 anchors.fill: parent
                                 enabled: parent.modelData.on
-                                onClicked: { dlg.renderer = parent.index; dlg.view.command(29, dlg.renderer === 3 ? 1 : 0) }
+                                onClicked: { dlg.renderer = parent.index; dlg.view.command(29, dlg.renderer === 1 ? 1 : 0) }
                             }
                         }
                     }
                 }
 
-                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Amostras"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 3 }
+                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Amostras"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 1 }
                 RdSeg {
-                    s: dlg.s; width: parent.width; visible: dlg.renderer === 3
+                    s: dlg.s; width: parent.width; visible: dlg.renderer === 1
                     labels: ["16", "64", "256"]
                     index: dlg.spp <= 16 ? 0 : (dlg.spp <= 64 ? 1 : 2)
                     onPicked: function (i) { dlg.spp = [16, 64, 256][i]; dlg.view.command(30, dlg.spp) }
                 }
                 Item {
-                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 3
+                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 1
                     Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "Denoise"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
                     Rectangle {
                         x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
@@ -168,13 +169,27 @@ Item {
                     }
                 }
                 Item {
-                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 3
+                    width: parent.width; height: 28 * dlg.s; visible: dlg.renderer === 1
                     Text { x: 0; anchors.verticalCenter: parent.verticalCenter; text: "HDRI"; color: "#eeeeee"; font.pixelSize: 12 * dlg.s }
                     Rectangle {
                         x: 118 * dlg.s; width: 34 * dlg.s; height: 26 * dlg.s; radius: 3 * dlg.s; color: "#363636"
                         Image { anchors.centerIn: parent; source: "icons/rd_check.png"; width: 14 * dlg.s; height: 13 * dlg.s; smooth: true; mipmap: true; visible: dlg.hdri }
                         MouseArea { anchors.fill: parent; onClicked: { dlg.hdri = !dlg.hdri; dlg.view.command(32, dlg.hdri ? 1 : 0) } }
                     }
+                }
+                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Exposição (EV)"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 1 }
+                RdSeg {
+                    s: dlg.s; width: parent.width; visible: dlg.renderer === 1
+                    labels: ["-2", "-1", "0", "+1", "+2"]
+                    index: dlg.expoIdx
+                    onPicked: function (i) { dlg.expoIdx = i; dlg.view.command(33, i - 2) }
+                }
+                Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Tone mapping"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s; visible: dlg.renderer === 1 }
+                RdSeg {
+                    s: dlg.s; width: parent.width; visible: dlg.renderer === 1
+                    labels: ["Suave", "ACES"]
+                    index: dlg.tmap
+                    onPicked: function (i) { dlg.tmap = i; dlg.view.command(34, i) }
                 }
 
                 Text { width: parent.width; horizontalAlignment: Text.AlignHCenter; text: "Resolução"; color: "#eeeeee"; font.pixelSize: 14 * dlg.s }

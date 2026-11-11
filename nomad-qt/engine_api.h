@@ -89,6 +89,8 @@ struct EngPt {
     bool on = false;     // este quadro e renderizado pelo path tracer
     bool fresh = false;  // primeiro passo do trabalho: a cena abaixo e valida; senao so continua o acumulo
     int spp = 16, bounces = 6, night = 0;
+    float exposure = 1.f;      // multiplicador de exposicao (2^EV) aplicado antes do tone mapping
+    int tonemap = 0;           // 0 = suave (shoulder), 1 = ACES
     int glass = 0;             // 1 = ha triangulos com transmissao (vidro): sombras atravessam e o shader refrata
     int envOn = 0;             // 1 = ambiente vem do HDRI (envRgb/envDist); 0 = ceu procedural + sol
     float envScale = 1.f;

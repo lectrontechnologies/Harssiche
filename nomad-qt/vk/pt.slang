@@ -20,11 +20,11 @@ struct PC {
     int src;       // filtro: buffer de leitura (0/1)
     int stp;       // filtro: distancia do passo a-trous (1, 2, 4, 8, 16)
     float phi;     // filtro: tolerancia de luminancia
-    int pad2;
+    int tonemap;     // 0 = suave (shoulder), 1 = ACES
     int envOn;       // 1 = ambiente vem do HDRI (bEnv/bEnvD)
     float envScale;
     int glass;       // 1 = ha vidro na cena: a sombra atravessa a transmissao
-    int pad4;
+    float expo;      // multiplicador de exposicao (2^EV)
 };
 [[vk::push_constant]] ConstantBuffer<PC> pc;
 
@@ -369,8 +369,16 @@ struct Mat {
     float3 cd;
     float3 f0;
     float a;
-    float pSpec;
+    float pSpec;     // probabilidade de escolher cada lobo na amostragem (o que sobra e o difuso)
+    float pCoat;
+    float pSheen;
+    float coat;      // intensidade do verniz (clearcoat)
+    float3 shC;      // cor do sheen, ja multiplicada pela intensidade
 };
+
+// Verniz (clearcoat) e sheen: BRDF do Disney, como no appleseed (MIT, (c) 2014-2018 Esteban Tovagliari, The appleseedhq Organization):
+// verniz = GTR1 com Fresnel 0,04..1 e fator 0,25; sheen = (1 - cos)^5 com amostragem uniforme do hemisferio.
+static const float COAT_ALPHA = 0.04;   // rugosidade fixa do verniz
 
 float Dggx(float nh, float a2)
 {
@@ -380,6 +388,26 @@ float Dggx(float nh, float a2)
 float G1(float nv, float a2)
 {
     return 2.0 * nv / (nv + sqrt(a2 + (1.0 - a2) * nv * nv));
+}
+
+// GTR1: distribuicao e termo de sombreamento de Smith (appleseed: GTR1MDF::D e GTR1MDF::lambda)
+float Dgtr1(float nh, float a2)
+{
+    return (a2 - 1.0) / (PI * log(a2) * (1.0 + (a2 - 1.0) * nh * nh));
+}
+float lambdaGTR1(float cosT, float alpha)
+{
+    float c2 = cosT * cosT;
+    float s2 = 1.0 - c2;
+    if (cosT <= 0.0 || s2 <= 1e-12) return 0.0;
+    float cot2 = c2 / s2;
+    float cot = sqrt(cot2);
+    float a2 = alpha * alpha;
+    float a = sqrt(cot2 + a2);
+    float b = sqrt(cot2 + 1.0);
+    float c = log(cot + b);
+    float d = log(cot + a);
+    return (a - b + cot * (c - d)) / (cot * log(a2));
 }
 
 // wo e wi no espaco local (z = normal)
@@ -400,8 +428,22 @@ float3 evalBsdf(Mat m, float3 wo, float3 wi, out float pdf)
     float3 F = m.f0 + (1.0 - m.f0) * fm;
     float3 spec = F * (D * g1v * g1l / (4.0 * nv * nl));
     float3 diff = m.cd * (1.0 / PI);
-    pdf = (1.0 - m.pSpec) * nl / PI + m.pSpec * D * g1v / (4.0 * nv);
-    return diff + spec;
+    float pDiff = max(1.0 - m.pSpec - m.pCoat - m.pSheen, 0.0);
+    pdf = pDiff * nl / PI + m.pSpec * D * g1v / (4.0 * nv);
+    float3 f = diff + spec;
+    if (m.pCoat > 0.0) {
+        float ca2 = COAT_ALPHA * COAT_ALPHA;
+        float Dc = Dgtr1(nh, ca2);
+        float Gc = 1.0 / (1.0 + lambdaGTR1(nv, COAT_ALPHA) + lambdaGTR1(nl, COAT_ALPHA));
+        float Fc = lerp(0.04, 1.0, fm) * 0.25 * m.coat;
+        f += Fc * (Dc * Gc / (4.0 * nv * nl));
+        pdf += m.pCoat * Dc * nh / (4.0 * max(vh, 1e-4));
+    }
+    if (m.pSheen > 0.0) {
+        f += m.shC * pow(1.0 - saturate(dot(wi, h)), 5.0);
+        pdf += m.pSheen / (2.0 * PI);
+    }
+    return f;
 }
 
 float3 sampleVNDF(float3 Ve, float a, float u1, float u2)
@@ -425,6 +467,19 @@ bool sampleBsdf(Mat m, float3 wo, float u0, float u1, float u2, out float3 wi)
     if (u0 < m.pSpec) {
         float3 h = sampleVNDF(wo, m.a, u1, u2);
         wi = 2.0 * dot(wo, h) * h - wo;
+    } else if (u0 < m.pSpec + m.pCoat) {
+        // normal de microfaceta do verniz: GTR1 (appleseed: GTR1MDF::sample)
+        float a2 = COAT_ALPHA * COAT_ALPHA;
+        float c2 = (1.0 - pow(a2, 1.0 - u1)) / (1.0 - a2);
+        float ct = sqrt(max(c2, 0.0));
+        float st = sqrt(max(1.0 - c2, 0.0));
+        float phi = 2.0 * PI * u2;
+        float3 h = float3(st * cos(phi), st * sin(phi), ct);
+        wi = 2.0 * dot(wo, h) * h - wo;
+    } else if (u0 < m.pSpec + m.pCoat + m.pSheen) {
+        float r = sqrt(max(1.0 - u1 * u1, 0.0));    // hemisferio uniforme (z = u1)
+        float phi = 2.0 * PI * u2;
+        wi = float3(r * cos(phi), r * sin(phi), u1);
     } else {
         float r = sqrt(u1);
         float phi = 2.0 * PI * u2;
@@ -549,7 +604,19 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         m.a = rou * rou;
         float ls = dot(m.f0, float3(0.3, 0.6, 0.1));
         float ld_ = dot(m.cd, float3(0.3, 0.6, 0.1));
-        m.pSpec = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
+        float pBase = clamp(ls / max(ls + ld_, 1e-6), 0.1, 1.0);
+        float coatA = saturate(tC.z);                  // verniz
+        float sheenA = saturate(tC.w) * (1.0 - metal); // sheen (metal nao tem)
+        float wC = 0.25 * coatA;
+        float wH = 0.5 * sheenA;
+        float wTot = 1.0 + wC + wH;                    // pesos: difuso (1 - pBase) + especular (pBase) + verniz + sheen
+        m.pSpec = pBase / wTot;
+        m.pCoat = wC / wTot;
+        m.pSheen = wH / wTot;
+        m.coat = coatA;
+        float lumc = dot(col, float3(0.3, 0.6, 0.1));
+        float3 tint = lumc > 1e-4 ? col / lumc : float3(1.0);
+        m.shC = lerp(float3(1.0), tint, 0.5) * sheenA;
         float trn = saturate(s0.w) * (1.0 - metal);   // chance de o raio interagir como vidro
         if (!aovDone && trn < 0.5) {   // o denoise usa a primeira superficie que nao e vidro (o que se ve atraves dele)
             aovDone = true;
@@ -687,6 +754,12 @@ float3 toSrgb(float3 c)
     return float3(c.x <= 0.0031308 ? lo.x : hi.x, c.y <= 0.0031308 ? lo.y : hi.y, c.z <= 0.0031308 ? lo.z : hi.z);
 }
 
+// ACES (aproximacao de Narkowicz, 2015)
+float3 acesFit(float3 x)
+{
+    return saturate((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14));
+}
+
 [numthreads(8, 8, 1)]
 void csResolve(uint3 id : SV_DispatchThreadID)
 {
@@ -703,7 +776,10 @@ void csResolve(uint3 id : SV_DispatchThreadID)
         float4 a = bAcc[idx];
         c = a.xyz / max(a.w, 1.0);
     }
-    c = saturate(toSrgb(saturate(shoulder(max(c, float3(0.0))))));
+    c = max(c, float3(0.0)) * pc.expo;
+    if (pc.tonemap == 1) c = acesFit(c);
+    else c = shoulder(c);
+    c = saturate(toSrgb(saturate(c)));
     uint r = uint(c.x * 255.0 + 0.5);
     uint g = uint(c.y * 255.0 + 0.5);
     uint b = uint(c.z * 255.0 + 0.5);
