@@ -803,7 +803,16 @@ void csTrace(uint3 id : SV_DispatchThreadID)
         if (trn > 0.0 && rnd(st) < trn) {
             float ior = max(s1.w, 1.0);
             float rr = backf ? ior : 1.0 / ior;          // n do meio de origem / n do meio de destino
-            float cosI = saturate(dot(-d, ns));
+            // vidro fosco: com rugosidade, sorteia uma normal de microfaceta (GGX visivel) e reflete/refrata em torno dela
+            float3 gn = ns;
+            if (rou > 0.08) {
+                float3 woL = float3(dot(-d, T), dot(-d, B), dot(-d, ns));
+                float u1g = rnd(st);
+                float u2g = rnd(st);
+                float3 hL = sampleVNDF(woL, m.a, u1g, u2g);
+                gn = normalize(T * hL.x + B * hL.y + ns * hL.z);
+            }
+            float cosI = saturate(dot(-d, gn));
             float kk = 1.0 - rr * rr * (1.0 - cosI * cosI);
             float F = 1.0;
             float cosT = 0.0;
@@ -813,11 +822,15 @@ void csTrace(uint3 id : SV_DispatchThreadID)
                 float rp = (cosI - rr * cosT) / (cosI + rr * cosT);
                 F = 0.5 * (rs * rs + rp * rp);
             }
-            if (rnd(st) < F) {
-                d = reflect(d, ns);
+            bool refl = rnd(st) < F;
+            float3 dn = refl ? reflect(d, gn) : normalize(rr * d + (rr * cosI - cosT) * gn);
+            // a direcao tem que ficar do lado certo da superficie (reflexao: lado de quem olha; refracao: o outro)
+            if (refl ? dot(dn, ng) <= 0.0 : dot(dn, ng) >= 0.0) break;
+            if (rou > 0.08) beta *= G1(abs(dot(dn, ns)), m.a * m.a);   // sombreamento da microfaceta (G2 / G1)
+            d = dn;
+            if (refl) {
                 o = org;
             } else {
-                d = normalize(rr * d + (rr * cosI - cosT) * ns);
                 o = p - ng * eps;
                 if (backf) {
                     inMed = false;
