@@ -16,8 +16,8 @@ Rectangle {
     border.color: "#222222"
     border.width: Math.max(1, s * 0.6)
     gradient: Gradient {
-        GradientStop { position: 0.0; color: root.active ? "#86a3c4" : (ma.pressed ? "#4a4a4a" : "#636363") }
-        GradientStop { position: 1.0; color: root.active ? "#5e7d9f" : (ma.pressed ? "#323232" : "#3d3d3d") }
+        GradientStop { position: 0.0; color: root.active ? "#93dc3e" : (ma.pressed ? "#4a4a4a" : "#636363") }
+        GradientStop { position: 1.0; color: root.active ? "#76b02e" : (ma.pressed ? "#323232" : "#3d3d3d") }
     }
 
     TlIcon {

@@ -16,7 +16,8 @@ Item {
     Behavior on openFrac { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
     readonly property real panelW: width * wFrac
     readonly property real insetPx: panelW * openFrac     // espaco tomado a direita (timeline e motor se ajustam)
-    readonly property real topY: 108 * k                  // abaixo da barra de desfazer/refazer/menu
+    property real topInset: 108 * k                       // abaixo das barras do topo
+    readonly property real topY: topInset
 
     // ---- dados ----
     property var flat: []
@@ -138,7 +139,7 @@ Item {
         }
 
         // ---- faixa do topo: aba + recolher ----
-        Rectangle { x: 0; y: 0; width: parent.width; height: 39 * so.k; color: "#2a2a2a" }
+        Rectangle { x: 0; y: 0; width: parent.width; height: 39 * so.k; color: "#1a1a1a" }
         Rectangle {
             x: 10.4 * so.k; y: 5.2 * so.k
             width: tabTxt.implicitWidth + 31.2 * so.k
@@ -150,7 +151,7 @@ Item {
             id: collapseBtn
             x: parent.width - 44.2 * so.k; y: 2.6 * so.k
             width: 39 * so.k; height: 33.8 * so.k
-            Rectangle { anchors.fill: parent; radius: 3.9 * so.k; color: cbMa.pressed ? "#555555" : "#3a3a3a" }
+            Rectangle { anchors.fill: parent; radius: 3.9 * so.k; color: cbMa.pressed ? "#5a5a5a" : "#2e2e2e" }
             Glyph { anchors.centerIn: parent; width: 20.8 * so.k; height: 20.8 * so.k; name: "chev_right"; fg: "#e0e0e0" }
             MouseArea {
                 id: cbMa
@@ -161,7 +162,7 @@ Item {
         }
 
         // ---- menus: Display / Show / Help ----
-        Rectangle { x: 0; y: 39 * so.k; width: parent.width; height: 39 * so.k; color: "#464646" }
+        Rectangle { x: 0; y: 39 * so.k; width: parent.width; height: 39 * so.k; color: "#434343" }
         Row {
             x: 7.8 * so.k; y: 39 * so.k
             height: 39 * so.k
@@ -184,7 +185,7 @@ Item {
         }
 
         // ---- busca ----
-        Rectangle { x: 0; y: 78 * so.k; width: parent.width; height: 44.2 * so.k; color: "#464646" }
+        Rectangle { x: 0; y: 78 * so.k; width: parent.width; height: 44.2 * so.k; color: "#434343" }
         Glyph { x: 10.4 * so.k; y: 84.5 * so.k; width: 28.6 * so.k; height: 28.6 * so.k; name: "dashbox"; fg: "#8a8a8a" }
         Rectangle {
             x: 46.8 * so.k; y: 83.2 * so.k
@@ -327,7 +328,7 @@ Item {
             visible: list.contentHeight > list.height + 1
             x: panel.width - 15.6 * so.k; y: so.listTop
             width: 10.4 * so.k; height: list.height
-            color: "#2a2a2a"
+            color: "#1a1a1a"
             Rectangle {
                 width: parent.width
                 height: Math.max(31.2 * so.k, parent.height * list.height / list.contentHeight)
@@ -385,7 +386,7 @@ Item {
             width: Math.min(panel.width - x - 7.8 * so.k, 299 * so.k)
             height: popCol.height + 10.4 * so.k
             color: "#2d2d2d"
-            border.color: "#555555"
+            border.color: "#5a5a5a"
             border.width: Math.max(1, so.k)
             Column {
                 id: popCol
@@ -404,7 +405,7 @@ Item {
                         required property var modelData
                         width: popCol.width
                         height: 39 * so.k
-                        Rectangle { anchors.fill: parent; color: "#555555"; visible: pMa.pressed && parent.modelData.a !== "" }
+                        Rectangle { anchors.fill: parent; color: "#5a5a5a"; visible: pMa.pressed && parent.modelData.a !== "" }
                         Text {
                             x: 13 * so.k
                             anchors.verticalCenter: parent.verticalCenter
@@ -439,7 +440,7 @@ Item {
         y: so.topY + 195 * so.k
         width: 33.8 * so.k; height: 124.8 * so.k
         opacity: 1 - so.openFrac
-        Rectangle { anchors.fill: parent; color: tabMa.pressed ? "#555555" : "#3a3a3a"; border.color: "#222222"; border.width: Math.max(1, so.k) }
+        Rectangle { anchors.fill: parent; color: tabMa.pressed ? "#5a5a5a" : "#2e2e2e"; border.color: "#222222"; border.width: Math.max(1, so.k) }
         Glyph { anchors.centerIn: parent; width: 20.8 * so.k; height: 20.8 * so.k; name: "chev_left"; fg: "#e6e6e6" }
         MouseArea {
             id: tabMa

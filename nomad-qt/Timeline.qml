@@ -64,9 +64,9 @@ Item {
         width: tl.stripW
         height: tl.stripH
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#2d2d2d" }
-            GradientStop { position: 0.86; color: "#2d2d2d" }
-            GradientStop { position: 1.0; color: "#454545" }
+            GradientStop { position: 0.0; color: "#343434" }
+            GradientStop { position: 0.86; color: "#343434" }
+            GradientStop { position: 1.0; color: "#404040" }
         }
     }
     Rectangle {   // linha do intervalo no topo
@@ -81,7 +81,7 @@ Item {
         y: strip.y + 9 * tl.k
         width: 16 * tl.k
         height: strip.height - 9 * tl.k
-        color: "#454545"
+        color: "#404040"
     }
 
     Canvas {
@@ -245,15 +245,15 @@ Item {
         y: 767 * tl.k
         width: 456 * tl.k
         height: 91 * tl.k
-        color: "#454545"
+        color: "#404040"
         MouseArea {   // nao deixa o toque cair no viewport entre os botoes
             id: tpMa
             anchors.fill: parent
             containmentMask: HitMask { target: tpMa; view: tl.view }
         }
     }
-    Rectangle { x: 213 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#2b2b2b" }
-    Rectangle { x: 462 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#2b2b2b" }
+    Rectangle { x: 213 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#1f1f1f" }
+    Rectangle { x: 462 * tl.k; y: 783 * tl.k; width: Math.max(1, 3 * tl.k); height: 60 * tl.k; color: "#1f1f1f" }
     Rectangle {   // play ativo
         visible: tl.view.playing
         x: 298 * tl.k
@@ -261,7 +261,7 @@ Item {
         width: 76 * tl.k
         height: 83 * tl.k
         radius: 6 * tl.k
-        color: "#4773b3"
+        color: "#93dc3e"
         opacity: 0.55
     }
     Glyph { name: "first"; x: (164 - 30) * tl.k; y: (812 - 30) * tl.k; width: 60 * tl.k; height: 60 * tl.k }
@@ -322,7 +322,7 @@ Item {
         y: 747 * tl.k
         width: 242 * tl.k
         height: 111 * tl.k
-        color: "#454545"
+        color: "#404040"
         MouseArea {
             id: kpMa
             anchors.fill: parent
@@ -353,7 +353,7 @@ Item {
         width: 115 * tl.k
         height: 50 * tl.k
         radius: 5 * tl.k
-        color: tl.view.autoKey ? "#4773b3" : (ama.pressed ? "#767676" : "#616161")
+        color: tl.view.autoKey ? "#93dc3e" : (ama.pressed ? "#767676" : "#616161")
         Text { anchors.centerIn: parent; text: "Auto Key"; color: "#f0f0f0"; font.pixelSize: 30 * tl.k }
         MouseArea {
             id: ama

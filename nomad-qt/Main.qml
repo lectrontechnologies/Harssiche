@@ -27,11 +27,13 @@ Window {
         id: outliner
         anchors.fill: parent
         view: engineView
+        topInset: topBars.topH + topBars.handleH + 8 * topBars.k
         visible: engineView.timelineVisible
     }
 
     // Botoes do conceito (ferramentas, cubo, desfazer/refazer, menu)
     TopBars {
+        id: topBars
         anchors.fill: parent
         view: engineView
     }

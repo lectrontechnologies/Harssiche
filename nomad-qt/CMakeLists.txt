@@ -35,6 +35,7 @@ qt_add_qml_module(Nomad
         icons/rd_link.png
         icons/rd_close.png
         icons/rd_check.png
+        icons/logo.png
     SOURCES
         engineview.h
         engineview.cpp

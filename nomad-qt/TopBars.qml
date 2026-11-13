@@ -1,21 +1,47 @@
 import QtQuick
 import QtQuick.Shapes
 
-// Barras de botoes do conceito: ferramentas + cubo (canto superior esquerdo)
-// e desfazer / refazer / menu (canto superior direito).
-// Os icones sao os do proprio conceito (PNG recortado) e ficam nas mesmas posicoes dele.
-// Medidas em pixels do conceito (2400x1080) convertidas por "k".
+// Barras do topo no estilo do Toolbag (cinzas neutros e verde de destaque), adaptadas ao toque:
+// abas de espaco de trabalho, barra de ferramentas (selecionar, mover, girar, escalar), objetos, desfazer/refazer e menu.
+// A alca abaixo do canto direito recolhe as abas e deixa so a barra de ferramentas.
+// Medidas em pixels de uma tela de 1080 de altura, convertidas por "k".
 Item {
     id: bars
     required property var view   // EngineView
 
-    readonly property real s: height > 0 ? height / 360 : 1   // unidade de projeto (800x360)
-    readonly property real k: s / 3                            // pixel do conceito -> tela
+    readonly property real k: height > 0 ? height / 1080 : 1
+
+    // ---- paleta (cores medidas na interface do Toolbag) ----
+    readonly property color cTabsBg: "#1a1a1a"
+    readonly property color cTab: "#434343"
+    readonly property color cTabOn: "#515151"
+    readonly property color cBar: "#404040"
+    readonly property color cEdge: "#2b2b2b"
+    readonly property color cAccent: "#93dc3e"
+    readonly property color cIcon: "#d6d6d6"
+    readonly property color cDim: "#8c8c8c"
+    readonly property color cText: "#e8e8e8"
+    readonly property color cMenu: "#2e2e2e"
+
     property bool addOpen: false
+    property bool tabsOpen: true
+    property int curTab: 0
+    property real tabsFrac: tabsOpen ? 1 : 0
+    Behavior on tabsFrac { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+
+    readonly property real tabsH: 62 * k * tabsFrac
+    readonly property real barH: 94 * k
+    readonly property real handleH: 34 * k
+    readonly property real topH: tabsH + barH      // espaco tomado no topo pelas barras
 
     function pickTool(n) {
-        // tocar na ferramenta ativa volta para "selecionar" (ferramenta 3)
+        // tocar na ferramenta ativa volta para "selecionar"
         view.command(11, view.toolIndex === n ? 6 : 3 + n)
+    }
+    function pickTab(i, a) {
+        if (a === 61) { view.command(11, 61); return }            // Render: abre a tela de render
+        if (a === 84) { curTab = i; view.command(11, 84); return } // Classic e Animate: modo de animacao
+        // Setup, Texture e Workspaces: ainda sem funcao
     }
 
     // fecha o menu de adicionar ao tocar fora
@@ -25,107 +51,287 @@ Item {
         onClicked: bars.addOpen = false
     }
 
-    // ---------------- fundos ----------------
-    Shape {   // painel de ferramentas do conceito (forma recortada)
-        width: 460
-        height: 350
-        scale: bars.k
-        transformOrigin: Item.TopLeft
-        preferredRendererType: Shape.CurveRenderer
-        ShapePath {
-            fillColor: "#050505"
-            strokeColor: "transparent"
-            PathSvg { path: "M13 13 H444 V84 L384 136 H271 L132 314 V338 H13 Z" }
+    // ---------------- abas ----------------
+    Rectangle {
+        id: tabsBg
+        visible: bars.tabsH > 1
+        width: parent.width
+        height: bars.tabsH
+        color: bars.cTabsBg
+        clip: true
+        MouseArea {
+            id: tabsBgMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: tabsBgMa; view: bars.view }
         }
-    }
-    Shape {
-        x: bars.width - 123 * bars.s
-        width: 123
-        height: 36
-        scale: bars.s
-        transformOrigin: Item.TopLeft
-        preferredRendererType: Shape.CurveRenderer
-        ShapePath {
-            fillColor: "#282828"
-            strokeColor: "transparent"
-            PathSvg { path: "M0 0 H123 V36 H3 Q0 36 0 33 Z" }
-        }
-    }
-
-    // ---------------- icones (vetor; a ferramenta ativa fica em ciano) ----------------
-    Glyph { name: "cube";   fg: bars.addOpen ? "#00e5ff" : "#c8c8c8"; x: (72 - 52) * bars.k;  y: (76 - 52) * bars.k;  width: 104 * bars.k; height: 104 * bars.k }
-    Glyph { name: "scale";  fg: bars.view.toolIndex === 2 ? "#00e5ff" : "#b4b4b4"; x: (234 - 34) * bars.k; y: (66 - 34) * bars.k; width: 68 * bars.k; height: 68 * bars.k }
-    Glyph { name: "cursor"; fg: bars.view.toolIndex === 3 ? "#00e5ff" : "#8c8c8c"; x: (384 - 34) * bars.k; y: (68 - 34) * bars.k; width: 68 * bars.k; height: 68 * bars.k }
-    Glyph { name: "rotate"; fg: bars.view.toolIndex === 1 ? "#00e5ff" : "#a8a8a8"; x: (166 - 32) * bars.k; y: (156 - 32) * bars.k; width: 64 * bars.k; height: 64 * bars.k }
-    Glyph { name: "move";   fg: bars.view.toolIndex === 0 ? "#00e5ff" : "#c8c8c8"; x: (90 - 40) * bars.k;  y: (230 - 40) * bars.k; width: 80 * bars.k; height: 80 * bars.k }
-    Image {
-        source: "icons/tb_undo.png"
-        x: bars.width + (2066 - 2400) * bars.k; y: 36 * bars.k; width: 85 * bars.k; height: 39 * bars.k
-        smooth: true; mipmap: true
-        opacity: bars.view.canUndo ? 1.0 : 0.35
-    }
-    Image {
-        source: "icons/tb_redo.png"
-        x: bars.width + (2181 - 2400) * bars.k; y: 35 * bars.k; width: 85 * bars.k; height: 39 * bars.k
-        smooth: true; mipmap: true
-        opacity: bars.view.canRedo ? 1.0 : 0.35
-    }
-    Image { source: "icons/tb_menu.png"; x: bars.width + (2293 - 2400) * bars.k; y: 25 * bars.k; width: 85 * bars.k; height: 60 * bars.k; smooth: true; mipmap: true }
-
-    // ---------------- areas de toque ----------------
-    Repeater {
-        // [x0, y0, x1, y1, acao]  em pixels do conceito: 0 mover, 1 rotacionar, 2 escalar, 3 cursor, 9 adicionar
-        model: [
-            { x0: 13,  y0: 13,  x1: 150, y1: 136, a: 9 },
-            { x0: 150, y0: 13,  x1: 309, y1: 136, a: 2 },
-            { x0: 309, y0: 13,  x1: 444, y1: 136, a: 3 },
-            { x0: 125, y0: 136, x1: 225, y1: 205, a: 1 },
-            { x0: 13,  y0: 205, x1: 140, y1: 338, a: 0 }
-        ]
-        Item {
-            id: tcell
-            required property var modelData
-            x: modelData.x0 * bars.k
-            y: modelData.y0 * bars.k
-            width: (modelData.x1 - modelData.x0) * bars.k
-            height: (modelData.y1 - modelData.y0) * bars.k
-            Rectangle { visible: tma.pressed; anchors.fill: parent; color: "white"; opacity: 0.12 }
-            MouseArea {
-                id: tma
-                anchors.fill: parent
-                containmentMask: HitMask { target: tma; view: bars.view }
-                onClicked: {
-                    var a = tcell.modelData.a
-                    if (a === 9) bars.addOpen = !bars.addOpen
-                    else if (a === 3) bars.view.command(11, 6)   // cursor: navegar (arrastar gira a vista)
-                    else bars.pickTool(a)
+        Row {
+            x: 3 * bars.k
+            y: 8 * bars.k
+            spacing: 10 * bars.k
+            Repeater {
+                model: [
+                    { n: "Classic", a: 84 }, { n: "Setup", a: 0 }, { n: "Texture", a: 0 }, { n: "Render", a: 61 },
+                    { n: "Animate", a: 84 }, { n: "Workspace 1", a: 0 }, { n: "Workspace 2", a: 0 }, { n: "+", a: 0 }
+                ]
+                Item {
+                    id: tab
+                    required property var modelData
+                    required property int index
+                    width: tabText.implicitWidth + 44 * bars.k
+                    height: 54 * bars.k
+                    Rectangle {
+                        id: tabBg
+                        anchors.fill: parent
+                        radius: 8 * bars.k
+                        color: bars.curTab === tab.index ? bars.cTabOn : bars.cTab
+                    }
+                    Rectangle {   // cantos de baixo retos
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: parent.height / 2
+                        color: tabBg.color
+                    }
+                    Rectangle { visible: tabMa.pressed; anchors.fill: parent; color: "white"; opacity: 0.10 }
+                    Text {
+                        id: tabText
+                        anchors.centerIn: parent
+                        text: tab.modelData.n
+                        color: bars.curTab === tab.index ? "#ffffff" : "#d0d0d0"
+                        font.pixelSize: 27 * bars.k
+                    }
+                    MouseArea {
+                        id: tabMa
+                        anchors.fill: parent
+                        containmentMask: HitMask { target: tabMa; view: bars.view }
+                        onClicked: bars.pickTab(tab.index, tab.modelData.a)
+                    }
                 }
             }
         }
     }
-    Row {
-        x: bars.width - 123 * bars.s
-        y: 0
-        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 91) }
-        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 92) }
-        TbCell { view: bars.view; s: bars.s; width: 41 * bars.s; height: 36 * bars.s; onClicked: bars.view.command(11, 60) }
+
+    // ---------------- barra de ferramentas ----------------
+    Rectangle {
+        id: toolbar
+        y: bars.tabsH
+        width: parent.width
+        height: bars.barH
+        color: bars.cBar
+        Rectangle {
+            anchors.bottom: parent.bottom
+            width: parent.width
+            height: Math.max(1, 2 * bars.k)
+            color: bars.cEdge
+        }
+        MouseArea {
+            id: barMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: barMa; view: bars.view }
+        }
+
+        // selecionar, mover, girar, escalar
+        Repeater {
+            model: 4
+            Item {
+                id: tool
+                required property int index
+                readonly property bool active: index === 0 ? bars.view.toolIndex === 3 : bars.view.toolIndex === index - 1
+                x: 8 * bars.k + index * 84 * bars.k
+                width: 84 * bars.k
+                height: bars.barH
+                Rectangle {
+                    visible: tool.active
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 8 * bars.k
+                    width: 52 * bars.k
+                    height: 4 * bars.k
+                    radius: 2 * bars.k
+                    color: bars.cAccent
+                }
+                Rectangle { visible: toolMa.pressed; anchors.fill: parent; anchors.margins: 6 * bars.k; radius: 8 * bars.k; color: "white"; opacity: 0.12 }
+                Shape {   // seta de selecao
+                    visible: tool.index === 0
+                    anchors.centerIn: parent
+                    width: 60
+                    height: 60
+                    scale: bars.k
+                    preferredRendererType: Shape.CurveRenderer
+                    ShapePath {
+                        fillColor: tool.active ? bars.cAccent : bars.cIcon
+                        strokeColor: "transparent"
+                        PathSvg { path: "M12 5 L12 46 L22 37 L30 56 L38 52 L30 34 L44 34 Z" }
+                    }
+                }
+                Glyph {
+                    visible: tool.index > 0
+                    anchors.centerIn: parent
+                    width: 62 * bars.k
+                    height: 62 * bars.k
+                    name: tool.index === 1 ? "move" : (tool.index === 2 ? "rotate" : "scale")
+                    fg: tool.active ? bars.cAccent : bars.cIcon
+                }
+                MouseArea {
+                    id: toolMa
+                    anchors.fill: parent
+                    containmentMask: HitMask { target: toolMa; view: bars.view }
+                    onClicked: {
+                        if (tool.index === 0) bars.view.command(11, 6)   // selecionar: arrastar gira a vista
+                        else bars.pickTool(tool.index - 1)
+                    }
+                }
+            }
+        }
+
+        Rectangle { x: 358 * bars.k; anchors.verticalCenter: parent.verticalCenter; width: Math.max(1, 2 * bars.k); height: 56 * bars.k; color: bars.cEdge }
+
+        // objetos (abre o menu de adicionar)
+        Item {
+            id: addBtn
+            x: 372 * bars.k
+            width: 84 * bars.k
+            height: bars.barH
+            Rectangle { visible: addMa.pressed; anchors.fill: parent; anchors.margins: 6 * bars.k; radius: 8 * bars.k; color: "white"; opacity: 0.12 }
+            Glyph {
+                anchors.centerIn: parent
+                width: 62 * bars.k
+                height: 62 * bars.k
+                name: "cube"
+                fg: bars.addOpen ? bars.cAccent : bars.cIcon
+            }
+            MouseArea {
+                id: addMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: addMa; view: bars.view }
+                onClicked: bars.addOpen = !bars.addOpen
+            }
+        }
+
+        // modo de escultura
+        Rectangle {
+            id: sculptBtn
+            x: 470 * bars.k
+            anchors.verticalCenter: parent.verticalCenter
+            width: sculptText.implicitWidth + 40 * bars.k
+            height: 56 * bars.k
+            radius: 8 * bars.k
+            color: bars.view.sculptMode ? bars.cAccent : "#4d4d4d"
+            Text {
+                id: sculptText
+                anchors.centerIn: parent
+                text: "Escultura"
+                color: bars.view.sculptMode ? "#1a1a1a" : bars.cText
+                font.pixelSize: 25 * bars.k
+            }
+            Rectangle { visible: sculptMa.pressed; anchors.fill: parent; radius: parent.radius; color: "white"; opacity: 0.14 }
+            MouseArea {
+                id: sculptMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: sculptMa; view: bars.view }
+                onClicked: bars.view.command(11, 93)
+            }
+        }
+
+        // desfazer, refazer, menu (logotipo)
+        Item {
+            id: undoBtn
+            x: toolbar.width - 392 * bars.k
+            width: 96 * bars.k
+            height: bars.barH
+            opacity: bars.view.canUndo ? 1.0 : 0.35
+            Rectangle { visible: undoMa.pressed; anchors.fill: parent; anchors.margins: 6 * bars.k; radius: 8 * bars.k; color: "white"; opacity: 0.12 }
+            Image { anchors.centerIn: parent; source: "icons/tb_undo.png"; width: 70 * bars.k; height: 32 * bars.k; smooth: true; mipmap: true }
+            MouseArea {
+                id: undoMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: undoMa; view: bars.view }
+                onClicked: bars.view.command(11, 91)
+            }
+        }
+        Item {
+            id: redoBtn
+            x: toolbar.width - 292 * bars.k
+            width: 96 * bars.k
+            height: bars.barH
+            opacity: bars.view.canRedo ? 1.0 : 0.35
+            Rectangle { visible: redoMa.pressed; anchors.fill: parent; anchors.margins: 6 * bars.k; radius: 8 * bars.k; color: "white"; opacity: 0.12 }
+            Image { anchors.centerIn: parent; source: "icons/tb_redo.png"; width: 70 * bars.k; height: 32 * bars.k; smooth: true; mipmap: true }
+            MouseArea {
+                id: redoMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: redoMa; view: bars.view }
+                onClicked: bars.view.command(11, 92)
+            }
+        }
+        Item {
+            id: menuBtn
+            x: toolbar.width - 190 * bars.k
+            width: 110 * bars.k
+            height: bars.barH
+            Rectangle { visible: menuMa.pressed; anchors.fill: parent; anchors.margins: 6 * bars.k; radius: 8 * bars.k; color: "white"; opacity: 0.12 }
+            Image { anchors.centerIn: parent; source: "icons/logo.png"; width: 72 * bars.k; height: 72 * bars.k; smooth: true; mipmap: true }
+            MouseArea {
+                id: menuMa
+                anchors.fill: parent
+                containmentMask: HitMask { target: menuMa; view: bars.view }
+                onClicked: bars.view.command(11, 60)
+            }
+        }
+    }
+
+    // ---------------- alca: recolhe / expande as abas ----------------
+    Item {
+        id: handle
+        x: bars.width - 122 * bars.k
+        y: bars.topH
+        width: 122 * bars.k
+        height: 56 * bars.k          // area de toque maior que o desenho
+        Rectangle {
+            width: parent.width
+            height: bars.handleH
+            color: bars.cEdge
+            radius: 6 * bars.k
+            Rectangle { width: parent.width; height: parent.radius; color: parent.color }   // canto de cima reto
+            Shape {
+                anchors.centerIn: parent
+                width: 20
+                height: 10
+                scale: bars.k * 1.2
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: "transparent"
+                    strokeColor: bars.cText
+                    strokeWidth: 2.5
+                    capStyle: ShapePath.RoundCap
+                    joinStyle: ShapePath.RoundJoin
+                    PathSvg { path: bars.tabsOpen ? "M1 1 L10 9 L19 1" : "M1 9 L10 1 L19 9" }
+                }
+            }
+        }
+        MouseArea {
+            id: handleMa
+            anchors.fill: parent
+            containmentMask: HitMask { target: handleMa; view: bars.view }
+            onClicked: { bars.tabsOpen = !bars.tabsOpen; bars.addOpen = false }
+        }
     }
 
     // ---------------- menu de objetos ----------------
     Rectangle {
         visible: bars.addOpen
-        x: 460 * bars.k
-        y: 20 * bars.k
-        width: 112 * bars.s
+        x: 372 * bars.k
+        y: bars.topH
+        width: 300 * bars.k
         height: addCol.height
-        color: "#282828"
-        radius: 6 * bars.s
+        color: bars.cMenu
+        radius: 8 * bars.k
+        border.color: bars.cEdge
+        border.width: Math.max(1, bars.k)
         MouseArea {
             id: addPanelMa
             anchors.fill: parent
             containmentMask: HitMask { target: addPanelMa; view: bars.view }
         }
-
         Column {
             id: addCol
             width: parent.width
@@ -138,14 +344,14 @@ Item {
                 Rectangle {
                     required property var modelData
                     width: addCol.width
-                    height: 34 * bars.s
-                    color: rowMa.pressed ? "#444444" : "transparent"
+                    height: 66 * bars.k
+                    color: rowMa.pressed ? "#4a4a4a" : "transparent"
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        x: 12 * bars.s
+                        x: 24 * bars.k
                         text: parent.modelData.n
-                        color: "#f2f2f2"
-                        font.pixelSize: 14 * bars.s
+                        color: bars.cText
+                        font.pixelSize: 28 * bars.k
                     }
                     MouseArea {
                         id: rowMa
