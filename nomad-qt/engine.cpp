@@ -1347,9 +1347,6 @@ void frameUI(){
   if(on)rect(tx_-ib/2,ty_-ib/2,ib,ib,.28f,.45f,.7f,.95f,ib/2);icon2(3+k,tx_,ty_,ib*.32f,on);gBtn.push_back({{tx_-ib/2,ty_-ib/2,ib,ib},3+k});}
  if(gAddFan){const char*nm_[5]={"Cubo","Esfera","Plano","Osso","Câmera"};const int ai[5]={0,1,2,10,18};float lx=ML_+1.5f*u,ly=cy0+Rd+1*u,lw=24*u,lh=6*u,lt=5*(lh+.5f*u)+1.5f*u;panel(lx-1*u,ly-1*u,lw+2*u,lt,1*u);
   for(int k=0;k<5;k++)pill(lx,ly+k*(lh+.5f*u),lw,lh,ai[k],nm_[k],false,.33f,.33f,.35f);gBtn.push_back({{lx-1*u,ly-1*u,lw+2*u,lt},299});}}
- {float ps=.52f*u;const char*tn[2]={"Animação","Escultura"};const int ti[2]={84,93};float w0=tw(tn[0],ps),w1=tw(tn[1],ps),gap=5*u,x=(W-(w0+w1+gap))/2;
-  for(int k=0;k<2;k++){bool act=(k==1)==gSculpt;float ww=k?w1:w0;text(tn[k],x,hH/2-2.5f*ps,ps,act?1.f:.5f,act?1.f:.5f,act?1.f:.55f);
-   if(act)rect(x,hH/2+3.6f*ps,ww,.28f*u,.95f,.62f,.2f);gBtn.push_back({{x-1.5f*u,0,ww+3*u,hH},ti[k]});x+=ww+gap;}}
  if(!gUiQml){float bs=8*u,by=.6f*u,x=W-ML_-bs;
   for(int k=0;k<3;k++)rect(x+bs*.22f,by+bs*(.28f+k*.22f),bs*.56f,bs*.075f,.93f,.93f,.93f,1,bs*.04f);gBtn.push_back({{x,by,bs,bs},60});x-=bs+1*u;
   for(int k=1;k>=0;k--){int id=91+k;icon2(id,x+bs/2,by+bs/2,bs*.32f,false);gBtn.push_back({{x,by,bs,bs},id});x-=bs+1*u;}}

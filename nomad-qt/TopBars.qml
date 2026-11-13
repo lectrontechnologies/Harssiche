@@ -40,8 +40,8 @@ Item {
     }
     function pickTab(i, a) {
         if (a === 61) { view.command(11, 61); return }            // Render: abre a tela de render
-        if (a === 84) { curTab = i; view.command(11, 84); return } // Classic e Animate: modo de animacao
-        // Setup, Texture e Workspaces: ainda sem funcao
+        if (a === 84) { curTab = i; view.command(11, 84); return } // Layout e Animate: modo de animacao
+        // Setup e "+": ainda sem funcao
     }
 
     // fecha o menu de adicionar ao tocar fora
@@ -70,8 +70,8 @@ Item {
             spacing: 10 * bars.k
             Repeater {
                 model: [
-                    { n: "Classic", a: 84 }, { n: "Setup", a: 0 }, { n: "Texture", a: 0 }, { n: "Render", a: 61 },
-                    { n: "Animate", a: 84 }, { n: "Workspace 1", a: 0 }, { n: "Workspace 2", a: 0 }, { n: "+", a: 0 }
+                    { n: "Layout", a: 84 }, { n: "Setup", a: 0 }, { n: "Render", a: 61 },
+                    { n: "Animate", a: 84 }, { n: "+", a: 0 }
                 ]
                 Item {
                     id: tab
@@ -207,19 +207,19 @@ Item {
             }
         }
 
-        // modo de escultura
+        // alterna escultura e animacao: em escultura o botao vira "Animação" e volta ao modo de animacao
         Rectangle {
             id: sculptBtn
             x: 470 * bars.k
             anchors.verticalCenter: parent.verticalCenter
-            width: sculptText.implicitWidth + 40 * bars.k
+            width: 176 * bars.k
             height: 56 * bars.k
             radius: 8 * bars.k
             color: bars.view.sculptMode ? bars.cAccent : "#4d4d4d"
             Text {
                 id: sculptText
                 anchors.centerIn: parent
-                text: "Escultura"
+                text: bars.view.sculptMode ? "Animação" : "Escultura"
                 color: bars.view.sculptMode ? "#1a1a1a" : bars.cText
                 font.pixelSize: 25 * bars.k
             }
@@ -228,7 +228,7 @@ Item {
                 id: sculptMa
                 anchors.fill: parent
                 containmentMask: HitMask { target: sculptMa; view: bars.view }
-                onClicked: bars.view.command(11, 93)
+                onClicked: bars.view.command(11, bars.view.sculptMode ? 84 : 93)
             }
         }
 
